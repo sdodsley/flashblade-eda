@@ -3,8 +3,8 @@ ansible-rulebook>=1.1
 ansible-core>=2.16
 # FB_2_30 client; the plugin negotiates what the array serves (2.21 on 4.6.4)
 py-pure-client>=1.98.0
-# boto3 is not needed yet: the object-audit source (PR 2) tails the log
-# bucket with it. Install it then:  boto3>=1.26
+# the object-audit source tails the log bucket with it; tasks/s3_object.yml writes with it
+boto3>=1.26
 # development and CI
 black
 pyflakes
