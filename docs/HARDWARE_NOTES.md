@@ -95,8 +95,12 @@ FlashBlade on 4.5.6 (REST 2.17) is the replication peer of later parts.
   the array is idle. `sort=writes_per_sec-` and `limit` give the top N;
   `/file-systems/performance` and `/buckets/performance` take the same.
 - `/hardware` reports an empty DFM bay on a //S as status `unclaimed` (the lab
-  has two of four bays populated per blade: 20 such rows), so the default
-  `hardware_ignore_status` includes it beside healthy, not_installed, unused.
+  has two of four bays populated per blade: 20 such rows) and `/drives` lists
+  the same bays as DFMs with status `unclaimed`, so the defaults of both
+  `hardware_ignore_status` and `drive_ignore_status` include it.
+- `/arrays/clients/performance` answered "Service temporarily unavailable" once
+  in an hour of polling while every other read succeeded; the plugin logs it
+  and skips the client rows for that poll instead of failing the signal.
 - Some alerts (1112 on the lab) bump `updated` every minute without any other
   change; the alert diff keys on state, severity, flag and summary, not on
   `updated`.

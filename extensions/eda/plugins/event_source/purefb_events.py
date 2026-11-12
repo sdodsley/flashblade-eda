@@ -72,7 +72,7 @@ blade_ignore_status
                   unused)
 drive_ignore_status
                   drive statuses that are not issues (default: healthy,
-                  unused, empty, evacuated)
+                  unused, empty, evacuated, unclaimed)
 fs_quota_warn_pct telemetry: a file system whose virtual space is at or
                   above this share of its provisioned size gets a
                   purefb_fs_quota event (default 80)
@@ -321,7 +321,7 @@ options:
     description: Drive statuses that are not issues.
     type: list
     elements: str
-    default: [healthy, unused, empty, evacuated]
+    default: [healthy, unused, empty, evacuated, unclaimed]
   fs_quota_warn_pct:
     description: A file system at or above this share of its provisioned size gets a purefb_fs_quota event.
     type: float
@@ -1014,7 +1014,7 @@ def poll_health(arr, state, args):
     )
     drive_ignore = set(
         _as_list(args.get("drive_ignore_status"))
-        or ["healthy", "unused", "empty", "evacuated"]
+        or ["healthy", "unused", "empty", "evacuated", "unclaimed"]
     )
 
     hardware = _items(c.get_hardware(), "hardware")
@@ -1591,9 +1591,11 @@ def _performance_events(arr, state, args):
                 f"clients/performance {protocol}",
             )
         except Exception as exc:  # noqa: BLE001 - one protocol's clients
-            if protocol == "nfs":
-                raise
-            logger.debug(
+            # the lab answered "Service temporarily unavailable" to this call
+            # once in an hour while every other read succeeded; the client
+            # rows are enrichment, so a failed read skips them for one poll
+            # rather than failing the whole telemetry signal
+            logger.warning(
                 "purefb_events[%s]: %s clients unavailable: %s", arr.name, protocol, exc
             )
             continue

@@ -1545,7 +1545,8 @@ def test_s3_clients_are_skipped_where_the_call_lacks_protocol(events):
         if "purefb_client_performance" in e
     ]
     assert protocols == ["nfs"]
-    # an S3 read that fails does not fail the poll; an NFS one does
+    # a client read that fails skips the rows for that poll and nothing else:
+    # the lab answered "Service temporarily unavailable" to this call once
     client = FakeClient(clients=[perf_row("10.0.0.1", 1, 1)])
     real = client.get_arrays_clients_performance
     client.get_arrays_clients_performance = lambda **kw: (
@@ -1554,8 +1555,9 @@ def test_s3_clients_are_skipped_where_the_call_lacks_protocol(events):
     out = events._performance_events(FakeArray(client), {}, {"baseline": False})
     assert len([e for e in out if "purefb_client_performance" in e]) == 1
     client.get_arrays_clients_performance = lambda **kw: FakeError("down")
-    with pytest.raises(RuntimeError, match="clients/performance nfs: down"):
-        events._performance_events(FakeArray(client), {}, {"baseline": False})
+    out = events._performance_events(FakeArray(client), {}, {"baseline": False})
+    assert [e for e in out if "purefb_client_performance" in e] == []
+    assert any("purefb_array_performance" in e for e in out)
 
 
 def test_capped_file_system_outside_top_n_is_still_reported(events):

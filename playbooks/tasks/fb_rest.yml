@@ -27,9 +27,13 @@
 # the request, never the token. The certificate check is off by default
 # (fb_validate_certs), as disable_warnings is on the modules: lab arrays
 # carry self-signed certificates.
+# fb_url is the management address as the everpure.flashblade modules take
+# it (host or IP, no scheme); a full https:// URL is accepted as well.
 - name: Settle the array URL for the request
   ansible.builtin.set_fact:
-    fb_rest_base: "{{ (fb_rest_url | default(fb_url)) | regex_replace('/+$', '') }}"
+    fb_rest_base: >-
+      {{ (fb_rest_url | default(fb_url)) | string | regex_replace('/+$', '')
+         | regex_replace('^(?!https?://)', 'https://') }}
 
 - name: Log in to the array
   ansible.builtin.uri:
