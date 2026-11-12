@@ -12,8 +12,9 @@ EDA controller need to resolve the event sources and run the playbooks:
 
 | Path | Content |
 | --- | --- |
-| `extensions/eda/plugins/event_source/` | `purefb_events.py` and `purefb_syslog.py` |
+| `extensions/eda/plugins/event_source/` | `purefb_events.py`, `purefb_object_audit.py` and `purefb_syslog.py` |
 | `extensions/eda/rulebooks/` | the rulebooks, which name their sources by FQCN |
+| `plugins/modules/` | `purefb_log_target.py`, `purefb_audit_policy.py` and `purefb_bucket_audit_filter.py` |
 | `playbooks/` | the playbooks, `runbooks/` and `tasks/` |
 | `meta/runtime.yml` | `requires_ansible: ">=2.15.0"` |
 | `README.md`, `LICENSE` | the collection readme and licence |
@@ -26,7 +27,8 @@ directories the FlashArray sibling grew later (`aap/`, `orchestrator/`,
 `prometheus/`, `decision-environment/`, `slack/`, `tools/`), so adding them
 here needs no packaging change.
 
-The event sources are `sdodsley.flashblade_eda.purefb_events` and
+The event sources are `sdodsley.flashblade_eda.purefb_events`,
+`sdodsley.flashblade_eda.purefb_object_audit` and
 `sdodsley.flashblade_eda.purefb_syslog`, and every rulebook declares one of
 them under those names. ansible-rulebook resolves a FQCN source from
 `ANSIBLE_COLLECTIONS_PATH`, which is why the collection has to be
@@ -37,6 +39,21 @@ for a FQCN. The dependencies are declared in `galaxy.yml`: `ansible.eda`
 `everpure.flashblade` >= 1.29.0 (the modules the playbooks run).
 `requirements.yml` lists the same two for `ansible-galaxy collection
 install -r`.
+
+`plugins/modules/` is collection content too: the three object-audit
+modules the collection has no equivalent for yet (log targets, audit
+policies and their members, bucket audit filters). A playbook names them
+`sdodsley.flashblade_eda.purefb_log_target`,
+`sdodsley.flashblade_eda.purefb_audit_policy` and
+`sdodsley.flashblade_eda.purefb_bucket_audit_filter`, with the same
+`fb_url`, `api_token` and `disable_warnings` options as the collection's
+own modules, because they import `get_system` and `purefb_argument_spec`
+from the `everpure.flashblade` module_utils; that collection has to be
+installed for them to run, which the `galaxy.yml` dependency already
+requires. They are written in the collection's style so that they can move
+upstream as they are; note that everything in `everpure.flashblade` is
+GPL-3.0-or-later, so upstreaming re-licenses them from this repository's
+Apache-2.0 to that licence.
 
 ## Build and install
 
@@ -86,9 +103,11 @@ not a code change.
 The content is already in collection layout, so the move is a rename plus
 the collection's own review steps:
 
-1. **Source names.** `sdodsley.flashblade_eda.purefb_events` and
+1. **Source names.** `sdodsley.flashblade_eda.purefb_events`,
+   `sdodsley.flashblade_eda.purefb_object_audit` and
    `sdodsley.flashblade_eda.purefb_syslog` become
-   `everpure.flashblade.purefb_events` and
+   `everpure.flashblade.purefb_events`,
+   `everpure.flashblade.purefb_object_audit` and
    `everpure.flashblade.purefb_syslog` in the rulebooks that name them, in
    the plugins' `EXAMPLES` blocks and in the unit tests that assert the
    names. The `ansible.eda` dependency moves into the collection's
@@ -111,7 +130,7 @@ the collection's own review steps:
    credentials injected as environment variables in a standalone run
    (`--env-vars`); on a platform the webhook rulesets are event streams,
    which authenticate at the platform.
-5. **Documentation.** Both event sources carry `DOCUMENTATION` and
+5. **Documentation.** The three event sources carry `DOCUMENTATION` and
    `EXAMPLES` blocks (a unit test asserts every argument the code reads is
    an option). On the move, re-check them with the collection's doc
    tooling, add a README section for the EDA content, and a changelog
