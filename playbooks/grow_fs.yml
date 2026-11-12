@@ -15,7 +15,11 @@
 # (the Manila-managed shares by default) are left alone and recorded. A
 # target above fs_grow_max_bytes (0 = always ask) is written to request_dir
 # as a request instead of applied; nothing answers that request on its own,
-# an operator reruns this playbook with new_size.
+# an operator reruns this playbook with new_size. With s3_requests_enabled
+# (vars) and an object_store entry for the array the same request is also
+# put to <log bucket>/requests/<id>.json through tasks/s3_object.yml, so an
+# approver can answer it with an approval object (playbooks/s3_approval.yml);
+# a failed put is recorded, not fatal.
 # The write is PATCH /file-systems {"provisioned": <bytes>} through
 # tasks/fb_rest.yml rather than purefb_fs: the module compares its protocol
 # and access-control defaults with the file system on every update, so a
@@ -124,6 +128,31 @@
                   'proposed_actions': ['grow_fs']} | to_nice_json }}
           delegate_to: localhost
 
+        - name: Decide whether the request also goes to the log bucket
+          ansible.builtin.set_fact:
+            mirror_wanted: "{{ s3_requests_enabled | default(false) | bool and inventory_hostname in (object_store | default({})) }}"
+
+        # the body is the file just written, byte for byte, so the object and
+        # the file never differ
+        - name: Mirror the request into the log bucket
+          when: mirror_wanted | bool
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/tasks/s3_object.yml"
+          vars:
+            s3_action: put
+            s3_bucket: "{{ object_store[inventory_hostname].log_bucket }}"
+            s3_key: "{{ request_prefix | default('requests/') }}{{ grow_request_id }}.json"
+            s3_body: "{{ lookup('file', request_dir ~ '/' ~ grow_request_id ~ '.json') }}"
+            s3_identity: state
+            s3_store: "{{ object_store[inventory_hostname] }}"
+
+        - name: Note where the request object went
+          ansible.builtin.set_fact:
+            request_object: >-
+              {{ ('s3://' ~ object_store[inventory_hostname].log_bucket ~ '/' ~ (request_prefix | default('requests/')) ~ grow_request_id ~ '.json')
+                 if mirror_wanted | bool else '' }}
+            request_object_error: "{{ (s3_error | default('') | trim) if mirror_wanted | bool and (s3_status | default(0) | int) != 200 else '' }}"
+
     - name: Grow the file system
       when: not excluded | bool and not over_cap | bool
       ansible.builtin.include_tasks:
@@ -155,6 +184,7 @@
               'old_size': before.provisioned | int, 'new_size': new_size_bytes | int,
               'used_pct': observed_used_pct | default(''), 'hard_limit': before.hard_limit_enabled | default(''),
               'outcome': outcome | trim, 'request_id': grow_request_id | default(''),
+              'request_object': request_object | default(''), 'request_object_error': request_object_error | default(''),
               'changed': grown | bool} | to_json }}
       delegate_to: localhost
 

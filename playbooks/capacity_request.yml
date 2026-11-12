@@ -11,7 +11,11 @@
 # `candidates`: an approval may later eradicate those and nothing destroyed
 # since. An approver answers through the capacity approvals webhook (see the
 # capacity rulebook) or, in Ansible Automation Platform, through the
-# workflow approval node.
+# workflow approval node. With s3_requests_enabled (vars) and an
+# object_store entry for the array the request also goes to <log
+# bucket>/requests/<id>.json through tasks/s3_object.yml, so an approval
+# object (playbooks/s3_approval.yml) is a third way; a failed put is
+# recorded in the request record, not fatal.
 - name: Raise a capacity approval request
   hosts: localhost
   gather_facts: false
@@ -119,6 +123,29 @@
         dest: "{{ request_dir }}/{{ request_id }}.json"
         mode: "0600"
         content: "{{ capacity_request | to_nice_json }}"
+
+    - name: Decide whether the request also goes to the log bucket
+      ansible.builtin.set_fact:
+        mirror_wanted: "{{ s3_requests_enabled | default(false) | bool and at_risk_array in (object_store | default({})) }}"
+
+    - name: Mirror the request into the log bucket
+      when: mirror_wanted | bool
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/s3_object.yml"
+      vars:
+        s3_action: put
+        s3_bucket: "{{ object_store[at_risk_array].log_bucket }}"
+        s3_key: "{{ request_prefix | default('requests/') }}{{ request_id }}.json"
+        s3_body: "{{ capacity_request | to_nice_json }}"
+        s3_identity: state
+        s3_store: "{{ object_store[at_risk_array] }}"
+
+    - name: Note where the request object went
+      ansible.builtin.set_fact:
+        capacity_request: >-
+          {{ capacity_request | combine({
+               'request_object': ('s3://' ~ object_store[at_risk_array].log_bucket ~ '/' ~ (request_prefix | default('requests/')) ~ request_id ~ '.json') if mirror_wanted | bool else '',
+               'request_object_error': (s3_error | default('') | trim) if mirror_wanted | bool and (s3_status | default(0) | int) != 200 else ''}) }}
 
     - name: Append to the alert log
       ansible.builtin.lineinfile:

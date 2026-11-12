@@ -1,0 +1,89 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# A landing marker (_SUCCESS, manifest.json) was written under a dataset
+# prefix: the dataset is complete. Called by the object audit rulebook with
+# target_array, bucket, key, dataset, user, access_key_id, source_ip,
+# event_time, landing_command and alert_log. The arrival is recorded and,
+# when landing_command is set, that local command is run with LANDING_ARRAY,
+# LANDING_BUCKET, LANDING_KEY, LANDING_DATASET, LANDING_USER,
+# LANDING_ACCESS_KEY_ID and LANDING_SOURCE_IP in its environment: the
+# dataset and the writer never touch the command line, so nothing an S3
+# client chose as a key can become an argument. No shell is involved; a
+# pipeline is written as sh -c '...'. A failed command is recorded, not
+# fatal. Touches no array, so it runs on localhost.
+- name: Landing marker arrived
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Refuse an array or bucket name that is not plain
+      ansible.builtin.assert:
+        that:
+          - target_array is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+          - bucket is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+          - key | string | length > 0
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} and bucket {{ bucket | string | truncate(80) }}
+          must be plain names and key must be set
+
+    - name: Note whether there is a command to run
+      ansible.builtin.set_fact:
+        command_ran: "{{ (landing_command | default('') | string | trim | length) > 0 }}"
+
+    - name: Run the ingest command
+      when: command_ran | bool
+      ansible.builtin.command:
+        cmd: "{{ landing_command }}"
+      environment:
+        LANDING_ARRAY: "{{ target_array }}"
+        LANDING_BUCKET: "{{ bucket }}"
+        LANDING_KEY: "{{ key }}"
+        LANDING_DATASET: "{{ dataset | default('') }}"
+        LANDING_USER: "{{ user | default('') }}"
+        LANDING_ACCESS_KEY_ID: "{{ access_key_id | default('') }}"
+        LANDING_SOURCE_IP: "{{ source_ip | default('') }}"
+      register: ingest
+      failed_when: false
+      changed_when: (ingest.rc | default(1)) == 0
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        ingest_rc: "{{ ingest.rc | default(-1) | int if command_ran | bool else -1 }}"
+        outcome: >-
+          {{ ('ingest command exited ' ~ (ingest.rc | default('?'))) if command_ran | bool
+             else 'recorded: landing_command is empty' }}
+
+    - name: Record the arrival
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'landing',
+              'severity': 'warning' if command_ran | bool and (ingest_rc | int) != 0 else 'info',
+              'array': target_array, 'bucket': bucket, 'key': key, 'dataset': dataset | default(''),
+              'user': user | default(''), 'access_key_id': access_key_id | default(''),
+              'source_ip': source_ip | default(''), 'event_time': event_time | default(''),
+              'command_ran': command_ran | bool, 'rc': ingest_rc | int,
+              'stdout': ingest.stdout_lines | default([]) | last | default('') | truncate(240),
+              'stderr': ingest.stderr_lines | default([]) | last | default('') | truncate(240),
+              'outcome': outcome | trim, 'changed': command_ran | bool and (ingest_rc | int) == 0} | to_json }}
+
+    - name: Show the arrival
+      ansible.builtin.debug:
+        msg: >-
+          {{ target_array }}: dataset {{ dataset | default('') }} complete ({{ bucket }}/{{ key }} by
+          {{ user | default('') }} from {{ source_ip | default('') }}) :: {{ outcome | trim }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one
+    # (an ingest job template can take dataset, bucket and key from here).
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': target_array, 'bucket': bucket, 'dataset': dataset | default(''), 'key': key,
+              'command_ran': command_ran | bool, 'rc': ingest_rc | int, 'outcome': outcome | trim} }}
+      run_once: true
+      delegate_to: localhost

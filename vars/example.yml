@@ -250,6 +250,156 @@ syslog_hostnames: {}             # array name or syslog hostname -> inventory ar
 alertmanager_host: 0.0.0.0
 alertmanager_port: 5002
 
+# --- object audit (object_audit.yml) ----------------------------------------
+# The object-audit source tails the audit log bucket of each array listed
+# here over S3 (boto3). Every credential is the name of an environment
+# variable (env.example): the tail key reads the log bucket, the state key
+# writes the cursor copy, requests, receipts and legal holds. The REST token
+# is optional: with it the plugin reads the log target, the audit policies
+# and the bucket quota (the REST fields of the health event); without it
+# those fields are empty and the log key prefix must be discoverable.
+object_audit_arrays:
+  - name: fb-a
+    fb_url_env: FB_A_URL
+    api_token_env: FB_A_TOKEN
+    s3_endpoint_env: FB_A_S3_ENDPOINT
+    s3_access_key_env: FB_A_S3_ACCESS_KEY
+    s3_secret_key_env: FB_A_S3_SECRET_KEY
+    log_bucket: eda-log
+    state_bucket: eda-state
+    state_access_key_env: FB_A_S3_STATE_ACCESS_KEY
+    state_secret_key_env: FB_A_S3_STATE_SECRET_KEY
+# What the playbooks use to read and write objects on each array
+# (playbooks/tasks/s3_object.yml): the same endpoint and keys, by
+# environment variable name. access_key_env / secret_key_env are the tail
+# (read) identity, the state keys write. An array missing here gets no legal
+# holds, no S3 approvals and no request mirror.
+object_store:
+  fb-a:
+    endpoint_env: FB_A_S3_ENDPOINT
+    access_key_env: FB_A_S3_ACCESS_KEY
+    secret_key_env: FB_A_S3_SECRET_KEY
+    state_access_key_env: FB_A_S3_STATE_ACCESS_KEY
+    state_secret_key_env: FB_A_S3_STATE_SECRET_KEY
+    log_bucket: eda-log
+    state_bucket: eda-state
+object_audit_interval: 60         # seconds between listings; records arrive one rotation (5 min on the lab) after the request anyway
+# Canary objects: a read of anything under these prefixes by a key not in
+# canary_readers is a tripwire. With canary_auto_disable_key true the key is
+# disabled on the array (playbooks/canary.yml); otherwise a critical notice.
+canary_prefixes:
+  - canary/
+canary_readers: []                # access key ids allowed to read canaries (a backup or indexer identity)
+canary_auto_disable_key: false
+# Landing markers: a PutObject of one of landing_markers under a landing
+# prefix means the dataset is complete. landing_command is a local command
+# run with LANDING_ARRAY, LANDING_BUCKET, LANDING_KEY, LANDING_DATASET,
+# LANDING_USER, LANDING_ACCESS_KEY_ID and LANDING_SOURCE_IP in its
+# environment (no shell: write "sh -c '...'" for a pipeline); "" records
+# the arrival and runs nothing.
+landing_prefixes:
+  - landing/
+landing_markers:
+  - _SUCCESS
+  - manifest.json
+landing_command: ""
+# Evidence: a PutObject under these prefixes gets a legal hold with the
+# state key when legal_hold_on_arrival is true (the bucket needs Object Lock
+# enabled).
+evidence_prefixes:
+  - evidence/
+legal_hold_on_arrival: true
+# Approvals as objects: a PutObject of approvals/<request_id>.json into the
+# log bucket ({"request_id": "<id>", "approve": true, "approver": "jane",
+# "action": "grow_fs"}) runs the action the request proposed
+# (playbooks/s3_approval.yml), which writes receipts/<request_id>.json.
+# approval_keys lists the access key ids whose approvals count; [] accepts
+# any key in the account that is not one of the automation's. With
+# s3_requests_enabled true grow_fs.yml and capacity_request.yml also put the
+# request to requests/<request_id>.json, so an approver can read what is
+# proposed without reaching request_dir.
+approval_prefix: approvals/
+request_prefix: requests/
+approval_keys: []
+s3_requests_enabled: false
+# Access key ids of the automation's own identities: never disabled by
+# canary.yml or s3_anomaly.yml, never accepted as an approver. The plugin
+# adds the keys listed here to its own tail and state keys (read from the
+# environment) for its by_automation flag, so [] already covers those and
+# the list is for extra writers; s3_approval.yml also reads the tail and
+# state key ids from the environment through object_store.
+automation_keys: []
+# The size (bytes) an S3 approval may grow a file system to; 0 = whatever
+# the request asked for. A request only exists for a target above
+# fs_grow_max_bytes, so this is a second, higher ceiling.
+fs_approval_max_bytes: 0
+# Honey objects: any request naming a key with one of these suffixes.
+honey_suffixes:
+  - .secret
+  - .key
+  - .pem
+# Storms are counted per log object (one rotation window on one blade
+# authority): an error storm is error_min_count errors and error_rate_pct of
+# the records in error; a denied storm denied_storm_count AccessDenied,
+# SignatureDoesNotMatch, InvalidAccessKeyId or ExpiredToken records; a mass
+# delete mass_delete_count deletes. With anomaly_auto_disable_key true a
+# storm disables its top access key (playbooks/s3_anomaly.yml).
+error_min_count: 5
+error_rate_pct: 50
+denied_storm_count: 5
+mass_delete_count: 50
+anomaly_auto_disable_key: false
+# The log bucket's own quota: at warn_pct of it the auditor guard raises
+# the quota by step_pct, up to log_bucket_quota_max_bytes (0 = notify only).
+log_bucket_quota_warn_pct: 80
+log_bucket_quota_step_pct: 25
+log_bucket_quota_max_bytes: 0
+# The audit configuration the guard restores (playbooks/auditor_guard.yml)
+# when a bucket loses its audit policy, a policy is disabled or a human
+# detaches something: with audit_auto_reattach true the three modules run
+# from this baseline, otherwise the record says what they would do. Filter
+# names are alphanumeric, 1 to 63 characters; log_rotate 5m to 24h.
+audit_auto_reattach: false
+audit_baseline:
+  policy: eda-audit
+  log_target: eda-audit
+  log_bucket: eda-log
+  log_name_prefix: audit_
+  log_rotate: 5m
+  buckets:
+    - eda-data
+    - eda-log
+  filters:
+    eda-data:
+      edaall:
+        actions: ["s3:All"]
+    eda-log:
+      edaapprovals:
+        actions: ["s3:PutObject"]
+        s3_prefixes: [approvals/, requests/]
+# Buckets allowed to stay without an audit policy (globs): the state bucket
+# is rewritten every poll and would only audit the automation itself.
+coverage_exclude:
+  - eda-state
+# A log bucket that always has traffic can page when no log object arrives
+# for stale_rotations rotations; off for a bucket that is quiet at night.
+audit_log_expected_continuous: false
+stale_rotations: 2
+
+# --- posture (posture.yml) ---------------------------------------------------
+# One read per poll of what a security review asks about: public buckets,
+# world-open NFS exports, old access keys, expiring certificates, buckets
+# without audit coverage, SMB shares open to Everyone. Each finding is
+# notified once a day per array; posture_auto_revert true blocks public
+# access on the public buckets instead (playbooks/posture_revert.yml,
+# purefb_bucket block_public_access).
+posture_interval: 900             # production: 900-3600
+key_max_age_days: 90
+cert_warn_days: 30
+posture_auto_revert: false
+posture_exclude_file_systems:     # legacy NFS rules of these file systems may stay world-open
+  - "share-*-manila"
+
 # --- REST ----------------------------------------------------------------
 # REST version tasks/fb_rest.yml asks for where no collection module exists
 # (alert flag, maintenance windows, quota usage). 2.16 is Purity//FB 4.5.2,

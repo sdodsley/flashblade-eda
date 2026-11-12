@@ -63,6 +63,8 @@
             pending_eradication_snapshots: "{{ event.purefb_capacity.pending_eradication_snapshots }}"
             candidate_targets: "{{ event.purefb_capacity.others }}"
             request_dir: "{{ request_dir }}"
+            s3_requests_enabled: "{{ s3_requests_enabled }}"
+            object_store: "{{ object_store }}"
             alert_log: "{{ alert_log }}"
 
     - name: Array at capacity risk - hand the event to the orchestrator
@@ -114,6 +116,8 @@
             fs_grow_max_bytes: "{{ fs_grow_max_bytes }}"
             fs_grow_exclude: "{{ fs_grow_exclude }}"
             request_dir: "{{ request_dir }}"
+            s3_requests_enabled: "{{ s3_requests_enabled }}"
+            object_store: "{{ object_store }}"
             fb_api_version: "{{ fb_api_version }}"
             alert_log: "{{ alert_log }}"
 

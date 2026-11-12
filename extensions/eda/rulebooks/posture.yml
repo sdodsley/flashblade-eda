@@ -1,0 +1,226 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Posture: what a security review asks about, read afresh every
+# posture_interval and notified once a day per array and finding. The
+# plugin's posture signal emits one purefb_posture per array with the
+# public buckets (public_status set, or public access not blocked), the
+# buckets no enabled audit policy covers (minus coverage_exclude), the
+# world-open NFS exports (export policy rules for client * with rw, and
+# legacy NFS rule strings granting * rw, minus posture_exclude_file_systems),
+# the access keys older than key_max_age_days, the certificates within
+# cert_warn_days of expiry and the SMB share policies open to Everyone with
+# full control.
+#
+# Everything is notify-only except public buckets: with posture_auto_revert
+# true playbooks/posture_revert.yml blocks public access on them
+# (purefb_bucket block_public_access, block_new_public_policies), a
+# reversible brake that leaves the bucket policy in place. One event
+# carries every finding, so the ruleset matches every rule the event
+# satisfies (match_multiple_rules) rather than the first one; each rule is
+# throttled on its own for 24 hours per array.
+
+- name: FlashBlade posture
+  hosts: all
+  match_multiple_rules: true
+
+  sources:
+    - sdodsley.flashblade_eda.purefb_events:
+        arrays: "{{ purefb_arrays }}"
+        signals: [posture]
+        posture_interval: "{{ posture_interval }}"
+        key_max_age_days: "{{ key_max_age_days }}"
+        cert_warn_days: "{{ cert_warn_days }}"
+        coverage_exclude: "{{ coverage_exclude }}"
+        posture_exclude_file_systems: "{{ posture_exclude_file_systems }}"
+
+  rules:
+    # A poll that fails once is a blip; one that keeps failing is an array
+    # nobody is watching. The first failure of a streak is recorded at info
+    # (the alert log; under the default Slack floor), once an hour per array
+    # and signal, because health.yml already pages for the array itself and
+    # nine rulebooks poll the same arrays; a streak the plugin flags as
+    # escalated (poll_error_escalate, default 10 polls) pages at critical once
+    # every six hours, since a signal that fails on its own is worth a page.
+    # Anything in between is logged below.
+    - name: Poll failing for many polls - escalate
+      condition: >-
+        event.purefb_poll_error is defined and
+        event.purefb_poll_error.escalate == true
+      throttle:
+        once_within: 6 hours
+        group_by_attributes:
+          - event.purefb_poll_error.array
+          - event.purefb_poll_error.signal
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row"
+            detail: "{{ event.purefb_poll_error.error }}"
+            target_array: "{{ event.purefb_poll_error.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Poll failed - notify once
+      condition: >-
+        event.purefb_poll_error is defined and
+        event.purefb_poll_error.consecutive == 1
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_poll_error.array
+          - event.purefb_poll_error.signal
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: info
+            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed"
+            detail: "{{ event.purefb_poll_error.error }}"
+            target_array: "{{ event.purefb_poll_error.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Report poll errors without acting
+      condition: event.purefb_poll_error is defined
+      action:
+        debug:
+          msg: "poll failed ({{ event.purefb_poll_error.signal }} on {{ event.purefb_poll_error.array }}): {{ event.purefb_poll_error.error }}"
+
+    - name: Public bucket - block public access
+      condition: >-
+        event.purefb_posture.public_count is defined and
+        event.purefb_posture.public_count > 0 and
+        vars.posture_auto_revert == true
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefb_posture.array
+      action:
+        run_playbook:
+          name: playbooks/posture_revert.yml
+          extra_vars:
+            target_array: "{{ event.purefb_posture.array }}"
+            buckets: "{{ event.purefb_posture.public_buckets }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Public bucket - notify
+      condition: >-
+        event.purefb_posture.public_count is defined and
+        event.purefb_posture.public_count > 0 and
+        vars.posture_auto_revert == false
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefb_posture.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "{{ event.purefb_posture.public_count }} public bucket(s) on {{ event.purefb_posture.array }}"
+            detail: "{{ event.purefb_posture.public_buckets }}; posture_auto_revert is off"
+            target_array: "{{ event.purefb_posture.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: World-open NFS export - notify
+      condition: >-
+        event.purefb_posture.world_open_export_count is defined and
+        event.purefb_posture.world_open_export_count > 0
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefb_posture.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "{{ event.purefb_posture.world_open_export_count }} NFS export rule(s) grant * read-write on {{ event.purefb_posture.array }}"
+            detail: "{{ event.purefb_posture.world_open_exports }}"
+            target_array: "{{ event.purefb_posture.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Access key older than the limit - notify
+      condition: >-
+        event.purefb_posture.old_key_count is defined and
+        event.purefb_posture.old_key_count > 0
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefb_posture.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "{{ event.purefb_posture.old_key_count }} object store access key(s) older than the limit on {{ event.purefb_posture.array }}"
+            detail: "{{ event.purefb_posture.old_keys }}; {{ event.purefb_posture.disabled_key_count }} key(s) disabled"
+            target_array: "{{ event.purefb_posture.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Certificate expiring - notify
+      condition: >-
+        event.purefb_posture.expiring_cert_count is defined and
+        event.purefb_posture.expiring_cert_count > 0
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefb_posture.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "{{ event.purefb_posture.expiring_cert_count }} certificate(s) expiring on {{ event.purefb_posture.array }}"
+            detail: "{{ event.purefb_posture.expiring_certs }} (days left; negative once expired)"
+            target_array: "{{ event.purefb_posture.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Bucket without audit coverage - notify
+      condition: >-
+        event.purefb_posture.uncovered_count is defined and
+        event.purefb_posture.uncovered_count > 0
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefb_posture.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "{{ event.purefb_posture.uncovered_count }} bucket(s) without an enabled audit policy on {{ event.purefb_posture.array }}"
+            detail: "{{ event.purefb_posture.uncovered_buckets }}"
+            target_array: "{{ event.purefb_posture.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: SMB share open to everyone - notify
+      condition: >-
+        event.purefb_posture.smb_everyone_full_control_count is defined and
+        event.purefb_posture.smb_everyone_full_control_count > 0
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefb_posture.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "{{ event.purefb_posture.smb_everyone_full_control_count }} SMB share policy(ies) grant Everyone full control on {{ event.purefb_posture.array }}"
+            detail: "{{ event.purefb_posture.smb_everyone_full_control }}"
+            target_array: "{{ event.purefb_posture.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Posture - log
+      condition: event.purefb_posture.issue_count is defined
+      action:
+        debug:
+          msg: >-
+            posture {{ event.purefb_posture.array }} ({{ event.purefb_posture.purity_version }}):
+            {{ event.purefb_posture.issue_count }} finding(s): public {{ event.purefb_posture.public_count }},
+            uncovered {{ event.purefb_posture.uncovered_count }}, world-open exports {{ event.purefb_posture.world_open_export_count }},
+            old keys {{ event.purefb_posture.old_key_count }}, expiring certificates {{ event.purefb_posture.expiring_cert_count }},
+            SMB everyone {{ event.purefb_posture.smb_everyone_full_control_count }}

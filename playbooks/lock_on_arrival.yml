@@ -1,0 +1,75 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# An object arrived under an evidence prefix: put a legal hold on it. Called
+# by the object audit rulebook (legal_hold_on_arrival true) with
+# target_array, bucket, key, version_id, user, access_key_id, source_ip,
+# event_time, object_store and alert_log. The hold is put_object_legal_hold
+# (LegalHold Status ON, on the version the audit record named) through
+# tasks/s3_object.yml with the array's state key, read from the environment
+# variables object_store[target_array] names. The bucket must have Object
+# Lock enabled, or the array refuses the hold; that refusal is recorded, not
+# fatal, and the array audits the hold request itself. Touches the array's
+# object store only, over S3, so it runs on localhost.
+- name: Legal hold on an evidence object
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Refuse an array without an object store entry, or a bucket name that is not plain
+      ansible.builtin.assert:
+        that:
+          - target_array is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+          - target_array in (object_store | default({}))
+          - bucket is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+          - key | string | length > 0
+        fail_msg: >-
+          {{ target_array | string | truncate(80) }} has no object_store entry (vars), or bucket
+          {{ bucket | string | truncate(80) }} is not a plain name, or key is empty; no hold placed
+
+    - name: Put the legal hold
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/s3_object.yml"
+      vars:
+        s3_action: legal_hold
+        s3_bucket: "{{ bucket }}"
+        s3_key: "{{ key }}"
+        s3_version_id: "{{ version_id | default('') }}"
+        s3_identity: state
+        s3_store: "{{ object_store[target_array] }}"
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        held: "{{ (s3_status | int) == 200 }}"
+        outcome: >-
+          {{ 'legal hold on' if (s3_status | int) == 200 else 'legal hold refused: ' ~ (s3_error | trim) }}
+
+    - name: Record the hold
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'legal_hold',
+              'severity': 'info' if held | bool else 'warning',
+              'array': target_array, 'bucket': bucket, 'key': key, 'version_id': version_id | default(''),
+              'user': user | default(''), 'access_key_id': access_key_id | default(''),
+              'source_ip': source_ip | default(''), 'event_time': event_time | default(''),
+              'held': held | bool, 'outcome': outcome | trim, 'changed': held | bool} | to_json }}
+
+    - name: Show the outcome
+      ansible.builtin.debug:
+        msg: >-
+          {{ target_array }}: {{ bucket }}/{{ key }} (version {{ version_id | default('') | truncate(24) }}) written by
+          {{ user | default('') }} from {{ source_ip | default('') }} :: {{ outcome | trim }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': target_array, 'bucket': bucket, 'key': key, 'version_id': version_id | default(''),
+              'held': held | bool, 'outcome': outcome | trim, 'changed': held | bool} }}
+      run_once: true
+      delegate_to: localhost

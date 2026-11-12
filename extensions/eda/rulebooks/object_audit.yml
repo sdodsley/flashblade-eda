@@ -1,0 +1,583 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Object audit: the array's own S3 audit log, tailed from the log bucket.
+#
+# The purefb_object_audit source lists the audit log objects of each array
+# in object_audit_arrays (one NDJSON object per rotation window and blade
+# authority, written seconds after the window closes), emits one
+# purefb_s3_event per record with the derived booleans the rules need
+# (canary, landing, evidence, honey, approval, denied, ...), one
+# purefb_s3_rollup per log object with the counts and storm flags, and one
+# purefb_audit_health per poll with the log bucket's quota, the audit
+# policies and the buckets nothing audits. Latency is one rotation (5 min on
+# the lab), so these rules are a tripwire and a record, not a race.
+#
+# Canary:   a read of a canary object by a key outside canary_readers
+#           disables that key (playbooks/canary.yml) when
+#           canary_auto_disable_key is true, else pages.
+# Honey:    any request naming a key with a honey suffix pages.
+# Landing:  a landing marker starts the ingest (playbooks/landing.yml).
+# Evidence: an object under an evidence prefix gets a legal hold
+#           (playbooks/lock_on_arrival.yml) when legal_hold_on_arrival is true.
+# Approval: approvals/<request_id>.json put into the log bucket runs the
+#           action the request proposed (playbooks/s3_approval.yml); the
+#           writer's PutObject in the audit log is the provenance.
+# Storms:   denied or error storms and mass deletes per log object
+#           (playbooks/s3_anomaly.yml, notify); anomaly_auto_disable_key
+#           also disables the top key.
+# Guard:    the log bucket near its quota, no log for stale_rotations
+#           rotations, a bucket without an enabled audit policy, and (second
+#           ruleset) a human detaching the audit configuration from the CLI
+#           or GUI: playbooks/auditor_guard.yml raises the quota within a
+#           ceiling or re-attaches the baseline when audit_auto_reattach is
+#           true, and pages naming the admin. Dropped audit records are not
+#           recoverable, so this ships with the first data-path rule.
+#
+# One health event carries every guard condition and one record may be a
+# canary and a honey hit at once, so the first ruleset matches every rule an
+# event satisfies (match_multiple_rules) instead of the first one only; the
+# switch pairs (disable or notify) are exclusive by their vars condition.
+# Every write defaults to notify: canary_auto_disable_key,
+# anomaly_auto_disable_key, audit_auto_reattach are false in vars/example.yml;
+# legal_hold_on_arrival is true because a hold is additive and the array
+# audits it back. Conditions compare what the plugin emits: rulebook
+# conditions take no filters, so every list a rule tests comes with its
+# count.
+
+- name: FlashBlade object audit
+  hosts: all
+  match_multiple_rules: true
+
+  sources:
+    - sdodsley.flashblade_eda.purefb_object_audit:
+        arrays: "{{ object_audit_arrays }}"
+        interval: "{{ object_audit_interval }}"
+        canary_prefixes: "{{ canary_prefixes }}"
+        canary_readers: "{{ canary_readers }}"
+        landing_prefixes: "{{ landing_prefixes }}"
+        landing_markers: "{{ landing_markers }}"
+        evidence_prefixes: "{{ evidence_prefixes }}"
+        honey_suffixes: "{{ honey_suffixes }}"
+        approval_prefix: "{{ approval_prefix }}"
+        request_prefix: "{{ request_prefix }}"
+        automation_keys: "{{ automation_keys }}"
+        error_min_count: "{{ error_min_count }}"
+        error_rate_pct: "{{ error_rate_pct }}"
+        denied_storm_count: "{{ denied_storm_count }}"
+        mass_delete_count: "{{ mass_delete_count }}"
+        log_bucket_quota_warn_pct: "{{ log_bucket_quota_warn_pct }}"
+        stale_rotations: "{{ stale_rotations }}"
+        coverage_exclude: "{{ coverage_exclude }}"
+
+  rules:
+    # A poll that fails once is a blip; one that keeps failing is an array
+    # nobody is watching. The first failure of a streak is recorded at info
+    # (the alert log; under the default Slack floor), once an hour per array
+    # and signal, because health.yml already pages for the array itself and
+    # nine rulebooks poll the same arrays; a streak the plugin flags as
+    # escalated (poll_error_escalate, default 10 polls) pages at critical once
+    # every six hours, since a signal that fails on its own is worth a page.
+    # Anything in between is logged below.
+    - name: Poll failing for many polls - escalate
+      condition: >-
+        event.purefb_poll_error is defined and
+        event.purefb_poll_error.escalate == true
+      throttle:
+        once_within: 6 hours
+        group_by_attributes:
+          - event.purefb_poll_error.array
+          - event.purefb_poll_error.signal
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row"
+            detail: "{{ event.purefb_poll_error.error }}"
+            target_array: "{{ event.purefb_poll_error.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Poll failed - notify once
+      condition: >-
+        event.purefb_poll_error is defined and
+        event.purefb_poll_error.consecutive == 1
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_poll_error.array
+          - event.purefb_poll_error.signal
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: info
+            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed"
+            detail: "{{ event.purefb_poll_error.error }}"
+            target_array: "{{ event.purefb_poll_error.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Report poll errors without acting
+      condition: event.purefb_poll_error is defined
+      action:
+        debug:
+          msg: "poll failed ({{ event.purefb_poll_error.signal }} on {{ event.purefb_poll_error.array }}): {{ event.purefb_poll_error.error }}"
+
+    # The plugin sets canary for a successful read (GetObject, HeadObject,
+    # CopyObject, GetObjectTagging) under a canary prefix and canary_allowed
+    # for a key in canary_readers; the automation's own keys never trip it.
+    # Several reads by one key in one window are one action.
+    - name: Canary object read by a key not on the allow-list - disable the key
+      condition: >-
+        event.purefb_s3_event.canary is defined and
+        event.purefb_s3_event.canary == true and
+        event.purefb_s3_event.canary_allowed == false and
+        event.purefb_s3_event.by_automation == false and
+        vars.canary_auto_disable_key == true
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefb_s3_event.array
+          - event.purefb_s3_event.access_key_id
+      action:
+        run_playbook:
+          name: playbooks/canary.yml
+          extra_vars:
+            target_array: "{{ event.purefb_s3_event.array }}"
+            access_key_id: "{{ event.purefb_s3_event.access_key_id }}"
+            user: "{{ event.purefb_s3_event.user }}"
+            bucket: "{{ event.purefb_s3_event.bucket }}"
+            key: "{{ event.purefb_s3_event.key }}"
+            source_ip: "{{ event.purefb_s3_event.source_ip }}"
+            event_time: "{{ event.purefb_s3_event.event_time }}"
+            log_object: "{{ event.purefb_s3_event.log_object }}"
+            canary_readers: "{{ canary_readers }}"
+            automation_keys: "{{ automation_keys }}"
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Canary object read by a key not on the allow-list - notify
+      condition: >-
+        event.purefb_s3_event.canary is defined and
+        event.purefb_s3_event.canary == true and
+        event.purefb_s3_event.canary_allowed == false and
+        event.purefb_s3_event.by_automation == false and
+        vars.canary_auto_disable_key == false
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefb_s3_event.array
+          - event.purefb_s3_event.access_key_id
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "Canary {{ event.purefb_s3_event.bucket }}/{{ event.purefb_s3_event.key }} read by {{ event.purefb_s3_event.user }} ({{ event.purefb_s3_event.access_key_id }}) on {{ event.purefb_s3_event.array }}"
+            detail: >-
+              {{ event.purefb_s3_event.event_name }} from {{ event.purefb_s3_event.source_ip }}
+              at {{ event.purefb_s3_event.event_time }}, agent {{ event.purefb_s3_event.user_agent }};
+              canary_auto_disable_key is off; log object {{ event.purefb_s3_event.log_object }}
+            target_array: "{{ event.purefb_s3_event.array }}"
+            alert_log: "{{ alert_log }}"
+
+    # Any request naming a honey key counts, a failed one included: the name
+    # was guessed or listed.
+    - name: Honey object touched - notify
+      condition: >-
+        event.purefb_s3_event.honey is defined and
+        event.purefb_s3_event.honey == true and
+        event.purefb_s3_event.by_automation == false
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefb_s3_event.array
+          - event.purefb_s3_event.access_key_id
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "Honey object {{ event.purefb_s3_event.bucket }}/{{ event.purefb_s3_event.key }} {{ event.purefb_s3_event.event_name }} by {{ event.purefb_s3_event.user }} ({{ event.purefb_s3_event.access_key_id }}) on {{ event.purefb_s3_event.array }}"
+            detail: >-
+              from {{ event.purefb_s3_event.source_ip }} at {{ event.purefb_s3_event.event_time }},
+              error={{ event.purefb_s3_event.error_code }}; log object {{ event.purefb_s3_event.log_object }}
+            target_array: "{{ event.purefb_s3_event.array }}"
+            alert_log: "{{ alert_log }}"
+
+    # dataset is the path between the landing prefix and the marker; a
+    # marker rewritten within five minutes is one ingest.
+    - name: Landing marker arrived - start the ingest
+      condition: >-
+        event.purefb_s3_event.landing is defined and
+        event.purefb_s3_event.landing == true
+      throttle:
+        once_within: 5 minutes
+        group_by_attributes:
+          - event.purefb_s3_event.array
+          - event.purefb_s3_event.dataset
+      action:
+        run_playbook:
+          name: playbooks/landing.yml
+          extra_vars:
+            target_array: "{{ event.purefb_s3_event.array }}"
+            bucket: "{{ event.purefb_s3_event.bucket }}"
+            key: "{{ event.purefb_s3_event.key }}"
+            dataset: "{{ event.purefb_s3_event.dataset }}"
+            user: "{{ event.purefb_s3_event.user }}"
+            access_key_id: "{{ event.purefb_s3_event.access_key_id }}"
+            source_ip: "{{ event.purefb_s3_event.source_ip }}"
+            event_time: "{{ event.purefb_s3_event.event_time }}"
+            landing_command: "{{ landing_command }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Evidence object arrived - legal hold
+      condition: >-
+        event.purefb_s3_event.evidence is defined and
+        event.purefb_s3_event.evidence == true and
+        event.purefb_s3_event.by_automation == false and
+        vars.legal_hold_on_arrival == true
+      action:
+        run_playbook:
+          name: playbooks/lock_on_arrival.yml
+          extra_vars:
+            target_array: "{{ event.purefb_s3_event.array }}"
+            bucket: "{{ event.purefb_s3_event.bucket }}"
+            key: "{{ event.purefb_s3_event.key }}"
+            version_id: "{{ event.purefb_s3_event.version_id }}"
+            user: "{{ event.purefb_s3_event.user }}"
+            access_key_id: "{{ event.purefb_s3_event.access_key_id }}"
+            source_ip: "{{ event.purefb_s3_event.source_ip }}"
+            event_time: "{{ event.purefb_s3_event.event_time }}"
+            object_store: "{{ object_store }}"
+            alert_log: "{{ alert_log }}"
+
+    # The playbook refuses a writer outside approval_keys or among the
+    # automation's keys and records the attempt, so every approval object is
+    # worth a run.
+    - name: Approval object written - act on it
+      condition: >-
+        event.purefb_s3_event.approval is defined and
+        event.purefb_s3_event.approval == true
+      action:
+        run_playbook:
+          name: playbooks/s3_approval.yml
+          extra_vars:
+            target_array: "{{ event.purefb_s3_event.array }}"
+            request_id: "{{ event.purefb_s3_event.request_id }}"
+            approver_key: "{{ event.purefb_s3_event.access_key_id }}"
+            approver_user: "{{ event.purefb_s3_event.user }}"
+            source_ip: "{{ event.purefb_s3_event.source_ip }}"
+            object_store: "{{ object_store }}"
+            approval_keys: "{{ approval_keys }}"
+            automation_keys: "{{ automation_keys }}"
+            approval_prefix: "{{ approval_prefix }}"
+            request_prefix: "{{ request_prefix }}"
+            request_dir: "{{ request_dir }}"
+            fs_grow_max_bytes: "{{ fs_approval_max_bytes }}"
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    # A rollup is one log object: one rotation window on one blade
+    # authority, so a storm spanning authorities arrives several times and
+    # the throttle keys on the key that caused it.
+    - name: Access-denied storm - notify or disable the key
+      condition: >-
+        event.purefb_s3_rollup.denied_storm is defined and
+        event.purefb_s3_rollup.denied_storm == true
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.purefb_s3_rollup.array
+          - event.purefb_s3_rollup.top_access_key
+      action:
+        run_playbook:
+          name: playbooks/s3_anomaly.yml
+          extra_vars:
+            target_array: "{{ event.purefb_s3_rollup.array }}"
+            access_key_id: "{{ event.purefb_s3_rollup.top_access_key }}"
+            kind: denied_storm
+            window: "{{ event.purefb_s3_rollup.window }}"
+            log_object: "{{ event.purefb_s3_rollup.log_object }}"
+            record_count: "{{ event.purefb_s3_rollup.record_count }}"
+            error_count: "{{ event.purefb_s3_rollup.error_count }}"
+            error_pct: "{{ event.purefb_s3_rollup.error_pct }}"
+            denied_count: "{{ event.purefb_s3_rollup.denied_count }}"
+            top_access_key_count: "{{ event.purefb_s3_rollup.top_access_key_count }}"
+            top_source_ip: "{{ event.purefb_s3_rollup.top_source_ip }}"
+            by_error_code: "{{ event.purefb_s3_rollup.by_error_code }}"
+            anomaly_auto_disable_key: "{{ anomaly_auto_disable_key }}"
+            automation_keys: "{{ automation_keys }}"
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Error storm - notify
+      condition: >-
+        event.purefb_s3_rollup.error_storm is defined and
+        event.purefb_s3_rollup.error_storm == true and
+        event.purefb_s3_rollup.denied_storm == false
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.purefb_s3_rollup.array
+          - event.purefb_s3_rollup.top_access_key
+      action:
+        run_playbook:
+          name: playbooks/s3_anomaly.yml
+          extra_vars:
+            target_array: "{{ event.purefb_s3_rollup.array }}"
+            access_key_id: "{{ event.purefb_s3_rollup.top_access_key }}"
+            kind: error_storm
+            window: "{{ event.purefb_s3_rollup.window }}"
+            log_object: "{{ event.purefb_s3_rollup.log_object }}"
+            record_count: "{{ event.purefb_s3_rollup.record_count }}"
+            error_count: "{{ event.purefb_s3_rollup.error_count }}"
+            error_pct: "{{ event.purefb_s3_rollup.error_pct }}"
+            denied_count: "{{ event.purefb_s3_rollup.denied_count }}"
+            top_access_key_count: "{{ event.purefb_s3_rollup.top_access_key_count }}"
+            top_source_ip: "{{ event.purefb_s3_rollup.top_source_ip }}"
+            by_error_code: "{{ event.purefb_s3_rollup.by_error_code }}"
+            anomaly_auto_disable_key: "{{ anomaly_auto_disable_key }}"
+            automation_keys: "{{ automation_keys }}"
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Mass delete - notify
+      condition: >-
+        event.purefb_s3_rollup.mass_delete is defined and
+        event.purefb_s3_rollup.mass_delete == true
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.purefb_s3_rollup.array
+          - event.purefb_s3_rollup.top_access_key
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "{{ event.purefb_s3_rollup.delete_count }} deletes in one audit window on {{ event.purefb_s3_rollup.array }}"
+            detail: >-
+              window {{ event.purefb_s3_rollup.window }}, buckets {{ event.purefb_s3_rollup.buckets }};
+              top key {{ event.purefb_s3_rollup.top_access_key }} ({{ event.purefb_s3_rollup.top_access_key_count }} of
+              {{ event.purefb_s3_rollup.record_count }} records) from {{ event.purefb_s3_rollup.top_source_ip }};
+              log object {{ event.purefb_s3_rollup.log_object }}
+            target_array: "{{ event.purefb_s3_rollup.array }}"
+            alert_log: "{{ alert_log }}"
+
+    # The health event is one per poll; the guard is throttled per array so a
+    # bucket that stays near its quota is one action, not one per poll.
+    - name: Audit log bucket near its quota - raise it or page
+      condition: >-
+        event.purefb_audit_health.log_bucket_quota_known is defined and
+        event.purefb_audit_health.log_bucket_quota_known == true and
+        event.purefb_audit_health.log_bucket_used_pct >= vars.log_bucket_quota_warn_pct
+      throttle:
+        once_within: 6 hours
+        group_by_attributes:
+          - event.purefb_audit_health.array
+      action:
+        run_playbook:
+          name: playbooks/auditor_guard.yml
+          extra_vars:
+            target_array: "{{ event.purefb_audit_health.array }}"
+            mode: quota
+            reason: >-
+              log bucket {{ event.purefb_audit_health.log_bucket }} at {{ event.purefb_audit_health.log_bucket_used_pct }}%
+              of its quota ({{ event.purefb_audit_health.log_bucket_used_bytes }} of
+              {{ event.purefb_audit_health.log_bucket_quota_bytes }} bytes, {{ event.purefb_audit_health.log_bucket_object_count }} objects)
+            audit_baseline: "{{ audit_baseline }}"
+            log_bucket_quota_step_pct: "{{ log_bucket_quota_step_pct }}"
+            log_bucket_quota_max_bytes: "{{ log_bucket_quota_max_bytes }}"
+            audit_auto_reattach: "{{ audit_auto_reattach }}"
+            log_bucket: "{{ event.purefb_audit_health.log_bucket }}"
+            log_bucket_used_bytes: "{{ event.purefb_audit_health.log_bucket_used_bytes }}"
+            log_bucket_quota_bytes: "{{ event.purefb_audit_health.log_bucket_quota_bytes }}"
+            log_bucket_used_pct: "{{ event.purefb_audit_health.log_bucket_used_pct }}"
+            uncovered_buckets: "{{ event.purefb_audit_health.uncovered_buckets }}"
+            policies_disabled: "{{ event.purefb_audit_health.policies_disabled }}"
+            members_without_filters: "{{ event.purefb_audit_health.members_without_filters }}"
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    # stale is only set once a log object has been seen, so a bucket that is
+    # quiet at night needs audit_log_expected_continuous false.
+    - name: No audit log for two rotations - page
+      condition: >-
+        event.purefb_audit_health.stale is defined and
+        event.purefb_audit_health.stale == true and
+        vars.audit_log_expected_continuous == true
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_audit_health.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "No audit log object on {{ event.purefb_audit_health.array }} for {{ event.purefb_audit_health.newest_log_age_s }} s"
+            detail: >-
+              newest {{ event.purefb_audit_health.newest_log_object }}; rotation {{ event.purefb_audit_health.rotation_ms }} ms;
+              bucket {{ event.purefb_audit_health.log_bucket }} prefix {{ event.purefb_audit_health.log_key_prefix }};
+              policies enabled {{ event.purefb_audit_health.policies_enabled }}, disabled {{ event.purefb_audit_health.policies_disabled }}
+            target_array: "{{ event.purefb_audit_health.array }}"
+            alert_log: "{{ alert_log }}"
+
+    # members_without_filters is a list and conditions take no length
+    # filter, so the plugin emits its count alongside.
+    - name: Bucket without an enabled audit policy - re-attach or notify
+      condition: >-
+        event.purefb_audit_health.uncovered_count is defined and
+        (event.purefb_audit_health.uncovered_count > 0 or
+         event.purefb_audit_health.policies_disabled > 0 or
+         event.purefb_audit_health.members_without_filters_count > 0)
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_audit_health.array
+      action:
+        run_playbook:
+          name: playbooks/auditor_guard.yml
+          extra_vars:
+            target_array: "{{ event.purefb_audit_health.array }}"
+            mode: reattach
+            reason: >-
+              buckets without an enabled audit policy {{ event.purefb_audit_health.uncovered_buckets }};
+              disabled policies {{ event.purefb_audit_health.policies_disabled }};
+              members without a filter {{ event.purefb_audit_health.members_without_filters }}
+            audit_baseline: "{{ audit_baseline }}"
+            log_bucket_quota_step_pct: "{{ log_bucket_quota_step_pct }}"
+            log_bucket_quota_max_bytes: "{{ log_bucket_quota_max_bytes }}"
+            audit_auto_reattach: "{{ audit_auto_reattach }}"
+            log_bucket: "{{ event.purefb_audit_health.log_bucket }}"
+            log_bucket_used_bytes: "{{ event.purefb_audit_health.log_bucket_used_bytes }}"
+            log_bucket_quota_bytes: "{{ event.purefb_audit_health.log_bucket_quota_bytes }}"
+            log_bucket_used_pct: "{{ event.purefb_audit_health.log_bucket_used_pct }}"
+            uncovered_buckets: "{{ event.purefb_audit_health.uncovered_buckets }}"
+            policies_disabled: "{{ event.purefb_audit_health.policies_disabled }}"
+            members_without_filters: "{{ event.purefb_audit_health.members_without_filters }}"
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Audit rollup - log
+      condition: event.purefb_s3_rollup.record_count is defined
+      action:
+        debug:
+          msg: >-
+            {{ event.purefb_s3_rollup.array }} {{ event.purefb_s3_rollup.log_object }}:
+            {{ event.purefb_s3_rollup.record_count }} records, {{ event.purefb_s3_rollup.error_count }} errors
+            ({{ event.purefb_s3_rollup.error_pct }}%), {{ event.purefb_s3_rollup.denied_count }} denied,
+            {{ event.purefb_s3_rollup.delete_count }} deletes, canary {{ event.purefb_s3_rollup.canary_hits }},
+            honey {{ event.purefb_s3_rollup.honey_hits }}; by event {{ event.purefb_s3_rollup.by_event_name }};
+            top key {{ event.purefb_s3_rollup.top_access_key }} from {{ event.purefb_s3_rollup.top_source_ip }}
+
+# The audit record of a purepolicy, purelog or purebucket command that
+# removes, disables or rewrites something with "audit" in its subcommand
+# (or any purelog change: the log targets are the audit sink) by a person,
+# not the automation, re-attaches the baseline and pages naming that person.
+# The same audits signal change_control.yml polls; this ruleset keeps the
+# audit configuration rule next to the rules it protects.
+- name: FlashBlade audit configuration change control
+  hosts: all
+
+  sources:
+    - sdodsley.flashblade_eda.purefb_events:
+        arrays: "{{ config_arrays | default(purefb_arrays) }}"
+        signals: [audits]
+        audits_interval: "{{ audits_interval }}"
+        automation_users: "{{ automation_users }}"
+        automation_user_agents: "{{ automation_user_agents }}"
+
+  rules:
+    - name: Poll failing for many polls - escalate
+      condition: >-
+        event.purefb_poll_error is defined and
+        event.purefb_poll_error.escalate == true
+      throttle:
+        once_within: 6 hours
+        group_by_attributes:
+          - event.purefb_poll_error.array
+          - event.purefb_poll_error.signal
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row"
+            detail: "{{ event.purefb_poll_error.error }}"
+            target_array: "{{ event.purefb_poll_error.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Poll failed - notify once
+      condition: >-
+        event.purefb_poll_error is defined and
+        event.purefb_poll_error.consecutive == 1
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_poll_error.array
+          - event.purefb_poll_error.signal
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: info
+            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed"
+            detail: "{{ event.purefb_poll_error.error }}"
+            target_array: "{{ event.purefb_poll_error.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Report poll errors without acting
+      condition: event.purefb_poll_error is defined
+      action:
+        debug:
+          msg: "poll failed ({{ event.purefb_poll_error.signal }} on {{ event.purefb_poll_error.array }}): {{ event.purefb_poll_error.error }}"
+
+    # The array records a multi-word subcommand (verified shapes: purepolicy
+    # "audit object remove" with arguments "--bucket 'eda-data' eda-audit",
+    # purebucket "audit-filter remove", purelog "object delete" or "object
+    # setattr"), so the tests are regex searches, not list membership. One
+    # human session usually removes or disables several things in a row;
+    # the baseline is restored whole on the first, so the rest are one
+    # re-attach two minutes later at most.
+    - name: Human changed the audit configuration - re-attach and page
+      condition: >-
+        event.purefb_audit.command is defined and
+        event.purefb_audit.command in ["purepolicy", "purelog", "purebucket"] and
+        (event.purefb_audit.subcommand is search("audit") or event.purefb_audit.command == "purelog") and
+        event.purefb_audit.subcommand is search("remove|delete|disable|setattr|destroy|eradicate") and
+        event.purefb_audit.by_automation == false and
+        event.purefb_audit.automation_agent == false
+      throttle:
+        once_within: 2 minutes
+        group_by_attributes:
+          - event.purefb_audit.array
+      action:
+        run_playbook:
+          name: playbooks/auditor_guard.yml
+          extra_vars:
+            target_array: "{{ event.purefb_audit.array }}"
+            mode: reattach
+            reason: >-
+              {{ event.purefb_audit.user }} ran {{ event.purefb_audit.command }} {{ event.purefb_audit.subcommand }}
+              {{ event.purefb_audit.arguments }} from {{ event.purefb_audit.ip_address }} over
+              {{ event.purefb_audit.user_interface }} at {{ event.purefb_audit.time }} (audit {{ event.purefb_audit.audit_id }})
+            audit_baseline: "{{ audit_baseline }}"
+            log_bucket_quota_step_pct: "{{ log_bucket_quota_step_pct }}"
+            log_bucket_quota_max_bytes: "{{ log_bucket_quota_max_bytes }}"
+            audit_auto_reattach: "{{ audit_auto_reattach }}"
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Audit configuration changed by the automation - log
+      condition: >-
+        event.purefb_audit.command is defined and
+        event.purefb_audit.command in ["purepolicy", "purelog", "purebucket"] and
+        (event.purefb_audit.by_automation == true or event.purefb_audit.automation_agent == true)
+      action:
+        debug:
+          msg: >-
+            automation ({{ event.purefb_audit.user }}, agent {{ event.purefb_audit.user_agent }}) on {{ event.purefb_audit.array }}:
+            {{ event.purefb_audit.command }} {{ event.purefb_audit.subcommand }} {{ event.purefb_audit.arguments }}

@@ -1,0 +1,256 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Act on an approval written as an object. Called by the object audit
+# rulebook when approvals/<request_id>.json is put into the array's log
+# bucket, with target_array, request_id, approver_key (the writer's access
+# key id), approver_user, source_ip, object_store, approval_keys,
+# automation_keys, approval_prefix, request_prefix, request_dir,
+# fs_grow_max_bytes, fb_api_version and alert_log.
+#
+# The approval object holds {"request_id": ..., "approve": true, "approver":
+# "<name>", "action": "<one of the request's proposed_actions>"}; the request
+# is requests/<request_id>.json in the same bucket (put there by grow_fs.yml
+# or capacity_request.yml when s3_requests_enabled), else the request file
+# in request_dir on this host. Both are read with the array's tail key.
+# The writer's PutObject is itself in the audit log (key, address, time), so
+# the array's own record is the provenance; the playbook still refuses a
+# writer key that is not in approval_keys (when that list is set), one of
+# the automation's own keys (automation_keys, plus the tail and state key
+# ids read from the environment), a request that is not awaiting approval,
+# an action the request does not propose and a request for another array.
+# Actions:
+#   grow_fs            re-read the file system and PATCH provisioned to the
+#                      request's requested_size (one field over REST, as
+#                      grow_fs.yml does) when it is still smaller; never
+#                      above fs_grow_max_bytes (0 = whatever was requested)
+#   eradicate_pending  recorded as approved; capacity_reclaim.yml does the
+#                      eradication from the request file and is not run here
+# Whatever the outcome, receipts/<request_id>.json goes to the log bucket
+# with the state key, the local request file is marked done after a
+# performed action, and one s3_approval record is written: critical when a
+# key that may not approve tried to, warning when something was changed,
+# info otherwise.
+- name: Act on an approval object
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  vars:
+    store: "{{ object_store[inventory_hostname] }}"
+    request_file: "{{ request_dir }}/{{ request_id }}.json"
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    # The request id becomes an object key and a file name; the key id goes
+    # into the record.
+    - name: Refuse a request id or approver key that is not plain, or an array without an object store entry
+      ansible.builtin.assert:
+        that:
+          - request_id is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+          - approver_key | string is match('^[A-Za-z0-9]*$')
+          - inventory_hostname in (object_store | default({}))
+        fail_msg: >-
+          request_id {{ request_id | string | truncate(80) }} must be a plain name, approver_key
+          {{ approver_key | string | truncate(60) }} an access key id, and {{ inventory_hostname }}
+          needs an object_store entry (vars)
+
+    - name: Work out which keys may never approve (the automation's own)
+      ansible.builtin.set_fact:
+        protected_keys: >-
+          {{ (automation_keys | default([]))
+             + ([lookup('env', store.state_access_key_env | default('')),
+                 lookup('env', store.access_key_env | default(''))] | reject('equalto', '') | list) }}
+
+    - name: Decide whether the writer may approve
+      ansible.builtin.set_fact:
+        writer_allowed: >-
+          {{ (approver_key | string | length) > 0 and approver_key not in protected_keys
+             and ((approval_keys | default([]) | length) == 0 or approver_key in approval_keys) }}
+
+    - name: Read the approval object
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/s3_object.yml"
+      vars:
+        s3_action: get
+        s3_bucket: "{{ store.log_bucket }}"
+        s3_key: "{{ approval_prefix | default('approvals/') }}{{ request_id }}.json"
+        s3_identity: tail
+        s3_store: "{{ store }}"
+
+    - name: Keep the approval
+      ansible.builtin.set_fact:
+        approval: "{{ s3_json if (s3_status | int) == 200 and s3_json is mapping else {} }}"
+        approval_error: "{{ s3_error | trim }}"
+
+    - name: Read the request object
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/s3_object.yml"
+      vars:
+        s3_action: get
+        s3_bucket: "{{ store.log_bucket }}"
+        s3_key: "{{ request_prefix | default('requests/') }}{{ request_id }}.json"
+        s3_identity: tail
+        s3_store: "{{ store }}"
+
+    - name: Keep the request (the object in the log bucket, else the local request file)
+      ansible.builtin.set_fact:
+        request: >-
+          {{ s3_json if (s3_status | int) == 200 and s3_json is mapping and (s3_json | length) > 0
+             else (lookup('file', request_file) | from_json) if request_file is file
+             else {} }}
+        request_source: >-
+          {{ 'object' if (s3_status | int) == 200 and s3_json is mapping and (s3_json | length) > 0
+             else 'file' if request_file is file else 'none' }}
+
+    - name: Work out the action and the reason to refuse, if any
+      ansible.builtin.set_fact:
+        approved_action: "{{ approval.action | default('') }}"
+        refusal: >-
+          {{ 'writer key may not approve (not in approval_keys, or one of the automation keys)' if not writer_allowed | bool
+             else ('approval object not readable: ' ~ approval_error) if (approval | length) == 0
+             else 'approval does not say approve: true' if not (approval.approve | default(false) | bool)
+             else 'request not found (no object in the log bucket, no file in request_dir)' if (request | length) == 0
+             else ('request is for ' ~ (request.array | default('')) ~ ', not ' ~ inventory_hostname) if (request.array | default('')) != inventory_hostname
+             else ('request is ' ~ (request.status | default('unknown')) ~ ', not awaiting approval') if (request.status | default('')) != 'awaiting_approval'
+             else ('action ' ~ (approval.action | default('')) ~ ' is not one the request proposes') if (approval.action | default('')) not in (request.proposed_actions | default([]))
+             else 'the request names no plain file system' if (approval.action | default('')) == 'grow_fs' and not (request.file_system | default('') is match('^[A-Za-z0-9][A-Za-z0-9_.:-]*$'))
+             else ('requested size ' ~ (request.requested_size | default(0)) ~ ' is above the approval ceiling ' ~ (fs_grow_max_bytes | default(0))) if (approval.action | default('')) == 'grow_fs' and (fs_grow_max_bytes | default(0) | int) > 0 and (request.requested_size | default(0) | int) > (fs_grow_max_bytes | int)
+             else '' }}
+
+    - name: Grow the file system the request names
+      when: (refusal | trim | length) == 0 and approved_action == 'grow_fs'
+      block:
+        - name: Read the file system
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+          vars:
+            fb_rest_method: GET
+            fb_rest_path: "file-systems?names={{ request.file_system }}"
+            fb_rest_ignore_errors: true
+
+        - name: Keep what the array said
+          ansible.builtin.set_fact:
+            before: "{{ (fb_rest_json['items'] | default([{}]))[0] | default({}) }}"
+            read_error: "{{ fb_rest_error | trim }}"
+
+        # The approval may be hours old: grow only a file system that is
+        # still smaller than the approved size and not destroyed meanwhile.
+        - name: Decide whether it still needs the growth
+          ansible.builtin.set_fact:
+            grow_needed: >-
+              {{ before.provisioned is defined and not (before.destroyed | default(false) | bool)
+                 and (before.provisioned | int) < (request.requested_size | int) }}
+
+        - name: Grow the file system
+          when: grow_needed | bool
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+          vars:
+            fb_rest_method: PATCH
+            fb_rest_path: "file-systems?names={{ request.file_system }}"
+            fb_rest_body: "{{ {'provisioned': request.requested_size | int} }}"
+            fb_rest_ignore_errors: true
+
+        - name: Keep the growth outcome
+          ansible.builtin.set_fact:
+            performed: "{{ grow_needed | bool and (fb_rest_status | int) == 200 }}"
+            outcome: >-
+              {{ (request.file_system ~ ' grown from ' ~ (before.provisioned | default('?')) ~ ' to ' ~ request.requested_size ~ ' bytes') if grow_needed | bool and (fb_rest_status | int) == 200
+                 else ('grow refused by the array: ' ~ (fb_rest_error | trim)) if grow_needed | bool
+                 else ('not grown: ' ~ (read_error if read_error else request.file_system ~ ' is already ' ~ (before.provisioned | default('?')) ~ ' bytes, or destroyed')) }}
+
+    - name: Note an approved eradication for the reclaim playbook
+      when: (refusal | trim | length) == 0 and approved_action == 'eradicate_pending'
+      ansible.builtin.set_fact:
+        performed: false
+        outcome: "approved: run capacity_reclaim.yml with request_id {{ request_id }} and reclaim_action eradicate_pending (not run here)"
+
+    - name: Settle the outcome
+      ansible.builtin.set_fact:
+        performed: "{{ performed | default(false) }}"
+        outcome: >-
+          {{ outcome | default(('refused: ' ~ (refusal | trim)) if (refusal | trim | length) > 0
+                               else 'approved action ' ~ approved_action ~ ' has no handler here') }}
+
+    - name: Build the receipt
+      ansible.builtin.set_fact:
+        receipt: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 's3_approval_receipt',
+              'request_id': request_id, 'array': inventory_hostname, 'action': approved_action,
+              'approver': approval.approver | default(''), 'approver_key': approver_key,
+              'approver_user': approver_user | default(''), 'source_ip': source_ip | default(''),
+              'request_source': request_source | trim, 'performed': performed | bool, 'outcome': outcome | trim} }}
+
+    - name: Write the receipt to the log bucket
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/s3_object.yml"
+      vars:
+        s3_action: put
+        s3_bucket: "{{ store.log_bucket }}"
+        s3_key: "receipts/{{ request_id }}.json"
+        s3_body: "{{ receipt | to_nice_json }}"
+        s3_identity: state
+        s3_store: "{{ store }}"
+
+    - name: Keep the receipt outcome
+      ansible.builtin.set_fact:
+        receipt_error: "{{ '' if (s3_status | int) == 200 else (s3_error | trim) }}"
+
+    - name: Mark the local request file done
+      when: performed | bool and request_file is file
+      ansible.builtin.copy:
+        dest: "{{ request_file }}"
+        mode: "0600"
+        content: >-
+          {{ request | combine({'status': 'done', 'approver': approval.approver | default(''),
+                                'approver_key': approver_key, 'action': approved_action,
+                                'done_at': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                                'via': 's3 approval'}) | to_nice_json }}
+      delegate_to: localhost
+
+    - name: Record the approval
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 's3_approval',
+              'severity': 'critical' if not writer_allowed | bool else 'warning' if performed | bool else 'info',
+              'array': inventory_hostname, 'request_id': request_id, 'action': approved_action,
+              'approver': approval.approver | default(''), 'approver_key': approver_key,
+              'approver_user': approver_user | default(''), 'source_ip': source_ip | default(''),
+              'request_source': request_source | trim, 'performed': performed | bool,
+              'outcome': outcome | trim, 'receipt_error': receipt_error | trim,
+              'changed': performed | bool} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the outcome
+      ansible.builtin.debug:
+        msg: >-
+          request {{ request_id }} on {{ inventory_hostname }}: {{ approved_action }} approved by
+          {{ approval.approver | default('?') }} ({{ approver_user | default('') }} {{ approver_key }} from
+          {{ source_ip | default('') }}) :: {{ outcome | trim }}{{ ('; receipt: ' ~ receipt_error) if receipt_error | trim else '' }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'request_id': request_id, 'action': approved_action,
+              'performed': performed | bool, 'outcome': outcome | trim, 'changed': performed | bool} }}
+      run_once: true
+      delegate_to: localhost

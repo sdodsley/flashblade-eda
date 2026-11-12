@@ -1,0 +1,96 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# A canary object was read by a key that is not allowed to read it: disable
+# that access key. Called by the object audit rulebook (canary_auto_disable_key
+# true) with target_array, access_key_id, user, bucket, key, source_ip,
+# event_time, log_object, canary_readers, automation_keys, fb_api_version and
+# alert_log; or by hand:
+#   ansible-playbook -i inventory/local-lab.yml playbooks/canary.yml \
+#       -e target_array=fb-a -e access_key_id=<key id> -e alert_log=$PWD/alerts.log
+# The disable is PATCH /object-store-access-keys?names=<id> {"enabled": false}
+# through tasks/fb_rest.yml (no collection module sets one key's enabled
+# flag by name): a reversible brake on the identity, not on the data;
+# purefb_s3user state=keystate enable_key=true puts it back. A key on the
+# canary allow-list or one of the automation's own keys is never disabled,
+# whatever the event said, and the record says so. The record is critical
+# either way: somebody read the tripwire.
+- name: Disable the key that read a canary object
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    # The key id goes into a query string.
+    - name: Refuse an access key id that is not a plain key name
+      ansible.builtin.assert:
+        that:
+          - access_key_id | string is match('^[A-Za-z0-9]+$')
+        fail_msg: "access_key_id {{ access_key_id | string | truncate(60) }} is not an access key id"
+
+    - name: Decide whether the key may be disabled
+      ansible.builtin.set_fact:
+        protected: >-
+          {{ access_key_id in (canary_readers | default([])) or access_key_id in (automation_keys | default([])) }}
+
+    - name: Disable the key
+      when: not protected | bool
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: PATCH
+        fb_rest_path: "object-store-access-keys?names={{ access_key_id }}"
+        fb_rest_body: "{{ {'enabled': false} }}"
+        fb_rest_ignore_errors: true
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        disabled: "{{ not protected | bool and (fb_rest_status | default(0) | int) == 200 }}"
+        outcome: >-
+          {{ 'not disabled: the key is on the canary allow-list or one of the automation keys' if protected | bool
+             else 'key disabled' if (fb_rest_status | default(0) | int) == 200
+             else 'disable refused by the array: ' ~ (fb_rest_error | default('') | trim) }}
+
+    - name: Record the canary hit
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'canary', 'severity': 'critical',
+              'array': inventory_hostname, 'access_key_id': access_key_id, 'user': user | default(''),
+              'bucket': bucket | default(''), 'key': key | default(''), 'source_ip': source_ip | default(''),
+              'event_time': event_time | default(''), 'log_object': log_object | default(''),
+              'disabled': disabled | bool, 'outcome': outcome | trim, 'changed': disabled | bool} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the outcome
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: canary {{ bucket | default('') }}/{{ key | default('') }} read by
+          {{ user | default('') }} ({{ access_key_id }}) from {{ source_ip | default('') }} :: {{ outcome | trim }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'access_key_id': access_key_id, 'user': user | default(''),
+              'disabled': disabled | bool, 'outcome': outcome | trim, 'changed': disabled | bool} }}
+      run_once: true
+      delegate_to: localhost

@@ -24,11 +24,17 @@ VAR_REF = re.compile(r"\bvars\.([a-z_][a-z0-9_]*)")
 JINJA_REF = re.compile(r"{{\s*([a-z_][a-z0-9_]*)\b")
 SOURCES = {
     "sdodsley.flashblade_eda.purefb_events",
+    "sdodsley.flashblade_eda.purefb_object_audit",
     "sdodsley.flashblade_eda.purefb_syslog",
     "ansible.eda.webhook",
     "ansible.eda.alertmanager",
     "ansible.eda.generic",
 }
+# the sources that poll an array and emit purefb_poll_error
+POLLING_SOURCES = (
+    "sdodsley.flashblade_eda.purefb_events",
+    "sdodsley.flashblade_eda.purefb_object_audit",
+)
 
 # playbook -> the extra vars every rule that runs it must pass. The entries
 # are what the playbook reads without a default; a rule may pass more.
@@ -132,6 +138,31 @@ REQUIRED_EXTRA_VARS = {
         "admin_cidrs",
         "alert_log",
     },
+    "playbooks/canary.yml": {"target_array", "access_key_id", "alert_log"},
+    "playbooks/s3_anomaly.yml": {"target_array", "access_key_id", "kind", "alert_log"},
+    "playbooks/landing.yml": {"target_array", "bucket", "key", "alert_log"},
+    "playbooks/lock_on_arrival.yml": {
+        "target_array",
+        "bucket",
+        "key",
+        "object_store",
+        "alert_log",
+    },
+    "playbooks/s3_approval.yml": {
+        "target_array",
+        "request_id",
+        "approver_key",
+        "object_store",
+        "request_dir",
+        "alert_log",
+    },
+    "playbooks/auditor_guard.yml": {
+        "target_array",
+        "mode",
+        "audit_baseline",
+        "alert_log",
+    },
+    "playbooks/posture_revert.yml": {"target_array", "buckets", "alert_log"},
 }
 
 # every polling rulebook starts with these three rules, in this order
@@ -231,12 +262,13 @@ def test_every_playbook_is_in_the_extra_vars_table(repo_root):
 
 @pytest.mark.parametrize("path", RULEBOOKS, ids=lambda p: p.name)
 def test_polling_rulesets_start_with_the_poll_error_rules(path):
-    """Every ruleset fed by purefb_events opens with the poll-error trio: an
-    array nobody can reach is reported once, escalated once, logged after."""
+    """Every ruleset fed by a polling source (purefb_events,
+    purefb_object_audit) opens with the poll-error trio: an array nobody can
+    reach is reported once, escalated once, logged after."""
     doc = yaml.safe_load(path.read_text())
     for ruleset in doc:
         polls = any(
-            "sdodsley.flashblade_eda.purefb_events" in s for s in ruleset["sources"]
+            source in s for s in ruleset["sources"] for source in POLLING_SOURCES
         )
         names = [r["name"] for r in ruleset.get("rules", [])]
         if polls:

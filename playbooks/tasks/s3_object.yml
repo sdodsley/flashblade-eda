@@ -1,0 +1,145 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# One S3 request against an array's object store: the twin of fb_rest.yml
+# for the objects the automation keeps on the array (requests, approvals,
+# receipts, legal holds). Included with:
+#   s3_action      get | put | legal_hold | head (default get)
+#   s3_bucket      bucket name
+#   s3_key         object key
+#   s3_body        put only: the body as JSON text ("{{ d | to_nice_json }}")
+#   s3_version_id  legal_hold only: the version to hold (optional)
+#   s3_identity    tail | state (default state): which of the array's two
+#                  object identities signs the request. The tail key is the
+#                  plugin's read-only one; the state key writes.
+#   s3_store       the array's object_store entry (vars): endpoint_env,
+#                  access_key_env / secret_key_env (tail; the state key
+#                  stands in when they are absent), state_access_key_env /
+#                  state_secret_key_env, log_bucket, state_bucket
+#   s3_timeout     read timeout in seconds (default 30)
+# Leaves s3_status (HTTP status, 0 when there was no response), s3_json (the
+# parsed body for get, a small dict for the other actions, {} otherwise) and
+# s3_error ("" on success) set.
+# The request runs in one python process on the controller: boto3,
+# path-style addressing, region us-east-1, the certificate check off (arrays
+# carry self-signed certificates), 10 s to connect, s3_timeout to read, two
+# attempts. The keys travel in that process's environment, read with
+# lookup('env') from the variables the store entry names, never on the
+# command line, and every task that sees them runs with no_log. Nothing here
+# fails the play: the caller reads s3_status, as it does fb_rest_status.
+- name: Refuse an S3 request without a store entry, a known action, a plain bucket name or a key
+  ansible.builtin.assert:
+    that:
+      - s3_store is mapping
+      - s3_store.endpoint_env is defined
+      - s3_store.state_access_key_env is defined
+      - s3_store.state_secret_key_env is defined
+      - s3_action | default('get') in ['get', 'put', 'legal_hold', 'head']
+      - s3_bucket is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+      - s3_key | string | length > 0
+    quiet: true
+    fail_msg: >-
+      s3_object.yml needs the array's object_store entry (endpoint_env and the state key
+      variable names), an action out of get, put, legal_hold and head, a bucket name and a key
+
+- name: Pick the environment variable names of the {{ s3_identity | default('state') }} identity
+  ansible.builtin.set_fact:
+    s3_access_key_env: >-
+      {{ (s3_store.access_key_env | default(s3_store.state_access_key_env))
+         if (s3_identity | default('state')) == 'tail' else s3_store.state_access_key_env }}
+    s3_secret_key_env: >-
+      {{ (s3_store.secret_key_env | default(s3_store.state_secret_key_env))
+         if (s3_identity | default('state')) == 'tail' else s3_store.state_secret_key_env }}
+
+# The helper prints one JSON line {status, body, error} whatever happens, so
+# a missing boto3, a missing variable or a refused request all arrive as an
+# outcome, never as a traceback carrying the environment.
+- name: "{{ s3_action | default('get') }} s3://{{ s3_bucket }}/{{ s3_key }}"
+  ansible.builtin.command:
+    cmd: "{{ ansible_playbook_python }} -"
+    stdin: |
+      import base64, json, os
+      out = {"status": 0, "body": {}, "error": ""}
+      try:
+          import urllib3
+          import boto3
+          from botocore.config import Config
+          from botocore.exceptions import BotoCoreError, ClientError
+      except ImportError:
+          out["error"] = "boto3 is not installed on the controller: pip install boto3"
+          print(json.dumps(out))
+          raise SystemExit(0)
+      urllib3.disable_warnings()
+      env = os.environ
+      if not (env.get("S3_ENDPOINT") and env.get("S3_ACCESS_KEY") and env.get("S3_SECRET_KEY")):
+          out["error"] = "S3 endpoint or access key missing from the environment (%s, %s)" % (
+              env.get("S3_ENDPOINT_ENV", ""), env.get("S3_ACCESS_KEY_ENV", ""))
+          print(json.dumps(out))
+          raise SystemExit(0)
+      s3 = boto3.client(
+          "s3", endpoint_url=env["S3_ENDPOINT"], aws_access_key_id=env["S3_ACCESS_KEY"],
+          aws_secret_access_key=env["S3_SECRET_KEY"], verify=False, region_name="us-east-1",
+          config=Config(s3={"addressing_style": "path"}, connect_timeout=10,
+                        read_timeout=int(env.get("S3_TIMEOUT") or 30), retries={"max_attempts": 2}))
+      action, bucket, key = env["S3_ACTION"], env["S3_BUCKET"], env["S3_KEY"]
+      try:
+          if action == "get":
+              r = s3.get_object(Bucket=bucket, Key=key)
+              text = r["Body"].read().decode("utf-8", "replace")
+              try:
+                  out["body"] = json.loads(text)
+              except ValueError:
+                  out["error"] = "object body is not JSON"
+          elif action == "put":
+              # the body travels base64-encoded: a JSON text handed through Ansible
+              # templating comes out as a Python dict repr otherwise
+              r = s3.put_object(Bucket=bucket, Key=key, Body=base64.b64decode(env.get("S3_BODY_B64", "")),
+                                ContentType="application/json")
+              out["body"] = {"version_id": r.get("VersionId", ""), "etag": r.get("ETag", "")}
+          elif action == "legal_hold":
+              extra = {"VersionId": env["S3_VERSION_ID"]} if env.get("S3_VERSION_ID") else {}
+              r = s3.put_object_legal_hold(Bucket=bucket, Key=key, LegalHold={"Status": "ON"}, **extra)
+              out["body"] = {"legal_hold": "ON", "version_id": env.get("S3_VERSION_ID", "")}
+          else:
+              r = s3.head_object(Bucket=bucket, Key=key)
+              out["body"] = {"content_length": r.get("ContentLength", 0), "version_id": r.get("VersionId", ""),
+                             "last_modified": str(r.get("LastModified", ""))}
+          out["status"] = r["ResponseMetadata"]["HTTPStatusCode"]
+      except ClientError as e:
+          out["status"] = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
+          err = e.response.get("Error", {})
+          out["error"] = "%s: %s" % (err.get("Code", "ClientError"), err.get("Message", str(e)))
+      except (BotoCoreError, OSError, ValueError) as e:
+          out["error"] = str(e)[:240]
+      print(json.dumps(out))
+  environment:
+    S3_ENDPOINT: "{{ lookup('env', s3_store.endpoint_env) }}"
+    S3_ACCESS_KEY: "{{ lookup('env', s3_access_key_env) }}"
+    S3_SECRET_KEY: "{{ lookup('env', s3_secret_key_env) }}"
+    S3_ENDPOINT_ENV: "{{ s3_store.endpoint_env }}"
+    S3_ACCESS_KEY_ENV: "{{ s3_access_key_env }}"
+    S3_ACTION: "{{ s3_action | default('get') }}"
+    S3_BUCKET: "{{ s3_bucket }}"
+    S3_KEY: "{{ s3_key }}"
+    S3_BODY_B64: "{{ ((s3_body | default('')) if (s3_body | default('')) is string else (s3_body | to_json)) | b64encode }}"
+    S3_VERSION_ID: "{{ s3_version_id | default('') }}"
+    S3_TIMEOUT: "{{ s3_timeout | default(30) }}"
+  register: s3_cmd
+  changed_when: (s3_action | default('get')) in ['put', 'legal_hold']
+  failed_when: false
+  no_log: true
+  delegate_to: localhost
+
+- name: Keep the outcome (status, body and error message; never a key)
+  ansible.builtin.set_fact:
+    s3_status: "{{ s3_result.status | default(0) }}"
+    s3_json: "{{ s3_result.body | default({}) }}"
+    s3_error: "{{ s3_result.error | default('') | string | truncate(240) }}"
+  vars:
+    s3_result: >-
+      {{ (s3_cmd.stdout | from_json)
+         if (s3_cmd.rc | default(1)) == 0 and (s3_cmd.stdout | default('') | length) > 0
+         else {'status': 0, 'body': {},
+               'error': 'S3 helper exited ' ~ (s3_cmd.rc | default('?')) ~ ': '
+                        ~ (s3_cmd.stderr_lines | default([]) | last | default('no output'))} }}

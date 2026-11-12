@@ -131,6 +131,8 @@
             pending_eradication_snapshots: "{{ event.purefb_capacity.pending_eradication_snapshots }}"
             candidate_targets: "{{ event.purefb_capacity.others }}"
             request_dir: "{{ request_dir }}"
+            s3_requests_enabled: "{{ s3_requests_enabled }}"
+            object_store: "{{ object_store }}"
             alert_log: "{{ alert_log }}"
 
     # Same trigger and throttle as the rule above; the whole event travels so
@@ -187,6 +189,8 @@
             fs_grow_max_bytes: "{{ fs_grow_max_bytes }}"
             fs_grow_exclude: "{{ fs_grow_exclude }}"
             request_dir: "{{ request_dir }}"
+            s3_requests_enabled: "{{ s3_requests_enabled }}"
+            object_store: "{{ object_store }}"
             fb_api_version: "{{ fb_api_version }}"
             alert_log: "{{ alert_log }}"
 

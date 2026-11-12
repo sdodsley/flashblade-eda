@@ -41,6 +41,13 @@ ARTIFACT_KEYS = {
     "qos_cap.yml": {"object_kind", "object_name", "policy", "capped"},
     "qos_lift.yml": {"object_kind", "object_name", "policy", "lifted"},
     "maintenance_window.yml": {"array", "action", "status"},
+    "canary.yml": {"access_key_id", "user", "disabled"},
+    "s3_anomaly.yml": {"access_key_id", "anomaly_kind", "disabled"},
+    "landing.yml": {"dataset", "key", "command_ran", "rc"},
+    "lock_on_arrival.yml": {"bucket", "key", "held"},
+    "s3_approval.yml": {"request_id", "action", "outcome"},
+    "auditor_guard.yml": {"mode", "changed_objects", "outcome"},
+    "posture_revert.yml": {"buckets", "reverted"},
 }
 
 # playbook -> the array whose credential it must have been given; every
@@ -61,19 +68,25 @@ FB_REST = "{{ playbook_dir }}/tasks/fb_rest.yml"
 RESOLVES = {
     "alert_runbook.yml": "target_array",
     "apply_baseline.yml": "inventory_hostname",
+    "auditor_guard.yml": "inventory_hostname",
+    "canary.yml": "inventory_hostname",
     "capacity_reclaim.yml": "request.array",
     "capacity_request.yml": "at_risk_array",
     "flag_alert.yml": "inventory_hostname",
     "grow_fs.yml": "inventory_hostname",
     "identify_led.yml": "inventory_hostname",
     "maintenance_window.yml": "inventory_hostname",
+    "posture_revert.yml": "inventory_hostname",
     "qos_cap.yml": "inventory_hostname",
     "qos_lift.yml": "inventory_hostname",
     "reconcile.yml": "inventory_hostname",
     "remediate_dns.yml": "inventory_hostname",
     "remediate_ntp.yml": "inventory_hostname",
+    "s3_anomaly.yml": "inventory_hostname",
+    "s3_approval.yml": "inventory_hostname",
     "user_quota.yml": "inventory_hostname",
 }
+S3_OBJECT = "{{ playbook_dir }}/tasks/s3_object.yml"
 
 SET_STATS = "ansible.builtin.set_stats"
 DATA_KEY = re.compile(r"'([a-z][a-z0-9_]*)':")
@@ -262,8 +275,10 @@ def test_array_facing_playbooks_resolve_the_array_before_touching_the_token(
     """Every playbook that uses api_token first includes resolve_array.yml
     with resolve_array_name set to the array it acts on, and the include
     comes before any task that references the token or the REST helper;
-    playbooks that never touch an array (notify, orchestrator_post,
-    client_diagnose, session_check) include nothing."""
+    playbooks that never touch an array over REST (notify, orchestrator_post,
+    client_diagnose, session_check, landing, lock_on_arrival) never resolve
+    one and never name the token or the REST helper (the S3 helper, which
+    takes its keys from the object_store entry, is allowed)."""
     playbooks = repo_root / "playbooks"
     for path in sorted(playbooks.glob("*.yml")):
         doc = _load(path)
@@ -345,6 +360,38 @@ def test_rest_helper_never_shows_the_token_and_always_logs_out(repo_root):
     assert "token" not in last["ansible.builtin.assert"]["fail_msg"].lower()
     text = (repo_root / "playbooks" / "tasks" / "fb_rest.yml").read_text()
     assert "fb_rest_api_version | default(fb_api_version | default('2.16'))" in text
+
+
+def test_s3_helper_never_shows_a_key_and_never_fails(repo_root):
+    """tasks/s3_object.yml runs one python helper with the keys in its
+    environment (read from the variables the store entry names, never on
+    the command line), keeps only status, body and error, and leaves the
+    decision to the caller as fb_rest.yml does."""
+    tasks = _load(repo_root / "playbooks" / "tasks" / "s3_object.yml")
+    commands = [t for t in tasks if "ansible.builtin.command" in t]
+    assert len(commands) == 1
+    helper = commands[0]
+    assert helper["ansible.builtin.command"]["cmd"] == "{{ ansible_playbook_python }} -"
+    assert "stdin" in helper["ansible.builtin.command"]
+    assert helper.get("no_log") is True
+    assert helper["failed_when"] is False
+    env = helper["environment"]
+    assert env["S3_ACCESS_KEY"] == "{{ lookup('env', s3_access_key_env) }}"
+    assert env["S3_SECRET_KEY"] == "{{ lookup('env', s3_secret_key_env) }}"
+    assert env["S3_ENDPOINT"] == "{{ lookup('env', s3_store.endpoint_env) }}"
+    for arg in helper["ansible.builtin.command"].values():
+        assert "lookup('env'" not in arg, "a key on the command line or in the code"
+    keep = next(t for t in tasks if t["name"].startswith("Keep the outcome"))
+    assert set(keep["ansible.builtin.set_fact"]) == {"s3_status", "s3_json", "s3_error"}
+    assert not any("ansible.builtin.assert" in t for t in tasks[1:]), "fails late"
+    # every caller passes the store entry and never a key
+    for path in sorted((repo_root / "playbooks").glob("*.yml")):
+        for task in _ordered_tasks(_load(path)):
+            if _include_file(task) == S3_OBJECT:
+                passed = task["vars"]
+                assert "s3_store" in passed, f"{path.name}: no store entry"
+                assert passed.get("s3_identity") in ("tail", "state"), path.name
+                assert not {"s3_access_key", "s3_secret_key"} & set(passed), path.name
 
 
 def test_every_alert_log_record_carries_the_common_keys(repo_root):

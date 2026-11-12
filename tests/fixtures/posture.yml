@@ -1,0 +1,37 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Recorded-shape posture event for replay through ansible.eda.generic, as
+# purefb_events (signal posture) would emit it: one public bucket, one
+# export policy rule granting * read-write, one access key older than the
+# limit, one certificate close to expiry, one bucket without audit coverage
+# and one SMB share policy open to Everyone, all on one array. REPLAY_ARRAY
+# is substituted with sed when the test builds its vars file. With
+# posture_auto_revert true posture_revert.yml runs against the bucket named
+# here, so it must exist on the array (or be renamed with a second sed).
+fixture_events:
+  - purefb_posture:
+      array: "REPLAY_ARRAY"
+      purity_version: 4.6.4
+      maintenance_active: false
+      public_buckets:
+        - {bucket: eda-public-demo, account: eda, public_status: bucket-and-objects}
+      public_count: 1
+      uncovered_buckets:
+        - eda-public-demo
+      uncovered_count: 1
+      world_open_exports:
+        - {policy: scratch-export, rule: scratch-export.1, client: "*", permission: rw, access: root-squash}
+      world_open_export_count: 1
+      old_keys:
+        - {key: PSFBSAZRTESTKEY0003, user: eda/eda-legacy, age_days: 212, enabled: true}
+      old_key_count: 1
+      disabled_key_count: 0
+      expiring_certs:
+        - {name: management, days_left: 12}
+      expiring_cert_count: 1
+      smb_everyone_full_control:
+        - open-share-policy
+      smb_everyone_full_control_count: 1
+      issue_count: 6

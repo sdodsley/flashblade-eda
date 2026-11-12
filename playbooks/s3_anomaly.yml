@@ -1,0 +1,111 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# An access-denied storm or an error storm in one audit log object. Called
+# by the object audit rulebook with target_array, access_key_id (the key
+# with most records in the window), kind (denied_storm | error_storm),
+# window, log_object, the rollup counts (record_count, error_count,
+# error_pct, denied_count, top_access_key_count, top_source_ip,
+# by_error_code), anomaly_auto_disable_key, automation_keys, fb_api_version
+# and alert_log. A notify-style record goes out at critical; with
+# anomaly_auto_disable_key true the top key is also disabled (PATCH
+# /object-store-access-keys {"enabled": false} through tasks/fb_rest.yml),
+# unless it is one of the automation's own keys. A storm is one log object,
+# that is one rotation window on one blade authority, so the counts are a
+# lower bound for the window.
+- name: Storm in the object audit log
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  vars:
+    counts: >-
+      {{ {'record_count': record_count | default(0) | int, 'error_count': error_count | default(0) | int,
+          'error_pct': error_pct | default(0) | float, 'denied_count': denied_count | default(0) | int,
+          'top_access_key_count': top_access_key_count | default(0) | int,
+          'top_source_ip': top_source_ip | default(''), 'by_error_code': by_error_code | default({})} }}
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    - name: Refuse an unknown storm kind or a key id that is not a plain key name
+      ansible.builtin.assert:
+        that:
+          - kind in ['denied_storm', 'error_storm']
+          - access_key_id | string is match('^[A-Za-z0-9]*$')
+        fail_msg: >-
+          kind {{ kind | string | truncate(20) }} must be denied_storm or error_storm and
+          access_key_id {{ access_key_id | string | truncate(60) }} an access key id
+
+    - name: Decide whether the top key is to be disabled
+      ansible.builtin.set_fact:
+        disable_wanted: >-
+          {{ anomaly_auto_disable_key | default(false) | bool
+             and (access_key_id | string | length) > 0
+             and access_key_id not in (automation_keys | default([])) }}
+
+    - name: Disable the top key
+      when: disable_wanted | bool
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: PATCH
+        fb_rest_path: "object-store-access-keys?names={{ access_key_id }}"
+        fb_rest_body: "{{ {'enabled': false} }}"
+        fb_rest_ignore_errors: true
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        disabled: "{{ disable_wanted | bool and (fb_rest_status | default(0) | int) == 200 }}"
+        outcome: >-
+          {{ ('key ' ~ access_key_id ~ ' disabled') if disable_wanted | bool and (fb_rest_status | default(0) | int) == 200
+             else ('disable refused by the array: ' ~ (fb_rest_error | default('') | trim)) if disable_wanted | bool
+             else 'notified: anomaly_auto_disable_key is off' if not (anomaly_auto_disable_key | default(false) | bool)
+             else 'notified: the top key is one of the automation keys' if (access_key_id | string | length) > 0
+             else 'notified: no top key in the window' }}
+
+    - name: Record the storm
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 's3_anomaly', 'severity': 'critical',
+              'array': inventory_hostname, 'anomaly_kind': kind,
+              'subject': kind | replace('_', ' ') ~ ' on ' ~ inventory_hostname ~ ': ' ~ counts.denied_count ~ ' denied, '
+                         ~ counts.error_count ~ ' errors in ' ~ counts.record_count ~ ' records',
+              'access_key_id': access_key_id, 'top_access_key_count': counts.top_access_key_count,
+              'top_source_ip': counts.top_source_ip, 'window': window | default(''), 'log_object': log_object | default(''),
+              'record_count': counts.record_count, 'error_count': counts.error_count, 'error_pct': counts.error_pct,
+              'denied_count': counts.denied_count, 'by_error_code': counts.by_error_code,
+              'disabled': disabled | bool, 'outcome': outcome | trim, 'changed': disabled | bool} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the outcome
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} {{ kind }} in {{ log_object | default('') }}: {{ counts.denied_count }} denied,
+          {{ counts.error_count }} errors in {{ counts.record_count }} records; top key {{ access_key_id }}
+          ({{ counts.top_access_key_count }}) from {{ counts.top_source_ip }} :: {{ outcome | trim }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'access_key_id': access_key_id, 'anomaly_kind': kind,
+              'disabled': disabled | bool, 'outcome': outcome | trim, 'changed': disabled | bool} }}
+      run_once: true
+      delegate_to: localhost

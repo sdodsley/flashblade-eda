@@ -1,0 +1,111 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Block public access on the buckets the posture poll found public. Called
+# by the posture rulebook (posture_auto_revert true) with target_array,
+# buckets (the event's public_buckets list: {bucket, account, public_status}
+# entries, or plain names) and alert_log. everpure.flashblade.purefb_bucket
+# with block_public_access and block_new_public_policies sets the bucket's
+# public access configuration and nothing else about it; a bucket the module
+# refuses (destroyed meanwhile, an account the array does not know) is
+# recorded, not fatal. The bucket's own policy is left in place: blocking
+# public access is the reversible brake, deleting a policy is not.
+- name: Block public access on public buckets
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    - name: Take the bucket names and accounts out of the list
+      ansible.builtin.set_fact:
+        public_list: >-
+          {%- set out = [] -%}
+          {%- for b in (buckets | default([])) -%}
+          {%- if b is mapping -%}
+          {%- set _ = out.append({'bucket': b.bucket | default('') | string, 'account': b.account | default('') | string}) -%}
+          {%- else -%}
+          {%- set _ = out.append({'bucket': b | string, 'account': ''}) -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+
+    # names become module arguments; the account is what the module keys the
+    # bucket by
+    - name: Refuse a bucket name that is not plain
+      ansible.builtin.assert:
+        that:
+          - public_list | length > 0
+          - public_list | map(attribute='bucket') | reject('match', '^[A-Za-z0-9][A-Za-z0-9._-]*$') | list | length == 0
+        fail_msg: "buckets {{ buckets | default([]) | string | truncate(120) }} must be a non-empty list of plain bucket names"
+
+    - name: Block public access on each bucket
+      everpure.flashblade.purefb_bucket:
+        fb_url: "{{ fb_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ item.bucket }}"
+        account: "{{ item.account }}"
+        block_public_access: true
+        block_new_public_policies: true
+        state: present
+      loop: "{{ public_list }}"
+      loop_control:
+        label: "{{ item.bucket }}"
+      register: revert_results
+      ignore_errors: true
+
+    - name: Note what was reverted and what the array refused
+      ansible.builtin.set_fact:
+        reverted: >-
+          {{ revert_results.results | default([]) | selectattr('changed', 'defined') | selectattr('changed')
+             | map(attribute='item') | map(attribute='bucket') | list }}
+        revert_errors: >-
+          {%- set out = [] -%}
+          {%- for r in revert_results.results | default([]) -%}
+          {%- if r.failed | default(false) -%}{%- set _ = out.append(r.item.bucket ~ ': ' ~ (r.msg | default('failed') | string | truncate(160))) -%}{%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Record the revert
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'posture_revert', 'severity': 'warning',
+              'array': inventory_hostname, 'buckets': public_list | map(attribute='bucket') | list,
+              'reverted': reverted, 'errors': revert_errors,
+              'outcome': ('public access blocked on ' ~ (reverted | join(', '))) if (reverted | length) > 0 else 'nothing changed',
+              'changed': (reverted | length) > 0} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the revert
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: public buckets {{ public_list | map(attribute='bucket') | list }} ->
+          blocked {{ reverted }}{{ ('; refused: ' ~ (revert_errors | join('; '))) if (revert_errors | length) > 0 else '' }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'buckets': public_list | map(attribute='bucket') | list,
+              'reverted': reverted, 'changed': (reverted | length) > 0} }}
+      run_once: true
+      delegate_to: localhost

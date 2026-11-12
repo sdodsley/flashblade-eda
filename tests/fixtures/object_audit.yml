@@ -1,0 +1,162 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Recorded-shape object audit events for replay through ansible.eda.generic,
+# as purefb_object_audit would emit them from the lab's audit log objects
+# (one rotation window 20:05:00 to 20:10:00 UTC, authority objects
+# 200500.A<n>.1.log): a canary read by a key that is not on the allow-list,
+# a landing marker, an evidence object, a rollup with a denied storm, and a
+# health event with the log bucket at 83 % of its quota. REPLAY_ARRAY is
+# substituted with sed when the test builds its vars file; it must be an
+# inventory host with an object_store entry for the legal hold to be
+# placed. Key ids are made up; the bucket, key, time and version shapes are
+# the array's.
+fixture_events:
+  - purefb_s3_event:
+      array: "REPLAY_ARRAY"
+      bucket: eda-data
+      key: canary/do-not-read.txt
+      event_name: GetObject
+      event_time: "2026-11-12T20:08:50.692Z"
+      event_time_ms: 1794514130692
+      event_id: 39406496739491843
+      read_only: true
+      access_key_id: PSFBSAZRTESTKEY0001
+      user: eda-app
+      account: eda
+      source_ip: 192.0.2.12
+      user_agent: "Boto3/1.44.1 md/Botocore#1.44.1 ua/2.1 os/linux#6.18.54.1-microsoft-standard-WSL2 lang/python#3.10.12"
+      error_code: ""
+      error_message: ""
+      ok: true
+      version_id: VERSION0001
+      log_object: 00000000-0000-4000-8000-000000000001/audit_/2026/11/12/200500.A198.1.log
+      by_automation: false
+      canary: true
+      canary_allowed: false
+      landing: false
+      dataset: ""
+      evidence: false
+      honey: false
+      approval: false
+      request: false
+      request_id: ""
+      denied: false
+      delete: false
+  - purefb_s3_event:
+      array: "REPLAY_ARRAY"
+      bucket: eda-data
+      key: landing/ds1/_SUCCESS
+      event_name: PutObject
+      event_time: "2026-11-12T20:08:50.953Z"
+      event_time_ms: 1794514130953
+      event_id: 43347146413441026
+      read_only: false
+      access_key_id: PSFBSAZRTESTKEY0001
+      user: eda-app
+      account: eda
+      source_ip: 192.0.2.12
+      user_agent: "Boto3/1.44.1 md/Botocore#1.44.1 ua/2.1 os/linux#6.18.54.1-microsoft-standard-WSL2 lang/python#3.10.12"
+      error_code: ""
+      error_message: ""
+      ok: true
+      version_id: VERSION0002
+      log_object: 00000000-0000-4000-8000-000000000001/audit_/2026/11/12/200500.A205.1.log
+      by_automation: false
+      canary: false
+      canary_allowed: false
+      landing: true
+      dataset: ds1
+      evidence: false
+      honey: false
+      approval: false
+      request: false
+      request_id: ""
+      denied: false
+      delete: false
+  - purefb_s3_event:
+      array: "REPLAY_ARRAY"
+      bucket: eda-data
+      key: evidence/case-42/img-20261112T150849.bin
+      event_name: PutObject
+      event_time: "2026-11-12T20:08:51.237Z"
+      event_time_ms: 1794514131237
+      event_id: 32088147345014786
+      read_only: false
+      access_key_id: PSFBSAZRTESTKEY0001
+      user: eda-app
+      account: eda
+      source_ip: 192.0.2.12
+      user_agent: "Boto3/1.44.1 md/Botocore#1.44.1 ua/2.1 os/linux#6.18.54.1-microsoft-standard-WSL2 lang/python#3.10.12"
+      error_code: ""
+      error_message: ""
+      ok: true
+      version_id: VERSION0003
+      log_object: 00000000-0000-4000-8000-000000000001/audit_/2026/11/12/200500.A185.1.log
+      by_automation: false
+      canary: false
+      canary_allowed: false
+      landing: false
+      dataset: ""
+      evidence: true
+      honey: false
+      approval: false
+      request: false
+      request_id: ""
+      denied: false
+      delete: false
+  - purefb_s3_rollup:
+      array: "REPLAY_ARRAY"
+      log_object: 00000000-0000-4000-8000-000000000001/audit_/2026/11/12/200500.A231.1.log
+      window: "2026-11-12T20:05:00Z"
+      record_count: 14
+      first_time: "2026-11-12T20:08:50.346Z"
+      last_time: "2026-11-12T20:08:53.213Z"
+      buckets:
+        - eda-data
+      by_event_name: {GetObject: 7, ListObjectsV2: 6, PutObject: 1}
+      by_access_key: {PSFBSAZRTESTKEY0001: 14}
+      by_source_ip: {192.0.2.12: 14}
+      by_error_code: {NoSuchKey: 6, SignatureDoesNotMatch: 5}
+      error_count: 11
+      error_pct: 78.6
+      denied_count: 5
+      delete_count: 0
+      top_access_key: PSFBSAZRTESTKEY0001
+      top_access_key_count: 14
+      top_source_ip: 192.0.2.12
+      error_storm: true
+      denied_storm: true
+      mass_delete: false
+      canary_hits: 0
+      honey_hits: 0
+  - purefb_audit_health:
+      array: "REPLAY_ARRAY"
+      log_bucket: eda-log
+      log_key_prefix: 00000000-0000-4000-8000-000000000001/audit_/
+      objects_this_poll: 12
+      records_this_poll: 14
+      newest_log_object: 00000000-0000-4000-8000-000000000001/audit_/2026/11/12/200500.A248.1.log
+      newest_log_age_s: 61
+      rotation_ms: 300000
+      stale: false
+      log_bucket_used_bytes: 895485952
+      log_bucket_quota_bytes: 1073741824
+      log_bucket_used_pct: 83.4
+      log_bucket_quota_known: true
+      log_bucket_object_count: 2213
+      policies:
+        - name: eda-audit
+          enabled: true
+          log_targets: [eda-audit]
+          members: [eda-data, eda-log]
+      policies_enabled: 1
+      policies_disabled: 0
+      uncovered_buckets: []
+      uncovered_count: 0
+      members_without_filters: []
+      members_without_filters_count: 0
+      rest_available: true
+      cursor_persisted: true
+      healthy: false
