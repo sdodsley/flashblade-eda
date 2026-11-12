@@ -1,0 +1,40 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python requirements
+        run: python -m pip install -r requirements.txt
+
+      - name: Install collections
+        run: ansible-galaxy collection install -r requirements.yml
+
+      - name: Lint (black, pyflakes, yamllint)
+        run: make lint
+
+      # the repository as the collection sdodsley.flashblade_eda, built into
+      # build/ and installed under ./collections; after the lint so that the
+      # installed collections are not linted
+      - name: Build and install the collection
+        run: make collection
+
+      - name: Unit tests (plugins, rulebooks, vars)
+        run: make test
+
+      - name: Playbook syntax check
+        run: make syntax
