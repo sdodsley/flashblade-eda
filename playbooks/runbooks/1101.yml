@@ -29,7 +29,7 @@
 
 - name: Keep what the array said
   ansible.builtin.set_fact:
-    quota_fs_item: "{{ (fb_rest_json.items | default([{}]))[0] | default({}) }}"
+    quota_fs_item: "{{ (fb_rest_json['items'] | default([{}]))[0] | default({}) }}"
     quota_fs_error: "{{ fb_rest_error | default('file system name not recognised: ' ~ quota_fs) }}"
 
 - name: Say what the runbook found

@@ -64,7 +64,7 @@
 
     - name: Keep what the array said
       ansible.builtin.set_fact:
-        before: "{{ (fb_rest_json.items | default([{}]))[0] | default({}) }}"
+        before: "{{ (fb_rest_json['items'] | default([{}]))[0] | default({}) }}"
         read_error: "{{ fb_rest_error | trim }}"
 
     - name: Refuse an object the array does not know
@@ -99,7 +99,7 @@
 
         - name: Note whether it exists
           ansible.builtin.set_fact:
-            policy_exists: "{{ fb_rest_status | int == 200 and (fb_rest_json.items | default([]) | length) > 0 }}"
+            policy_exists: "{{ fb_rest_status | int == 200 and (fb_rest_json['items'] | default([]) | length) > 0 }}"
 
         - name: Create the cap policy
           when: not policy_exists | bool

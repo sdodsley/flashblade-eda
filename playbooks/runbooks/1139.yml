@@ -22,9 +22,9 @@
 
 - name: Keep the servers and the ones carrying data-audit
   ansible.builtin.set_fact:
-    syslog_servers: "{{ fb_rest_json.items | default([]) }}"
+    syslog_servers: "{{ fb_rest_json['items'] | default([]) }}"
     data_audit_servers: >-
-      {{ fb_rest_json.items | default([]) | selectattr('services', 'defined')
+      {{ fb_rest_json['items'] | default([]) | selectattr('services', 'defined')
          | selectattr('services', 'contains', 'data-audit') | map(attribute='name') | list }}
 
 - name: Test the syslog servers from the array
@@ -43,5 +43,5 @@
       alert 1139 on {{ target_array }}: syslog servers
       {{ syslog_servers | map(attribute='uri', default='?') | list }},
       data-audit on {{ data_audit_servers }};
-      test: {{ fb_rest_json.items | default([]) | map(attribute='success', default='?') | list }}
+      test: {{ fb_rest_json['items'] | default([]) | map(attribute='success', default='?') | list }}
       {{ fb_rest_error | default('') }}

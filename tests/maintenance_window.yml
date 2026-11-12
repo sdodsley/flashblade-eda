@@ -31,4 +31,4 @@
 
     - name: Show the window
       ansible.builtin.debug:
-        msg: "{{ inventory_hostname }}: {{ window_state | default('present') }} -> {{ fb_rest_status }} {{ fb_rest_json.items | default([]) }}"
+        msg: "{{ inventory_hostname }}: {{ window_state | default('present') }} -> {{ fb_rest_status }} {{ fb_rest_json['items'] | default([]) }}"

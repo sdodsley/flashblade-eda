@@ -88,7 +88,7 @@
     # inherits the file system default and has no item here.
     - name: Keep the quota
       ansible.builtin.set_fact:
-        quota_item: "{{ (fb_rest_json.items | default([{}]))[0] | default({}) }}"
+        quota_item: "{{ (fb_rest_json['items'] | default([{}]))[0] | default({}) }}"
         quota_error: "{{ fb_rest_error | trim }}"
 
     - name: Read the usage
@@ -104,7 +104,7 @@
 
     - name: Keep the usage and the effective quota
       ansible.builtin.set_fact:
-        usage_item: "{{ (fb_rest_json.items | default([{}]))[0] | default({}) }}"
+        usage_item: "{{ (fb_rest_json['items'] | default([{}]))[0] | default({}) }}"
         usage_error: "{{ fb_rest_error | trim }}"
 
     - name: Settle the figures

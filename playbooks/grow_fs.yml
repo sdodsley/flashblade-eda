@@ -62,7 +62,7 @@
 
     - name: Keep what the array said
       ansible.builtin.set_fact:
-        before: "{{ (fb_rest_json.items | default([{}]))[0] | default({}) }}"
+        before: "{{ (fb_rest_json['items'] | default([{}]))[0] | default({}) }}"
         read_error: "{{ fb_rest_error | trim }}"
 
     - name: Refuse a file system that is missing or destroyed
