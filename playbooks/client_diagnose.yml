@@ -1,0 +1,109 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Diagnose a noisy NFS or SMB client on the client itself. The array names
+# a client by IP (/arrays/clients/performance); the inventory host whose
+# ansible_host is that address, or whose name is the address, is the
+# machine to look at. Called by the client rulebook with target_array (the
+# array that saw it), client, the share and latency figures and alert_log,
+# only when client_actions_enabled is true (the rulebook notifies instead
+# when it is false).
+# Three plays: find the host and put it in a transient group; run read-only
+# commands there (mounts, NFS and SMB connections, the busiest processes;
+# each one is allowed to be missing); write one record on localhost with
+# whatever came back. A client that is not in the inventory is recorded as
+# such and nothing runs anywhere. Nothing here touches the array.
+- name: Find the inventory host behind the client address
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Refuse a client that is not an address
+      ansible.builtin.assert:
+        that:
+          - client | string is match('^[0-9A-Fa-f.:]+$')
+        fail_msg: "client {{ client | string | truncate(60) }} is not an IPv4 or IPv6 address"
+
+    - name: Match the address against ansible_host and the host names
+      ansible.builtin.set_fact:
+        client_host: >-
+          {{ ((hostvars | dict2items | selectattr('value.ansible_host', 'defined')
+               | selectattr('value.ansible_host', 'equalto', client) | map(attribute='key') | list)
+              + ([client] if client in hostvars else [])) | first | default('') }}
+        client_output: {}
+        client_rcs: {}
+
+    - name: Put the host in the group the next play runs on
+      when: client_host | length > 0
+      ansible.builtin.add_host:
+        name: "{{ client_host }}"
+        groups: eda_client
+      changed_when: false
+
+- name: Look at the client
+  hosts: eda_client
+  gather_facts: false
+  tasks:
+    # Read-only, and each allowed to be absent: a client without nfsstat or
+    # ss still yields what it has.
+    - name: Run the diagnostic commands
+      ansible.builtin.command:
+        cmd: "{{ item }}"
+      loop:
+        - uptime
+        - mount -t nfs,nfs4,cifs
+        - nfsstat -c
+        - ss -tn state established ( dport = :2049 or dport = :445 )
+        - ps -eo pid,user,pcpu,pmem,comm --sort=-pcpu
+      register: diag
+      changed_when: false
+      failed_when: false
+
+    # Each command's output is cut to 1500 characters so the record stays a
+    # line; the return code says whether the command exists on the host.
+    - name: Hand the results to localhost
+      ansible.builtin.set_fact:
+        client_output: >-
+          {{ dict(diag.results | map(attribute='item') | list
+                  | zip(diag.results | map(attribute='stdout', default='') | map('truncate', 1500, true, '...', 0) | list)) }}
+        client_rcs: "{{ dict(diag.results | map(attribute='item') | list | zip(diag.results | map(attribute='rc', default=-1) | list)) }}"
+      delegate_to: localhost
+      delegate_facts: true
+
+- name: Record the diagnosis
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Record the client
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'client', 'severity': 'warning',
+              'array': target_array | default(''), 'client': client, 'client_host': client_host,
+              'ops_share_pct': ops_share_pct | default(''), 'high_share_polls': high_share_polls | default(''),
+              'reads_per_sec': reads_per_sec | default(''), 'writes_per_sec': writes_per_sec | default(''),
+              'usec_per_write_op': usec_per_write_op | default(''),
+              'array_usec_per_write_op': array_usec_per_write_op | default(''),
+              'array_write_latency_ratio': array_write_latency_ratio | default(''),
+              'outcome': ('diagnosed on ' ~ client_host) if client_host else 'no inventory host has this address',
+              'commands': client_rcs, 'output': client_output} | to_json }}
+
+    - name: Show the diagnosis
+      ansible.builtin.debug:
+        msg: >-
+          client {{ client }} holds {{ ops_share_pct | default('?') }}% of the ops on {{ target_array | default('?') }}
+          for {{ high_share_polls | default('?') }} polls; array write {{ array_write_latency_ratio | default('?') }}x last week's;
+          {{ ('diagnosed on ' ~ client_host ~ ': ' ~ (client_rcs | length) ~ ' commands') if client_host else 'no inventory host has this address' }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': target_array | default(''), 'client': client, 'client_host': client_host,
+              'commands_ran': client_rcs | length} }}
+      run_once: true
+      delegate_to: localhost

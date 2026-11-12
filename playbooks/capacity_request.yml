@@ -1,0 +1,158 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Capacity approval request. Deliberately frees nothing: it writes a request
+# file (request_dir/<id>.json) describing the array, the days-to-full
+# estimate, the fastest-growing file systems and buckets, what is pending
+# eradication and the other arrays with headroom, and records it in the
+# alert log. The names of the destroyed file systems, buckets and file
+# system snapshots are read here (three read-only SDK calls) and stored as
+# `candidates`: an approval may later eradicate those and nothing destroyed
+# since. An approver answers through the capacity approvals webhook (see the
+# capacity rulebook) or, in Ansible Automation Platform, through the
+# workflow approval node.
+- name: Raise a capacity approval request
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Refuse an array name that is not a plain file name
+      ansible.builtin.assert:
+        that:
+          - at_risk_array is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+        fail_msg: "array name {{ at_risk_array | string | truncate(80) }} is not a valid array name"
+
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      when: at_risk_array in hostvars
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ at_risk_array }}"
+
+    # On Ansible Automation Platform the FlashBlade API credential injects
+    # credential_array, the array it belongs to; fb_url and api_token then
+    # point at that array whatever host name is used, so a request for any
+    # other array is refused instead of listing the wrong array's candidates.
+    - name: Refuse to run with another array's credential attached
+      ansible.builtin.assert:
+        that:
+          - credential_array is not defined or credential_array == at_risk_array
+        fail_msg: "the attached credential is for {{ credential_array | default('') }}, not {{ at_risk_array }}"
+
+    - name: Pin the request id and time
+      ansible.builtin.set_fact:
+        request_time: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
+        request_id: "{{ at_risk_array }}-{{ now(utc=true).strftime('%Y%m%d%H%M%S') }}"
+
+    - name: Make sure the request directory exists
+      ansible.builtin.file:
+        path: "{{ request_dir }}"
+        state: directory
+        mode: "0700"
+
+    # An array that is not in the inventory, or a failed read, must not lose
+    # the request: the candidate list is then empty (an approval eradicates
+    # nothing) and the error is recorded. Bucket names are unique on an
+    # array, so the account is carried for the reader, not the key.
+    - name: List what is pending eradication on the array (the reclaim candidates)
+      when: at_risk_array in hostvars
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: |
+          import json, os, urllib3
+          urllib3.disable_warnings()
+          from pypureclient import flashblade
+          c = flashblade.Client(target=os.environ["FB_HOST"], api_token=os.environ["FB_TOKEN"], verify_ssl=False)
+          def rows(r):
+              if r.status_code != 200:
+                  raise SystemExit("array returned %s: %s" % (r.status_code, r.errors[0].message if getattr(r, "errors", None) else ""))
+              # to_dict(): SDK models raise AttributeError for fields the array did not return
+              return [i.to_dict() for i in r.items]
+          print(json.dumps({
+              "file_systems": [f["name"] for f in rows(c.get_file_systems(destroyed=True))],
+              "buckets": [b["name"] for b in rows(c.get_buckets(destroyed=True))],
+              "bucket_accounts": {b["name"]: (b.get("account") or {}).get("name", "") for b in rows(c.get_buckets(destroyed=True))},
+              "snapshots": [s["name"] for s in rows(c.get_file_system_snapshots(destroyed=True))]}))
+      environment:
+        FB_HOST: "{{ hostvars[at_risk_array].fb_url | regex_replace('^https?://', '') }}"
+        FB_TOKEN: "{{ hostvars[at_risk_array].api_token }}"
+      register: candidates_cmd
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Parse the candidates
+      ansible.builtin.set_fact:
+        candidates: >-
+          {{ (candidates_cmd.stdout | from_json) if (candidates_cmd.rc | default(1)) == 0
+             else {'file_systems': [], 'buckets': [], 'bucket_accounts': {}, 'snapshots': []} }}
+        candidates_error: >-
+          {{ '' if (candidates_cmd.rc | default(1)) == 0
+             else (candidates_cmd.stderr_lines | default([]) | last | default(at_risk_array ~ ' is not in the inventory')) }}
+
+    - name: Build the request
+      ansible.builtin.set_fact:
+        capacity_request:
+          time: "{{ request_time }}"
+          kind: capacity_request
+          severity: warning
+          status: awaiting_approval
+          request_id: "{{ request_id }}"
+          array: "{{ at_risk_array }}"
+          used_pct: "{{ used_pct | default('') }}"
+          used_bytes: "{{ used_bytes | default('') }}"
+          capacity_bytes: "{{ capacity_bytes | default('') }}"
+          days_to_full: "{{ days_to_full | default('') }}"
+          growth_bytes_per_day: "{{ growth_bytes_per_day | default('') }}"
+          top_growers: "{{ top_growers | default([]) }}"
+          pending_eradication_file_systems: "{{ pending_eradication_file_systems | default(candidates.file_systems | length) }}"
+          pending_eradication_buckets: "{{ pending_eradication_buckets | default(candidates.buckets | length) }}"
+          pending_eradication_snapshots: "{{ pending_eradication_snapshots | default(candidates.snapshots | length) }}"
+          candidates: "{{ candidates }}"
+          candidates_error: "{{ candidates_error | trim }}"
+          candidate_targets: "{{ candidate_targets | default([]) }}"
+          proposed_actions:
+            - eradicate_pending
+
+    - name: Write the request file
+      ansible.builtin.copy:
+        dest: "{{ request_dir }}/{{ request_id }}.json"
+        mode: "0600"
+        content: "{{ capacity_request | to_nice_json }}"
+
+    - name: Append to the alert log
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: "{{ capacity_request | to_json }}"
+
+    - name: Show the request
+      ansible.builtin.debug:
+        msg: >-
+          Capacity request {{ request_id }}: {{ at_risk_array }} at {{ used_pct | default('?') }}% used
+          (full in {{ days_to_full | default('n/a') }} days);
+          candidates pending eradication: {{ candidates.file_systems | length }} file systems /
+          {{ candidates.buckets | length }} buckets /
+          {{ candidates.snapshots | length }} snapshots{{ (' (' ~ candidates_error | trim ~ ')') if candidates_error | trim else '' }};
+          arrays with headroom: {{ candidate_targets | default([]) | map(attribute='array') | list }}
+
+    # Job artifacts: an Ansible Automation Platform workflow passes them to
+    # the next node as extra_vars (request_id reaches capacity_reclaim.yml
+    # that way) and an orchestrator aap_job_template node reads them as
+    # ${<node>.artifacts.request_id}. candidates is the request file's own
+    # {file_systems, buckets, snapshots} dict, in full: a reclaim job that
+    # cannot see this job's request_dir rebuilds the request from it
+    # (capacity_reclaim.yml), so what it holds is exactly what an approval
+    # may eradicate. The data is one templated dict so that counts arrive as
+    # numbers, not strings.
+    - name: Publish the request as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'request_id': request_id, 'at_risk_array': at_risk_array,
+              'candidate_count': (candidates.file_systems | length) + (candidates.buckets | length) + (candidates.snapshots | length),
+              'candidates': candidates} }}
+      run_once: true
+      delegate_to: localhost

@@ -1,0 +1,236 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Health: hardware components whose status is an issue, blades and drives
+# that are not healthy, a link aggregation group running below its expected
+# speed, maintenance windows and remote assist.
+#
+# A hardware issue outside a maintenance window lights the component's
+# identify LED (playbooks/identify_led.yml, everpure.flashblade.purefb_hardware)
+# and records it to the alert log together with the LLDP neighbour the
+# plugin read for the port (switch name, address, port), so a dead uplink
+# names the switch port to look at. Inside a maintenance window it only
+# logs: someone is already working on the array. A degraded LAG pages with
+# its member ports and their switch ports.
+
+- name: FlashBlade health
+  hosts: all
+
+  sources:
+    - sdodsley.flashblade_eda.purefb_events:
+        arrays: "{{ purefb_arrays }}"
+        signals: [health]
+        health_interval: "{{ health_interval }}"
+
+  rules:
+    # A poll that fails once is a blip; one that keeps failing is an array
+    # nobody is watching. This is the reachability rulebook, so the first
+    # failure of a streak pages at warning, once an hour per array; a streak
+    # the plugin flags as escalated (poll_error_escalate, default 10 polls)
+    # pages at critical once every six hours. Anything in between is logged
+    # below. The other polling rulebooks record their first failure at info
+    # (alert log only under the default Slack floor), so one unreachable
+    # array is one page, not nine.
+    - name: Poll failing for many polls - escalate
+      condition: >-
+        event.purefb_poll_error is defined and
+        event.purefb_poll_error.escalate == true
+      throttle:
+        once_within: 6 hours
+        group_by_attributes:
+          - event.purefb_poll_error.array
+          - event.purefb_poll_error.signal
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row"
+            detail: "{{ event.purefb_poll_error.error }}"
+            target_array: "{{ event.purefb_poll_error.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Poll failed - notify once
+      condition: >-
+        event.purefb_poll_error is defined and
+        event.purefb_poll_error.consecutive == 1
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_poll_error.array
+          - event.purefb_poll_error.signal
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed"
+            detail: "{{ event.purefb_poll_error.error }}"
+            target_array: "{{ event.purefb_poll_error.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Report poll errors without acting
+      condition: event.purefb_poll_error is defined
+      action:
+        debug:
+          msg: "poll failed ({{ event.purefb_poll_error.signal }} on {{ event.purefb_poll_error.array }}): {{ event.purefb_poll_error.error }}"
+
+    - name: Hardware issue outside a maintenance window - identify LED and notify
+      condition: >-
+        event.purefb_hardware.status is defined and
+        event.purefb_hardware.maintenance_active == false
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_hardware.array
+          - event.purefb_hardware.component
+      action:
+        run_playbook:
+          name: playbooks/identify_led.yml
+          extra_vars:
+            target_array: "{{ event.purefb_hardware.array }}"
+            component: "{{ event.purefb_hardware.component }}"
+            component_type: "{{ event.purefb_hardware.type }}"
+            component_status: "{{ event.purefb_hardware.status }}"
+            component_details: "{{ event.purefb_hardware.details }}"
+            component_slot: "{{ event.purefb_hardware.slot }}"
+            component_serial: "{{ event.purefb_hardware.serial }}"
+            neighbor_switch: "{{ event.purefb_hardware.neighbor_switch }}"
+            neighbor_switch_address: "{{ event.purefb_hardware.neighbor_switch_address }}"
+            neighbor_port: "{{ event.purefb_hardware.neighbor_port }}"
+            led_state: true
+            alert_log: "{{ alert_log }}"
+
+    - name: Hardware issue during a maintenance window - log only
+      condition: >-
+        event.purefb_hardware.status is defined and
+        event.purefb_hardware.maintenance_active == true
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_hardware.array
+          - event.purefb_hardware.component
+      action:
+        debug:
+          msg: >-
+            maintenance window active on {{ event.purefb_hardware.array }}:
+            {{ event.purefb_hardware.component }} {{ event.purefb_hardware.status }} not actioned
+
+    # A component that left the issue set has recovered: clear the identify
+    # LED the rule above lit (the module changes nothing when it is already
+    # off) and record the recovery at info, when nobody has declared work on
+    # the array.
+    - name: Hardware recovered - clear the identify LED
+      condition: >-
+        event.purefb_hardware_recovered.component is defined and
+        event.purefb_hardware_recovered.maintenance_active == false
+      action:
+        run_playbook:
+          name: playbooks/identify_led.yml
+          extra_vars:
+            target_array: "{{ event.purefb_hardware_recovered.array }}"
+            component: "{{ event.purefb_hardware_recovered.component }}"
+            component_type: "{{ event.purefb_hardware_recovered.type }}"
+            component_status: "{{ event.purefb_hardware_recovered.status }}"
+            component_details: "recovered from {{ event.purefb_hardware_recovered.previous_status }}"
+            led_state: false
+            severity: info
+            alert_log: "{{ alert_log }}"
+
+    - name: Hardware recovered during a maintenance window - log
+      condition: event.purefb_hardware_recovered.component is defined
+      action:
+        debug:
+          msg: >-
+            {{ event.purefb_hardware_recovered.array }} {{ event.purefb_hardware_recovered.component }} recovered
+            ({{ event.purefb_hardware_recovered.previous_status }} -> {{ event.purefb_hardware_recovered.status }})
+            during a maintenance window; identify LED left as it is
+
+    # The plugin compares lag_speed with the sum of the member ports' speeds,
+    # so a LAG the array still calls healthy with one link down is degraded
+    # here; ports carry the LLDP neighbour, which is the switch port to check.
+    - name: Link aggregation group degraded - notify
+      condition: >-
+        event.purefb_lag.degraded is defined and
+        event.purefb_lag.degraded == true
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_lag.array
+          - event.purefb_lag.lag
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "LAG {{ event.purefb_lag.lag }} on {{ event.purefb_lag.array }} is {{ event.purefb_lag.status }} at {{ event.purefb_lag.lag_speed }} of {{ event.purefb_lag.expected_speed }} bit/s"
+            detail: "ports: {{ event.purefb_lag.ports }}"
+            target_array: "{{ event.purefb_lag.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Link aggregation group recovered - notify
+      condition: >-
+        event.purefb_lag.recovered is defined and
+        event.purefb_lag.recovered == true
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: info
+            subject: "LAG {{ event.purefb_lag.lag }} on {{ event.purefb_lag.array }} is back at {{ event.purefb_lag.lag_speed }} bit/s"
+            detail: "ports: {{ event.purefb_lag.ports }}"
+            target_array: "{{ event.purefb_lag.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Blade not healthy - notify
+      condition: event.purefb_health.blade_issue_count is defined and event.purefb_health.blade_issue_count > 0
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_health.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "Blade issue on {{ event.purefb_health.array }}"
+            detail: "{{ event.purefb_health.blade_issues }}"
+            target_array: "{{ event.purefb_health.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Drive not healthy - notify
+      condition: event.purefb_health.drive_issue_count is defined and event.purefb_health.drive_issue_count > 0
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_health.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "Drive issue on {{ event.purefb_health.array }}"
+            detail: "{{ event.purefb_health.drive_issues }}"
+            target_array: "{{ event.purefb_health.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Maintenance window active - log
+      condition: event.purefb_health.maintenance_active == true
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefb_health.array
+      action:
+        debug:
+          msg: "maintenance window active on {{ event.purefb_health.array }}: {{ event.purefb_health.maintenance_windows }}"
+
+    - name: Remote assist session open - log
+      condition: event.purefb_health.remote_assist_active == true
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_health.array
+      action:
+        debug:
+          msg: "remote assist is active on {{ event.purefb_health.array }}"

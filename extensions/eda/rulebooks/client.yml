@@ -1,0 +1,313 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Clients: the data path seen from the array. /arrays/clients/performance
+# names every NFS and SMB client by IP with its own ops and latency, so a
+# noisy neighbour is a host, not a storage object, and that host is usually
+# in the Ansible inventory. The array-level sample is compared with the same half
+# hour one week ago; the per-client share of the array's ops is counted
+# over consecutive polls.
+#
+# Client: one client holding client_min_share_pct of the array's ops for
+#         client_consecutive_polls while the array's write latency is
+#         baseline_latency_ratio times last week's is diagnosed on the host
+#         itself (playbooks/client_diagnose.yml: read-only commands over
+#         SSH on the inventory host whose ansible_host is that IP) when
+#         client_actions_enabled is true, else notified.
+# Cap:    a file system or bucket holding qos_cap_min_share_pct of the ops
+#         for the same number of polls gets a QoS policy eda-cap-<name> at
+#         qos_cap_ops_per_sec (playbooks/qos_cap.yml) when qos_auto_cap is
+#         true, else a notification. The policy name is the state: FlashBlade
+#         has no tags, and the plugin reports an object carrying an eda-cap-
+#         policy on every poll so the lift rule always sees it.
+# Lift:   a capped object whose share has been normal for qos_lift_normal_polls
+#         loses the policy (playbooks/qos_lift.yml).
+
+- name: FlashBlade clients
+  hosts: all
+
+  sources:
+    - sdodsley.flashblade_eda.purefb_events:
+        arrays: "{{ purefb_arrays }}"
+        signals: [telemetry]
+        telemetry_interval: "{{ telemetry_interval }}"
+        client_min_share_pct: "{{ client_min_share_pct }}"
+        top_clients: 10
+        top_file_systems: 10
+        top_buckets: 10
+
+  rules:
+    # A poll that fails once is a blip; one that keeps failing is an array
+    # nobody is watching. The first failure of a streak is recorded at info
+    # (the alert log; under the default Slack floor), once an hour per array
+    # and signal, because health.yml already pages for the array itself and
+    # nine rulebooks poll the same arrays; a streak the plugin flags as
+    # escalated (poll_error_escalate, default 10 polls) pages at critical once
+    # every six hours, since a signal that fails on its own is worth a page.
+    # Anything in between is logged below.
+    - name: Poll failing for many polls - escalate
+      condition: >-
+        event.purefb_poll_error is defined and
+        event.purefb_poll_error.escalate == true
+      throttle:
+        once_within: 6 hours
+        group_by_attributes:
+          - event.purefb_poll_error.array
+          - event.purefb_poll_error.signal
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row"
+            detail: "{{ event.purefb_poll_error.error }}"
+            target_array: "{{ event.purefb_poll_error.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Poll failed - notify once
+      condition: >-
+        event.purefb_poll_error is defined and
+        event.purefb_poll_error.consecutive == 1
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_poll_error.array
+          - event.purefb_poll_error.signal
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: info
+            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed"
+            detail: "{{ event.purefb_poll_error.error }}"
+            target_array: "{{ event.purefb_poll_error.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Report poll errors without acting
+      condition: event.purefb_poll_error is defined
+      action:
+        debug:
+          msg: "poll failed ({{ event.purefb_poll_error.signal }} on {{ event.purefb_poll_error.array }}): {{ event.purefb_poll_error.error }}"
+
+    - name: Noisy client on a slow array - diagnose on the host
+      condition: >-
+        event.purefb_client_performance.high_share_polls is defined and
+        event.purefb_client_performance.high_share_polls >= vars.client_consecutive_polls and
+        event.purefb_client_performance.baseline_known == true and
+        event.purefb_client_performance.array_write_latency_ratio >= vars.baseline_latency_ratio and
+        vars.client_actions_enabled == true
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.purefb_client_performance.array
+          - event.purefb_client_performance.client
+      action:
+        run_playbook:
+          name: playbooks/client_diagnose.yml
+          extra_vars:
+            target_array: "{{ event.purefb_client_performance.array }}"
+            client: "{{ event.purefb_client_performance.client }}"
+            ops_share_pct: "{{ event.purefb_client_performance.ops_share_pct }}"
+            high_share_polls: "{{ event.purefb_client_performance.high_share_polls }}"
+            reads_per_sec: "{{ event.purefb_client_performance.reads_per_sec }}"
+            writes_per_sec: "{{ event.purefb_client_performance.writes_per_sec }}"
+            usec_per_write_op: "{{ event.purefb_client_performance.usec_per_write_op }}"
+            array_usec_per_write_op: "{{ event.purefb_client_performance.array_usec_per_write_op }}"
+            array_write_latency_ratio: "{{ event.purefb_client_performance.array_write_latency_ratio }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Noisy client on a slow array - notify
+      condition: >-
+        event.purefb_client_performance.high_share_polls is defined and
+        event.purefb_client_performance.high_share_polls >= vars.client_consecutive_polls and
+        event.purefb_client_performance.baseline_known == true and
+        event.purefb_client_performance.array_write_latency_ratio >= vars.baseline_latency_ratio and
+        vars.client_actions_enabled == false
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.purefb_client_performance.array
+          - event.purefb_client_performance.client
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "Client {{ event.purefb_client_performance.client }} holds {{ event.purefb_client_performance.ops_share_pct }}% of the ops on {{ event.purefb_client_performance.array }}"
+            detail: >-
+              iops={{ event.purefb_client_performance.reads_per_sec }}r/{{ event.purefb_client_performance.writes_per_sec }}w
+              write={{ event.purefb_client_performance.usec_per_write_op }}us
+              for {{ event.purefb_client_performance.high_share_polls }} polls;
+              array write={{ event.purefb_client_performance.array_usec_per_write_op }}us,
+              {{ event.purefb_client_performance.array_write_latency_ratio }}x the same half hour last week
+            target_array: "{{ event.purefb_client_performance.array }}"
+            alert_log: "{{ alert_log }}"
+
+    # The file system and bucket events carry their share and streak but not
+    # the array baseline; the client rule above holds the latency gate.
+    - name: File system hogging the array - apply a temporary QoS cap
+      condition: >-
+        event.purefb_fs_performance.high_share_polls is defined and
+        event.purefb_fs_performance.high_share_polls >= vars.client_consecutive_polls and
+        event.purefb_fs_performance.ops_share_pct >= vars.qos_cap_min_share_pct and
+        event.purefb_fs_performance.eda_capped == false and
+        vars.qos_auto_cap == true
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefb_fs_performance.array
+          - event.purefb_fs_performance.file_system
+      action:
+        run_playbook:
+          name: playbooks/qos_cap.yml
+          extra_vars:
+            target_array: "{{ event.purefb_fs_performance.array }}"
+            object_kind: file_system
+            object_name: "{{ event.purefb_fs_performance.file_system }}"
+            cap_ops_per_sec: "{{ qos_cap_ops_per_sec }}"
+            reason: >-
+              iops={{ event.purefb_fs_performance.reads_per_sec }}r/{{ event.purefb_fs_performance.writes_per_sec }}w
+              ({{ event.purefb_fs_performance.ops_share_pct }}% of the array) for {{ event.purefb_fs_performance.high_share_polls }} polls
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Capped file system back to normal - lift the cap
+      condition: >-
+        event.purefb_fs_performance.eda_capped is defined and
+        event.purefb_fs_performance.eda_capped == true and
+        event.purefb_fs_performance.normal_polls >= vars.qos_lift_normal_polls
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefb_fs_performance.array
+          - event.purefb_fs_performance.file_system
+      action:
+        run_playbook:
+          name: playbooks/qos_lift.yml
+          extra_vars:
+            target_array: "{{ event.purefb_fs_performance.array }}"
+            object_kind: file_system
+            object_name: "{{ event.purefb_fs_performance.file_system }}"
+            reason: "share normal for {{ event.purefb_fs_performance.normal_polls }} polls"
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: File system hogging the array - notify
+      condition: >-
+        event.purefb_fs_performance.high_share_polls is defined and
+        event.purefb_fs_performance.high_share_polls >= vars.client_consecutive_polls and
+        event.purefb_fs_performance.ops_share_pct >= vars.qos_cap_min_share_pct and
+        event.purefb_fs_performance.eda_capped == false and
+        vars.qos_auto_cap == false
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.purefb_fs_performance.array
+          - event.purefb_fs_performance.file_system
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "File system {{ event.purefb_fs_performance.file_system }} holds {{ event.purefb_fs_performance.ops_share_pct }}% of the ops on {{ event.purefb_fs_performance.array }}"
+            detail: >-
+              iops={{ event.purefb_fs_performance.reads_per_sec }}r/{{ event.purefb_fs_performance.writes_per_sec }}w
+              write={{ event.purefb_fs_performance.usec_per_write_op }}us
+              for {{ event.purefb_fs_performance.high_share_polls }} polls; qos_policy={{ event.purefb_fs_performance.qos_policy }}
+            target_array: "{{ event.purefb_fs_performance.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Bucket hogging the array - apply a temporary QoS cap
+      condition: >-
+        event.purefb_bucket_performance.high_share_polls is defined and
+        event.purefb_bucket_performance.high_share_polls >= vars.client_consecutive_polls and
+        event.purefb_bucket_performance.ops_share_pct >= vars.qos_cap_min_share_pct and
+        event.purefb_bucket_performance.eda_capped == false and
+        vars.qos_auto_cap == true
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefb_bucket_performance.array
+          - event.purefb_bucket_performance.bucket
+      action:
+        run_playbook:
+          name: playbooks/qos_cap.yml
+          extra_vars:
+            target_array: "{{ event.purefb_bucket_performance.array }}"
+            object_kind: bucket
+            object_name: "{{ event.purefb_bucket_performance.bucket }}"
+            cap_ops_per_sec: "{{ qos_cap_ops_per_sec }}"
+            reason: >-
+              iops={{ event.purefb_bucket_performance.reads_per_sec }}r/{{ event.purefb_bucket_performance.writes_per_sec }}w
+              ({{ event.purefb_bucket_performance.ops_share_pct }}% of the array) for {{ event.purefb_bucket_performance.high_share_polls }} polls
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Capped bucket back to normal - lift the cap
+      condition: >-
+        event.purefb_bucket_performance.eda_capped is defined and
+        event.purefb_bucket_performance.eda_capped == true and
+        event.purefb_bucket_performance.normal_polls >= vars.qos_lift_normal_polls
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefb_bucket_performance.array
+          - event.purefb_bucket_performance.bucket
+      action:
+        run_playbook:
+          name: playbooks/qos_lift.yml
+          extra_vars:
+            target_array: "{{ event.purefb_bucket_performance.array }}"
+            object_kind: bucket
+            object_name: "{{ event.purefb_bucket_performance.bucket }}"
+            reason: "share normal for {{ event.purefb_bucket_performance.normal_polls }} polls"
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Bucket hogging the array - notify
+      condition: >-
+        event.purefb_bucket_performance.high_share_polls is defined and
+        event.purefb_bucket_performance.high_share_polls >= vars.client_consecutive_polls and
+        event.purefb_bucket_performance.ops_share_pct >= vars.qos_cap_min_share_pct and
+        event.purefb_bucket_performance.eda_capped == false and
+        vars.qos_auto_cap == false
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.purefb_bucket_performance.array
+          - event.purefb_bucket_performance.bucket
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "Bucket {{ event.purefb_bucket_performance.bucket }} holds {{ event.purefb_bucket_performance.ops_share_pct }}% of the ops on {{ event.purefb_bucket_performance.array }}"
+            detail: >-
+              iops={{ event.purefb_bucket_performance.reads_per_sec }}r/{{ event.purefb_bucket_performance.writes_per_sec }}w
+              write={{ event.purefb_bucket_performance.usec_per_write_op }}us
+              for {{ event.purefb_bucket_performance.high_share_polls }} polls; qos_policy={{ event.purefb_bucket_performance.qos_policy }}
+            target_array: "{{ event.purefb_bucket_performance.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Array write latency well above the same time last week - notify
+      condition: >-
+        event.purefb_array_performance.baseline_known == true and
+        event.purefb_array_performance.write_latency_ratio >= vars.baseline_latency_ratio
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.purefb_array_performance.array
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "{{ event.purefb_array_performance.array }} write latency is {{ event.purefb_array_performance.write_latency_ratio }}x last week's"
+            detail: >-
+              now write={{ event.purefb_array_performance.usec_per_write_op }}us
+              iops={{ event.purefb_array_performance.writes_per_sec }};
+              same half hour last week write={{ event.purefb_array_performance.baseline_usec_per_write_op }}us
+              iops={{ event.purefb_array_performance.baseline_writes_per_sec }}
+            target_array: "{{ event.purefb_array_performance.array }}"
+            alert_log: "{{ alert_log }}"

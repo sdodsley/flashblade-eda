@@ -1,0 +1,117 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Reconcile one array with its git baseline after an audited change.
+# Called by the change control rulebook with target_array, baseline_dir and
+# the audit fields (audit_user, audit_interface, audit_ip_address,
+# audit_command, audit_subcommand, audit_arguments, audit_time) as extra_vars.
+#
+# Which commands reconcile and which only notify is decided here, next to
+# the modules that would do the write:
+#   purearray setattr with an ntp argument, puredns -> reapplied from the baseline
+#   everything else                                -> notified; a human decides
+# verify: Purity//FB logs an NTP change as `purearray setattr --ntp-servers`
+# and a DNS change under puredns on the lab (both read from the audit
+# record's command, subcommand and arguments).
+# An array without baseline_dir/<array>.yml is recorded as 'no baseline for
+# this array' instead of failing. purefb_dns compares nameservers as an
+# ordered list, so keep the baseline's order the same as the array's.
+- name: Reconcile an array with its baseline
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  vars:
+    baseline_file: "{{ baseline_dir }}/{{ inventory_hostname }}.yml"
+    is_ntp: "{{ audit_command == 'purearray' and audit_subcommand | default('') == 'setattr' and 'ntp' in (audit_arguments | default('')) }}"
+    is_dns: "{{ audit_command == 'puredns' }}"
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    # On Ansible Automation Platform the FlashBlade API credential injects
+    # credential_array and fb_url/api_token point at that array whatever
+    # host this play runs on, so another array's credential is refused.
+    - name: Refuse to run with another array's credential attached
+      ansible.builtin.assert:
+        that:
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: "the attached credential is for {{ credential_array | default('') }}, not {{ inventory_hostname }}"
+
+    - name: Load the baseline for this array
+      when: baseline_file is file
+      ansible.builtin.include_vars:
+        file: "{{ baseline_file }}"
+        name: baseline
+
+    - name: Reapply NTP from the baseline
+      when: is_ntp | bool and baseline.ntp_servers is defined
+      everpure.flashblade.purefb_ntp:
+        fb_url: "{{ fb_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        state: present
+        ntp_servers: "{{ baseline.ntp_servers }}"
+      register: ntp_result
+
+    - name: Reapply DNS from the baseline
+      when: is_dns | bool and baseline.dns is defined
+      everpure.flashblade.purefb_dns:
+        fb_url: "{{ fb_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: management
+        domain: "{{ baseline.dns.domain }}"
+        nameservers: "{{ baseline.dns.nameservers }}"
+      register: dns_result
+
+    - name: Work out what happened
+      ansible.builtin.set_fact:
+        reconciled: "{{ is_ntp | bool or is_dns | bool }}"
+        changed_back: "{{ (ntp_result.changed | default(false)) or (dns_result.changed | default(false)) }}"
+        has_baseline: "{{ baseline is defined }}"
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        outcome: >-
+          {{ 'notified, not reconciled' if not reconciled
+             else 'no baseline for this array' if not has_baseline
+             else 'reverted to baseline' if changed_back
+             else 'already at baseline' }}
+
+    - name: Record the change control event
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'change_control',
+              'severity': 'warning', 'array': inventory_hostname,
+              'user': audit_user, 'interface': audit_interface | default(''),
+              'ip_address': audit_ip_address | default(''),
+              'command': audit_command ~ ' ' ~ (audit_subcommand | default('')),
+              'arguments': audit_arguments | default(''), 'audit_time': audit_time | default(''),
+              'outcome': outcome,
+              'baseline': baseline_file} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the outcome
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: {{ audit_user }} ran {{ audit_command }} {{ audit_subcommand | default('') }}
+          {{ audit_arguments | default('') }} from {{ audit_ip_address | default('?') }} ->
+          {{ outcome }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish what changed as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname,
+              'ntp_changed': ntp_result.changed | default(false), 'dns_changed': dns_result.changed | default(false),
+              'reconciled': reconciled | bool, 'outcome': outcome | trim} }}
+      run_once: true
+      delegate_to: localhost

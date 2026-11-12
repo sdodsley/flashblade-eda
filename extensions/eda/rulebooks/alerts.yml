@@ -1,0 +1,194 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Alerts: every alert state change on the array, routed through the
+# alert-code runbook map (vars: alert_runbooks) with the array's own
+# recommended action text and knowledge base link carried into the record.
+# FlashBlade alerts are open or closed, nothing in between, and there is no
+# /alerts/events endpoint, so the plugin diffs /alerts between polls: an
+# alert already open when the rulebook starts arrives with transition
+# "initial" and is only logged, one whose severity rose arrives as "updated"
+# with severity_raised true, one that resolved arrives as "closed" with the
+# time it was open. Inside a maintenance window an opened alert is logged,
+# not routed.
+#
+# With alert_flag_handled true (vars) a routed alert is also flagged on the
+# array (playbooks/flag_alert.yml): the flagged bit is the one marker the
+# array keeps for "automation has seen this", visible in the GUI and the CLI
+# and still there after a rulebook restart, since FlashBlade has no tags.
+
+- name: FlashBlade alerts
+  hosts: all
+
+  sources:
+    - sdodsley.flashblade_eda.purefb_events:
+        arrays: "{{ purefb_arrays }}"
+        signals: [alerts]
+        alerts_interval: "{{ alerts_interval }}"
+
+  rules:
+    # A poll that fails once is a blip; one that keeps failing is an array
+    # nobody is watching. The first failure of a streak is recorded at info
+    # (the alert log; under the default Slack floor), once an hour per array
+    # and signal, because health.yml already pages for the array itself and
+    # nine rulebooks poll the same arrays; a streak the plugin flags as
+    # escalated (poll_error_escalate, default 10 polls) pages at critical once
+    # every six hours, since a signal that fails on its own is worth a page.
+    # Anything in between is logged below.
+    - name: Poll failing for many polls - escalate
+      condition: >-
+        event.purefb_poll_error is defined and
+        event.purefb_poll_error.escalate == true
+      throttle:
+        once_within: 6 hours
+        group_by_attributes:
+          - event.purefb_poll_error.array
+          - event.purefb_poll_error.signal
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row"
+            detail: "{{ event.purefb_poll_error.error }}"
+            target_array: "{{ event.purefb_poll_error.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Poll failed - notify once
+      condition: >-
+        event.purefb_poll_error is defined and
+        event.purefb_poll_error.consecutive == 1
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_poll_error.array
+          - event.purefb_poll_error.signal
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: info
+            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed"
+            detail: "{{ event.purefb_poll_error.error }}"
+            target_array: "{{ event.purefb_poll_error.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Report poll errors without acting
+      condition: event.purefb_poll_error is defined
+      action:
+        debug:
+          msg: "poll failed ({{ event.purefb_poll_error.signal }} on {{ event.purefb_poll_error.array }}): {{ event.purefb_poll_error.error }}"
+
+    - name: Alert already open at start-up - log only
+      condition: event.purefb_alert.transition == "initial"
+      action:
+        debug:
+          msg: >-
+            open at start: {{ event.purefb_alert.array }} #{{ event.purefb_alert.alert_id }}
+            code {{ event.purefb_alert.code }} {{ event.purefb_alert.severity }} {{ event.purefb_alert.summary }}
+
+    - name: Alert opened during a maintenance window - log only
+      condition: >-
+        event.purefb_alert.transition == "opened" and
+        event.purefb_alert.maintenance_active == true
+      action:
+        debug:
+          msg: "maintenance window on {{ event.purefb_alert.array }}: alert {{ event.purefb_alert.code }} {{ event.purefb_alert.summary }} not routed"
+
+    # Two actions, in order: the runbook map first (ticket, notify or the
+    # per-code tasks), then the flag on the array. The flag is the last step
+    # so an alert is never marked handled before its record exists.
+    - name: Alert opened - route through the runbook map and flag it on the array
+      condition: >-
+        event.purefb_alert.transition == "opened" and
+        event.purefb_alert.maintenance_active == false and
+        vars.alert_flag_handled == true
+      actions:
+        - run_playbook:
+            name: playbooks/alert_runbook.yml
+            extra_vars:
+              severity: "{{ event.purefb_alert.severity }}"
+              transition: opened
+              subject: "{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }}: {{ event.purefb_alert.summary }}"
+              component: "{{ event.purefb_alert.component_type }}:{{ event.purefb_alert.component_name }}"
+              component_name: "{{ event.purefb_alert.component_name }}"
+              array_action: "{{ event.purefb_alert.action }}"
+              knowledge_base_url: "{{ event.purefb_alert.knowledge_base_url }}"
+              alert_description: "{{ event.purefb_alert.description }}"
+              alert_variables: "{{ event.purefb_alert.variables }}"
+              target_array: "{{ event.purefb_alert.array }}"
+              alert_id: "{{ event.purefb_alert.alert_id }}"
+              alert_code: "{{ event.purefb_alert.code }}"
+              alert_runbooks: "{{ alert_runbooks }}"
+              fb_api_version: "{{ fb_api_version }}"
+              alert_log: "{{ alert_log }}"
+        - run_playbook:
+            name: playbooks/flag_alert.yml
+            extra_vars:
+              target_array: "{{ event.purefb_alert.array }}"
+              alert_id: "{{ event.purefb_alert.alert_id }}"
+              alert_code: "{{ event.purefb_alert.code }}"
+              fb_api_version: "{{ fb_api_version }}"
+              alert_log: "{{ alert_log }}"
+
+    - name: Alert opened - route through the runbook map
+      condition: >-
+        event.purefb_alert.transition == "opened" and
+        event.purefb_alert.maintenance_active == false and
+        vars.alert_flag_handled == false
+      action:
+        run_playbook:
+          name: playbooks/alert_runbook.yml
+          extra_vars:
+            severity: "{{ event.purefb_alert.severity }}"
+            transition: opened
+            subject: "{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }}: {{ event.purefb_alert.summary }}"
+            component: "{{ event.purefb_alert.component_type }}:{{ event.purefb_alert.component_name }}"
+            component_name: "{{ event.purefb_alert.component_name }}"
+            array_action: "{{ event.purefb_alert.action }}"
+            knowledge_base_url: "{{ event.purefb_alert.knowledge_base_url }}"
+            alert_description: "{{ event.purefb_alert.description }}"
+            alert_variables: "{{ event.purefb_alert.variables }}"
+            target_array: "{{ event.purefb_alert.array }}"
+            alert_id: "{{ event.purefb_alert.alert_id }}"
+            alert_code: "{{ event.purefb_alert.code }}"
+            alert_runbooks: "{{ alert_runbooks }}"
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    # An alert whose severity rose since the last poll (a 1101 quota alert
+    # going from 80 % to 100 %, a blade from warning to critical) is worth a
+    # notice at its new severity; the runbook record from its opening stands.
+    - name: Alert severity raised - notify
+      condition: >-
+        event.purefb_alert.transition == "updated" and
+        event.purefb_alert.severity_raised == true and
+        event.purefb_alert.maintenance_active == false
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: "{{ event.purefb_alert.severity }}"
+            subject: "{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }} raised to {{ event.purefb_alert.severity }}: {{ event.purefb_alert.summary }}"
+            detail: "was {{ event.purefb_alert.previous_severity }}; {{ event.purefb_alert.action }}"
+            target_array: "{{ event.purefb_alert.array }}"
+            alert_id: "{{ event.purefb_alert.alert_id }}"
+            alert_code: "{{ event.purefb_alert.code }}"
+            alert_log: "{{ alert_log }}"
+
+    # Closed is the resolved signal on FlashBlade: one notice at info (the
+    # alert log, under the default Slack floor) with the time it was open.
+    - name: Alert closed - notify
+      condition: event.purefb_alert.transition == "closed"
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: info
+            subject: "{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }} closed: {{ event.purefb_alert.summary }}"
+            detail: "open for {{ event.purefb_alert.resolved_after_s }} s; {{ event.purefb_alert.action }}"
+            target_array: "{{ event.purefb_alert.array }}"
+            alert_id: "{{ event.purefb_alert.alert_id }}"
+            alert_code: "{{ event.purefb_alert.code }}"
+            alert_log: "{{ alert_log }}"

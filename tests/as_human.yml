@@ -1,0 +1,46 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Test helper: make an out-of-band change as the "human" user (HUMAN_URL /
+# HUMAN_TOKEN in the environment), so the audit record carries their name.
+#   ansible-playbook tests/as_human.yml -e action=ntp_drift -e baseline_ntp_servers_csv=pool.ntp.org
+#   ansible-playbook tests/as_human.yml -e action=destroy_fs
+# destroy_fs creates a 1 GiB scratch file system, destroys and eradicates it
+# (purefb_fs turns the protocols off before destroying, as the array
+# requires), which is the purefs destroy / eradicate pair the destructive
+# rule in change_control.yml reacts to.
+- name: Out-of-band change as the human user
+  hosts: localhost
+  gather_facts: false
+  vars:
+    human_url: "{{ lookup('env', 'HUMAN_URL') }}"
+    human_token: "{{ lookup('env', 'HUMAN_TOKEN') }}"
+  tasks:
+    - name: Add an NTP server
+      when: action == 'ntp_drift'
+      everpure.flashblade.purefb_ntp:
+        fb_url: "{{ human_url }}"
+        api_token: "{{ human_token }}"
+        disable_warnings: true
+        state: present
+        ntp_servers: "{{ baseline_ntp_servers_csv.split(',') + ['time.google.com'] }}"
+
+    - name: Create, destroy and eradicate a scratch file system
+      when: action == 'destroy_fs'
+      block:
+        - everpure.flashblade.purefb_fs:
+            fb_url: "{{ human_url }}"
+            api_token: "{{ human_token }}"
+            disable_warnings: true
+            name: eda-change-control-test
+            size: 1G
+            nfsv3: true
+            nfsv4: false
+        - everpure.flashblade.purefb_fs:
+            fb_url: "{{ human_url }}"
+            api_token: "{{ human_token }}"
+            disable_warnings: true
+            name: eda-change-control-test
+            state: absent
+            eradicate: true

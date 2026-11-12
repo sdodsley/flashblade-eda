@@ -1,0 +1,177 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Grow one hard-limited file system. Called by the capacity rulebook on the
+# plugin's purefb_fs_quota event with target_array, file_system, the
+# observed figures, fs_grow_step_pct, fs_grow_max_bytes, fs_grow_exclude,
+# request_dir and alert_log; or by hand with a size instead of a step:
+#   ansible-playbook -i inventory/local-lab.yml playbooks/grow_fs.yml \
+#       -e target_array=fb-a -e file_system=fs1 -e new_size=2T -e alert_log=$PWD/alerts.log
+# new_size is a whole number with one unit letter (K, M, G, T, P; 1024-based)
+# or plain bytes. The file system is re-read first (GET /file-systems) so
+# the size grown from is the array's, not the event's, and the play refuses
+# anything that would not grow it. Names matching a glob in fs_grow_exclude
+# (the Manila-managed shares by default) are left alone and recorded. A
+# target above fs_grow_max_bytes (0 = always ask) is written to request_dir
+# as a request instead of applied; nothing answers that request on its own,
+# an operator reruns this playbook with new_size.
+# The write is PATCH /file-systems {"provisioned": <bytes>} through
+# tasks/fb_rest.yml rather than purefb_fs: the module compares its protocol
+# and access-control defaults with the file system on every update, so a
+# size-only call could flip the NFS versions or the access control style.
+# One field over REST changes one field.
+- name: Grow a file system
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    # The name goes into a query string and a file name; the step and the
+    # size are arithmetic inputs.
+    - name: Refuse a file system name that is not a plain name, or a size that cannot be parsed
+      ansible.builtin.assert:
+        that:
+          - file_system is match('^[A-Za-z0-9][A-Za-z0-9_.:-]*$')
+          - new_size is not defined or new_size | string is match('^[0-9]+[KkMmGgTtPp]?$')
+          - new_size is defined or fs_grow_step_pct | default(25) | int > 0
+        fail_msg: >-
+          file_system {{ file_system | string | truncate(80) }} must be a plain name and
+          new_size {{ new_size | default('') | string | truncate(40) }} a whole number with at most one unit letter (K, M, G, T, P)
+
+    - name: Read the file system
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "file-systems?names={{ file_system }}"
+        fb_rest_ignore_errors: true
+
+    - name: Keep what the array said
+      ansible.builtin.set_fact:
+        before: "{{ (fb_rest_json.items | default([{}]))[0] | default({}) }}"
+        read_error: "{{ fb_rest_error | trim }}"
+
+    - name: Refuse a file system that is missing or destroyed
+      ansible.builtin.assert:
+        that:
+          - before.provisioned is defined
+          - not (before.destroyed | default(false) | bool)
+        fail_msg: "{{ file_system }} on {{ inventory_hostname }}: {{ read_error if read_error else 'destroyed' }}; nothing grown"
+
+    # fs_grow_exclude holds shell globs; they become one anchored regex.
+    - name: Decide whether the name is excluded from automatic growth
+      ansible.builtin.set_fact:
+        exclude_regex: >-
+          {{ '^(' ~ (fs_grow_exclude | default([]) | map('regex_escape') | map('replace', '\*', '.*') | join('|')) ~ ')$' }}
+
+    - name: Work out the target size
+      ansible.builtin.set_fact:
+        excluded: "{{ (fs_grow_exclude | default([]) | length) > 0 and file_system is match(exclude_regex) }}"
+        old_size: "{{ before.provisioned | int }}"
+        new_size_bytes: >-
+          {{ (new_size | human_to_bytes) if new_size is defined
+             else ((((before.provisioned | int) * (100 + (fs_grow_step_pct | default(25) | int))) / 100 / 1048576) | round(0, 'ceil') | int) * 1048576 }}
+
+    - name: Decide whether the target is above the automatic ceiling
+      ansible.builtin.set_fact:
+        over_cap: "{{ new_size is not defined and (fs_grow_max_bytes | default(0) | int) > 0 and (new_size_bytes | int) > (fs_grow_max_bytes | int) }}"
+
+    - name: Refuse a size that would not grow the file system
+      when: not excluded | bool
+      ansible.builtin.assert:
+        that:
+          - new_size_bytes | int > before.provisioned | default(0) | int
+        fail_msg: "{{ file_system }} is {{ before.provisioned }} bytes; {{ new_size_bytes }} bytes would not grow it"
+
+    - name: Write a request instead of growing past fs_grow_max_bytes
+      when: over_cap | bool and not excluded | bool
+      block:
+        - name: Pin the request id
+          ansible.builtin.set_fact:
+            grow_request_id: "{{ inventory_hostname }}-{{ file_system }}-{{ now(utc=true).strftime('%Y%m%d%H%M%S') }}"
+
+        - name: Make sure the request directory exists
+          ansible.builtin.file:
+            path: "{{ request_dir }}"
+            state: directory
+            mode: "0700"
+          delegate_to: localhost
+
+        - name: Write the request file
+          ansible.builtin.copy:
+            dest: "{{ request_dir }}/{{ grow_request_id }}.json"
+            mode: "0600"
+            content: >-
+              {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'fs_grow_request',
+                  'severity': 'warning', 'status': 'awaiting_approval', 'request_id': grow_request_id,
+                  'array': inventory_hostname, 'file_system': file_system,
+                  'provisioned': before.provisioned | int, 'requested_size': new_size_bytes | int,
+                  'ceiling': fs_grow_max_bytes | int, 'used_pct': observed_used_pct | default(''),
+                  'proposed_actions': ['grow_fs']} | to_nice_json }}
+          delegate_to: localhost
+
+    - name: Grow the file system
+      when: not excluded | bool and not over_cap | bool
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: PATCH
+        fb_rest_path: "file-systems?names={{ file_system }}"
+        fb_rest_body: "{{ {'provisioned': new_size_bytes | int} }}"
+        fb_rest_ignore_errors: true
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        grown: "{{ not excluded | bool and not over_cap | bool and fb_rest_status | int == 200 }}"
+        outcome: >-
+          {{ 'excluded by fs_grow_exclude' if excluded | bool
+             else ('request ' ~ grow_request_id ~ ' written: target above fs_grow_max_bytes') if over_cap | bool
+             else 'grown' if fb_rest_status | int == 200
+             else 'refused by the array: ' ~ fb_rest_error | trim }}
+
+    - name: Record the growth
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'fs_grow',
+              'severity': 'warning' if grown | bool else 'info',
+              'array': inventory_hostname, 'file_system': file_system,
+              'old_size': before.provisioned | int, 'new_size': new_size_bytes | int,
+              'used_pct': observed_used_pct | default(''), 'hard_limit': before.hard_limit_enabled | default(''),
+              'outcome': outcome | trim, 'request_id': grow_request_id | default(''),
+              'changed': grown | bool} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the outcome
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}/{{ file_system }}: {{ before.provisioned }} -> {{ new_size_bytes }} bytes :: {{ outcome | trim }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one
+    # (sizes in bytes).
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'file_system': file_system,
+              'old_size': before.provisioned | int, 'new_size': new_size_bytes | int,
+              'outcome': outcome | trim, 'changed': grown | bool} }}
+      run_once: true
+      delegate_to: localhost

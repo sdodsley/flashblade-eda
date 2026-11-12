@@ -1,0 +1,34 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Test helper: open or close the array's maintenance window straight through
+# the REST helper (no collection module manages it), to flip
+# maintenance_active for the other rulebooks' tests.
+#   ansible-playbook -i inventory/local-lab.yml tests/maintenance_window.yml \
+#       -e target_array=<array> -e window_state=present -e window_hours=1
+# (Purity//FB 4.5.2 or later; 1 to 48 hours.)
+- name: Open or close a maintenance window
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Open the window
+      when: window_state | default('present') == 'present'
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/../playbooks/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: POST
+        fb_rest_path: "maintenance-windows?names=array"
+        fb_rest_body: "{{ {'timeout': (window_hours | default(1) | int) * 3600000} }}"
+
+    - name: Close the window
+      when: window_state | default('present') == 'absent'
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/../playbooks/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: DELETE
+        fb_rest_path: "maintenance-windows?names=array"
+
+    - name: Show the window
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ window_state | default('present') }} -> {{ fb_rest_status }} {{ fb_rest_json.items | default([]) }}"

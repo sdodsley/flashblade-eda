@@ -1,0 +1,102 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Replay recorded health events through the health rules.
+#   { cat vars/local-lab.yml; \
+#     sed "/^---$/d; /^#/d; s/REPLAY_ARRAY/<array>/; s/REPLAY_COMPONENT/CH1.FB1/" tests/fixtures/hardware.yml; } \
+#     > tests/out/vars_replay.yml
+#   FBEDA_VARS=tests/out/vars_replay.yml ./run.sh tests/replay_health.yml
+# (ansible-rulebook takes one --vars file, -e is that file not key=value, and
+# values in it are not templated, hence the sed.)
+# The rules are copies of the ones in extensions/eda/rulebooks/health.yml,
+# throttles included: ansible-rulebook has no include, and swapping a source
+# for an event stream is an EDA Controller feature. Each fixture hits a
+# throttled rule once with its own key and every run is a fresh process, so
+# nothing is suppressed; tests/unit/test_rulebooks.py fails if a copy drifts.
+- name: FlashBlade health (replayed fixtures)
+  hosts: all
+
+  sources:
+    - ansible.eda.generic:
+        payload: "{{ fixture_events }}"
+        loop_count: 1
+        delay: 1
+
+  rules:
+    - name: Hardware issue outside a maintenance window - identify LED and notify
+      condition: >-
+        event.purefb_hardware.status is defined and
+        event.purefb_hardware.maintenance_active == false
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_hardware.array
+          - event.purefb_hardware.component
+      action:
+        run_playbook:
+          name: playbooks/identify_led.yml
+          extra_vars:
+            target_array: "{{ event.purefb_hardware.array }}"
+            component: "{{ event.purefb_hardware.component }}"
+            component_type: "{{ event.purefb_hardware.type }}"
+            component_status: "{{ event.purefb_hardware.status }}"
+            component_details: "{{ event.purefb_hardware.details }}"
+            component_slot: "{{ event.purefb_hardware.slot }}"
+            component_serial: "{{ event.purefb_hardware.serial }}"
+            neighbor_switch: "{{ event.purefb_hardware.neighbor_switch }}"
+            neighbor_switch_address: "{{ event.purefb_hardware.neighbor_switch_address }}"
+            neighbor_port: "{{ event.purefb_hardware.neighbor_port }}"
+            led_state: true
+            alert_log: "{{ alert_log }}"
+
+    - name: Hardware issue during a maintenance window - log only
+      condition: >-
+        event.purefb_hardware.status is defined and
+        event.purefb_hardware.maintenance_active == true
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_hardware.array
+          - event.purefb_hardware.component
+      action:
+        debug:
+          msg: >-
+            maintenance window active on {{ event.purefb_hardware.array }}:
+            {{ event.purefb_hardware.component }} {{ event.purefb_hardware.status }} not actioned
+
+    - name: Hardware recovered - clear the identify LED
+      condition: >-
+        event.purefb_hardware_recovered.component is defined and
+        event.purefb_hardware_recovered.maintenance_active == false
+      action:
+        run_playbook:
+          name: playbooks/identify_led.yml
+          extra_vars:
+            target_array: "{{ event.purefb_hardware_recovered.array }}"
+            component: "{{ event.purefb_hardware_recovered.component }}"
+            component_type: "{{ event.purefb_hardware_recovered.type }}"
+            component_status: "{{ event.purefb_hardware_recovered.status }}"
+            component_details: "recovered from {{ event.purefb_hardware_recovered.previous_status }}"
+            led_state: false
+            severity: info
+            alert_log: "{{ alert_log }}"
+
+    - name: Link aggregation group degraded - notify
+      condition: >-
+        event.purefb_lag.degraded is defined and
+        event.purefb_lag.degraded == true
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_lag.array
+          - event.purefb_lag.lag
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "LAG {{ event.purefb_lag.lag }} on {{ event.purefb_lag.array }} is {{ event.purefb_lag.status }} at {{ event.purefb_lag.lag_speed }} of {{ event.purefb_lag.expected_speed }} bit/s"
+            detail: "ports: {{ event.purefb_lag.ports }}"
+            target_array: "{{ event.purefb_lag.array }}"
+            alert_log: "{{ alert_log }}"

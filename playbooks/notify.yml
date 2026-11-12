@@ -1,0 +1,115 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Notify-only action. Appends a JSON line to the alert log, prints it and,
+# when SLACK_WEBHOOK_URL is set in the environment (env.example; on the
+# platform the "Slack webhook" credential injects it), posts it to Slack.
+# Extend the tasks for mail / ServiceNow; the rulebooks pass severity,
+# subject, detail, target_array, alert_log and, for array alerts, alert_id
+# and alert_code. Every alert-log line, whichever playbook writes it,
+# carries time, kind, severity and array plus kind-specific fields; keep that
+# shape when adding a playbook. A failed Slack post is reported and never
+# fails the notification: the alert log is the record, Slack is the pager.
+# Slack gets only records at or above slack_min_severity (an extra var, else
+# the SLACK_MIN_SEVERITY environment variable, else warning): an alert
+# closing, or a request whose approval card the bot posts anyway, is record
+# material, not pager material.
+- name: Notify a human
+  hosts: localhost
+  gather_facts: false
+  vars:
+    slack_icons:
+      critical: ":rotating_light:"
+      warning: ":warning:"
+      info: ":information_source:"
+    severity_rank:
+      info: 0
+      warning: 1
+      critical: 2
+  tasks:
+    - name: Build the alert record
+      ansible.builtin.set_fact:
+        alert_record:
+          time: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
+          kind: notify
+          severity: "{{ severity | default('warning') }}"
+          array: "{{ target_array | default('') }}"
+          subject: "{{ subject }}"
+          detail: "{{ detail | default('') | trim }}"
+          alert_id: "{{ (alert_id | default('')) or omit }}"
+          alert_code: "{{ (alert_code | default('')) or omit }}"
+
+    - name: Append to the alert log
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: "{{ alert_record | to_json }}"
+
+    - name: Show the alert
+      ansible.builtin.debug:
+        msg: "[{{ alert_record.severity | upper }}] {{ alert_record.subject }} :: {{ alert_record.detail }}"
+
+    - name: Read the Slack webhook from the environment
+      ansible.builtin.set_fact:
+        slack_webhook: "{{ lookup('env', 'SLACK_WEBHOOK_URL') }}"
+      no_log: true
+
+    # The floor below which a record stays out of Slack: an extra var, else
+    # the environment, else warning. A severity the table does not know is
+    # posted.
+    - name: Settle the Slack severity floor
+      ansible.builtin.set_fact:
+        slack_floor: "{{ slack_min_severity | default(lookup('env', 'SLACK_MIN_SEVERITY') or 'warning') }}"
+
+    - name: Decide whether this record reaches Slack
+      ansible.builtin.set_fact:
+        slack_wanted: >-
+          {{ slack_webhook | length > 0 and
+             (severity_rank[alert_record.severity] | default(99) | int) >= (severity_rank[slack_floor] | default(0) | int) }}
+
+    - name: Note a record kept out of Slack by its severity
+      when: slack_webhook | length > 0 and not (slack_wanted | bool)
+      ansible.builtin.debug:
+        msg: "not posted to Slack: severity {{ alert_record.severity }} is below the floor {{ slack_floor }}"
+
+    # A literal block scalar carries the line break between the subject line
+    # and the detail: inside a Jinja expression Ansible doubles backslashes,
+    # so a '\n' written there is two characters, not a newline. Slack wants
+    # &, < and > escaped in message text; carriage returns are dropped.
+    - name: Format the Slack message
+      when: slack_wanted | bool
+      ansible.builtin.set_fact:
+        slack_text: |-
+          {{ slack_icons[alert_record.severity] | default(':information_source:') }} *{{ alert_record.severity | upper }}* {{ alert_record.subject | replace('&', '&amp;') | replace('<', '&lt;') | replace('>', '&gt;') }}{{ (' (' ~ alert_record.array ~ ')') if alert_record.array and alert_record.array not in alert_record.subject else '' }}
+          {{ alert_record.detail | regex_replace('\r', '') | replace('&', '&amp;') | replace('<', '&lt;') | replace('>', '&gt;') }}
+
+    - name: Post the alert to Slack
+      when: slack_wanted | bool
+      ansible.builtin.uri:
+        url: "{{ slack_webhook }}"
+        method: POST
+        body_format: json
+        body:
+          text: "{{ slack_text }}"
+        status_code: [200]
+        timeout: 15
+      register: slack_post
+      failed_when: false
+      no_log: true
+
+    - name: Report a failed Slack post without failing the notification
+      when: slack_wanted | bool and slack_post.status | default(0) != 200
+      ansible.builtin.debug:
+        msg: "Slack post failed: status {{ slack_post.status | default(0) }} {{ slack_post.msg | default('') | truncate(120) }}"
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the record kind as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'record_kind': alert_record.kind, 'severity': alert_record.severity, 'array': alert_record.array} }}
+      run_once: true
+      delegate_to: localhost

@@ -1,0 +1,263 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Loaded by ansible-rulebook (--vars). Rulebooks forward what each playbook
+# needs as extra_vars, because run_playbook copies the playbook's directory
+# (playbooks/) into a temporary project; vars/ is not there, so relative
+# vars_files paths do not resolve.
+# Copy to vars/local-<site>.yml (gitignored) and edit. Comments give sane
+# production values; the intervals set here are short, for a test run.
+# Uppercase names in the rulebooks ({{ APPROVAL_TOKEN }},
+# {{ GIT_WEBHOOK_SECRET }}) are environment variables handed over with
+# --env-vars (run.sh does that), never keys in this file.
+
+# --- arrays the source plugin polls ---------------------------------------
+# name must match the inventory host name. Tokens and URLs come from the
+# environment (api_token_env / fb_url_env) so this file holds no secrets.
+# Every array listed here needs both variables set (see env.example); the
+# plugin refuses to start otherwise. For a single array remove fb-b here and
+# in the inventory.
+purefb_arrays:
+  - name: fb-a
+    fb_url_env: FB_A_URL
+    api_token_env: FB_A_TOKEN
+  - name: fb-b
+    fb_url_env: FB_B_URL
+    api_token_env: FB_B_TOKEN
+
+# Arrays polled by the config drift ruleset (one vars baseline per ruleset;
+# copy the ruleset for arrays with a different baseline) and by the change
+# control ruleset (baseline per array under baseline_dir).
+config_arrays:
+  - name: fb-a
+    fb_url_env: FB_A_URL
+    api_token_env: FB_A_TOKEN
+
+# Every playbook appends one JSON line per action here (time, kind, severity,
+# array, ...). Absolute path; the directory must exist and be writable by the
+# rulebook user. The /var default needs root or a pre-created, chowned
+# directory; for a local run point it somewhere under $HOME.
+alert_log: /var/log/flashblade-eda/alerts.log
+
+# --- polling intervals (seconds) ------------------------------------------
+alerts_interval: 30          # production: 60
+audits_interval: 15          # production: 15-60
+sessions_interval: 60        # production: 60
+health_interval: 60          # production: 300
+telemetry_interval: 60       # production: 60-300
+config_interval: 300         # production: 300-900
+
+# --- config baseline for config_arrays ------------------------------------
+# List-valued settings are sorted, comma-joined strings: the plugin emits
+# them in that form so a rule compares with a single !=, and the remediation
+# playbooks split them back into lists.
+baseline_ntp_servers_csv: "0.pool.ntp.org,1.pool.ntp.org"
+baseline_dns_domain: example.com
+baseline_dns_nameservers_csv: "192.0.2.53,192.0.2.54"
+# The management directory service (/directory-services name management);
+# the NFS and SMB ones are not compared.
+baseline_ds_management_enabled: true
+baseline_ds_management_uris_csv: "ldaps://ldap.example.com"
+baseline_ds_management_base_dn: "DC=example,DC=com"
+# Whether the array is joined to Active Directory (any /active-directory
+# account); a join or a leave is notified.
+baseline_ad_joined: false
+# /arrays eradication_config.manual_eradication: all-enabled means every
+# destroyed object can be eradicated by hand; a hardened array reports
+# all-disabled or partially-enabled and a longer delay.
+baseline_manual_eradication: all-enabled
+baseline_min_eradication_delay_ms: 86400000      # 24h; alert if shortened below
+# Admin authentication baseline (notify-only rule). These are example
+# hardened values, not factory defaults: set them to the site's own policy,
+# because the rule fires whenever the array differs from what is written
+# here (a weaker baseline than the array would warn on every poll after
+# someone hardens it).
+baseline_max_login_attempts: 5
+baseline_lockout_duration_ms: 1800000            # 30 minutes
+baseline_min_password_length: 12
+baseline_sso_enabled: false
+# Notify when no syslog server carries the data-audit service, that is when
+# file-access audit records have nowhere to go. Off until a site has turned
+# file auditing on.
+require_data_audit_syslog: false
+
+# --- thresholds -------------------------------------------------------------
+capacity_risk_pct: 85
+capacity_days_to_full_warning: 30
+# Hard-limited file systems: the plugin emits purefb_fs_quota from warn_pct
+# of the provisioned size; at grow_pct the capacity rulebook grows the file
+# system by step_pct when fs_auto_grow is true, never above
+# fs_grow_max_bytes (0 = always ask: a request is written instead) and never
+# for a name matching one of the fs_grow_exclude globs (the Manila-managed
+# shares by default, which Manila sizes itself).
+fs_quota_warn_pct: 80
+fs_quota_grow_pct: 90
+fs_auto_grow: false
+fs_grow_step_pct: 25
+fs_grow_max_bytes: 0
+fs_grow_exclude:
+  - "share-*-manila"
+# User and group quotas (alerts 1106 / 1107): raise by step_pct up to
+# max_bytes when auto_raise_user_quota is true; 0 = never raise, ask.
+auto_raise_user_quota: false
+user_quota_step_pct: 25
+user_quota_max_bytes: 0
+baseline_latency_ratio: 2         # array write latency now vs the same half hour last week
+# Clients and QoS (telemetry signal, client.yml): a client, file system or
+# bucket holding this share of the array's ops for this many polls.
+client_min_share_pct: 40
+client_consecutive_polls: 3
+client_actions_enabled: false     # run read-only diagnostics on the client's inventory host
+qos_auto_cap: false               # file system or bucket hogging the array -> temporary QoS policy
+qos_cap_ops_per_sec: 1000         # max_total_ops_per_sec of the eda-cap-<object> policy
+qos_cap_min_share_pct: 40         # only objects holding at least this share of the array's ops
+qos_lift_normal_polls: 5          # lift after this many consecutive normal polls
+
+# Cooldowns live in the rulebooks as literal `throttle: once_within:` values;
+# ansible-rulebook validates that field against its schema before variable
+# substitution, so it cannot be templated from here.
+
+# --- change control (audits signal) -----------------------------------------
+# The identity the remediation playbooks authenticate as. Audit records by
+# these users are logged, never reconciled. Use a dedicated service account.
+automation_users:
+  - svc-eda
+# User agents that mark an audit record as automation whatever the user:
+# the SDK the modules and the plugin use announces itself this way.
+automation_user_agents:
+  - pure/py-pure-client
+# Commands whose audit record triggers a reconcile (or a notification for the
+# ones the reconcile playbook does not rewrite).
+governed_commands:
+  - puredns
+  - pureds
+  - purearray
+  - pureadmin
+  - puresmtp
+  - puresyslog
+  - puresnmp
+  - purealert
+  - purepolicy
+  - purelog
+  - puremaintenance
+# Human-run destructive subcommands on these commands are worth a
+# notification in their own right (the data, the policies that protect it,
+# the audit targets and the object store identities).
+destructive_commands:
+  - purefs
+  - purebucket
+  - purepolicy
+  - purelog
+  - pureobjaccount
+  - pureobjuser
+destructive_subcommands:
+  - destroy
+  - eradicate
+  - delete
+  - remove
+  - disconnect
+  - demote
+# Checkout of the baseline repository (one <array>.yml per array with
+# ntp_servers and dns), absolute path. A separate checkout, not this tree:
+# apply_baseline.yml runs `git pull` in it.
+baseline_dir: /opt/flashblade-eda-baseline
+# Port the change control rulebook listens on for the git push webhook. The
+# POST must carry X-Hub-Signature-256 (GitHub's hex HMAC-SHA256 of the body)
+# made with the GIT_WEBHOOK_SECRET environment variable.
+webhook_port: 5000
+
+# --- alert runbooks (alerts signal) ---------------------------------------
+# alert code (as a string) -> how to route it. Unknown codes use `default`.
+# route: notify | ticket | tasks (ticket + include playbooks/runbooks/<code>.yml,
+# found relative to the playbook; ansible-rulebook copies all of playbooks/)
+alert_runbooks:
+  default: {route: notify, note: ""}
+  "1000": {route: ticket, severity: warning, note: "Blade unhealthy: health.yml lit its identify LED; open a case with the alert text."}
+  "1016": {route: tasks, severity: critical, note: "Blade evacuation stuck for lack of space: runbooks/1016.yml records the blade and the array's space; free space through a capacity request."}
+  "1019": {route: notify, note: "No qualified NTP server: config_drift.yml reapplies the baseline servers on its next poll if they differ."}
+  "1101": {route: tasks, note: "File system space quota: runbooks/1101.yml records provisioned size and usage; capacity.yml grows it when fs_auto_grow is on."}
+  "1108": {route: ticket, note: "Certificate expiring or expired: renew it (purefb_certs) before clients refuse the array."}
+  "1112": {route: ticket, note: "Object replication connection requires attention: check the array connection and the remote credentials."}
+  "1123": {route: ticket, note: "Default pureuser password still set: change it."}
+  "1139": {route: tasks, severity: critical, note: "Syslog message drop (audit): runbooks/1139.yml lists the data-audit targets and runs the array's connectivity test."}
+  "1140": {route: ticket, note: "Superuser logged in with a password: check the network access policy and who it was (sessions.yml)."}
+# Flag a routed alert on the array (PATCH /alerts flagged): the array's own
+# "automation has seen this" mark, visible in the GUI and the CLI.
+alert_flag_handled: true
+
+# --- capacity approvals and the orchestrator (telemetry signal) -------------
+# Approval requests are written to request_dir (absolute path, writable by
+# the rulebook user, same caveat as alert_log) and answered on the approvals
+# webhook, which needs the APPROVAL_TOKEN environment variable as a bearer
+# token:
+#   curl -X POST http://<eda host>:<approval_port>/endpoint \
+#        -H "Authorization: Bearer $APPROVAL_TOKEN" -H 'Content-Type: application/json' \
+#        -d '{"request_id": "<id>", "approve": true, "approver": "jane", "action": "eradicate_pending"}'
+request_dir: /var/lib/flashblade-eda/requests
+approval_port: 5001
+# Orchestrator handoff. When true, the capacity-at-risk rule posts the event
+# to the automation orchestrator and the approval happens in a workflow
+# there; the request file and the approvals webhook are not used for that
+# rule. When false, the local approval path above runs unchanged. The
+# service account credentials are the AO_CLIENT_ID / AO_CLIENT_SECRET
+# environment variables (env.example), never keys here.
+orchestrator_enabled: false
+orchestrator_url: https://orchestrator.example.com
+# webhook_path of the EDA trigger in the published workflow, one per route
+# (the service account must be bound to each trigger, or the post gets 403).
+orchestrator_paths:
+  capacity: fb_capacity
+orchestrator_validate_certs: true  # the orchestrator normally carries a real certificate
+# When a capacity handoff fails (orchestrator down, token refused), raise the
+# local request anyway so the approvals webhook can answer it. Off by default:
+# on a platform the request file would live in a job's /tmp.
+orchestrator_fallback_local: false
+
+# --- maintenance windows (maintenance.yml) ---------------------------------
+# The change-ticket webhook (bearer APPROVAL_TOKEN, as the approvals one):
+#   curl -X POST http://<eda host>:<maintenance_port>/endpoint \
+#        -H "Authorization: Bearer $APPROVAL_TOKEN" -H 'Content-Type: application/json' \
+#        -d '{"array": "fb-a", "action": "open", "hours": 2, "requested_by": "jane"}'
+maintenance_port: 5003
+maintenance_default_hours: 4      # the array's own default; 1 to 48
+
+# --- sessions (sessions.yml) -----------------------------------------------
+# Networks a management login is expected from; a login from elsewhere is
+# notified at warning. [] disables the check. IPv4 or IPv6 prefixes.
+admin_cidrs: []
+#  - 192.0.2.0/24
+#  - 2001:db8::/48
+failed_login_count: 3             # repeated non-login session events (failed attempts) before a notification
+
+# --- push and zero-code paths ----------------------------------------------
+# purefb_syslog listener (point the arrays' syslog target here, for example
+# tcp://<this host>:5140; 514 needs root). The listener has no
+# authentication: bind it to an interface the arrays reach and list the
+# arrays' addresses in syslog_allowed_sources. An array forwards its whole
+# management log and, with the data-audit service, every file-access audit
+# record, so the listener keeps the Purity programs and drops the rest.
+syslog_host: 0.0.0.0
+syslog_port: 5140
+syslog_allowed_sources: []       # [] = accept any sender; otherwise IPv4/IPv6 addresses or CIDR prefixes, e.g. ["192.0.2.0/24", "2001:db8::10"]
+syslog_programs: [purity.alert, purity.audit, purity.test]   # programs emitted as events; [] or "all" passes every program through as kind other
+syslog_hostnames: {}             # array name or syslog hostname -> inventory array name, when they differ
+# ansible.eda.alertmanager listener for Prometheus rules fed by the array's
+# OpenTelemetry push or the off-box exporter. The stock source has no token
+# option: bind it to an interface only Alertmanager reaches, or put it
+# behind the EDA controller's event streams / a reverse proxy that
+# authenticates.
+alertmanager_host: 0.0.0.0
+alertmanager_port: 5002
+
+# --- REST ----------------------------------------------------------------
+# REST version tasks/fb_rest.yml asks for where no collection module exists
+# (alert flag, maintenance windows, quota usage). 2.16 is Purity//FB 4.5.2,
+# the first with maintenance windows; the QoS playbooks ask for 2.17
+# themselves. Set it higher for a newer array, never above what it serves.
+fb_api_version: "2.16"
+
+# --- Ansible Automation Platform ------------------------------------------
+# The organization the job templates live in; read by the platform rulebooks
+# only, the standalone rulebooks do not use it.
+aap_organization: FlashBlade

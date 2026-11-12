@@ -1,0 +1,65 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Check a management login against the admin networks. Called by the
+# sessions rulebook with target_array, the session fields (session_id,
+# session_user, session_location, session_method, session_interface,
+# session_start_time), admin_cidrs and alert_log. Rulebook conditions have
+# no address arithmetic, so the test runs here with the standard library's
+# ipaddress module (no netaddr, no extra collection): a login whose source
+# address is outside every prefix in admin_cidrs is notified at warning
+# through notify.yml, one inside is only printed. An empty admin_cidrs
+# disables the check. Nothing here touches the array.
+- name: Check a management login against admin_cidrs
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Test the source address against the admin networks
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python }} -"
+        stdin: |
+          import ipaddress, json, os
+          cidrs = json.loads(os.environ["CIDRS"])
+          location = os.environ["LOCATION"].strip()
+          if not cidrs:
+              print(json.dumps({"outside": False, "reason": "admin_cidrs is empty"}))
+              raise SystemExit(0)
+          try:
+              address = ipaddress.ip_address(location)
+          except ValueError:
+              print(json.dumps({"outside": True, "reason": "location is not an IP address"}))
+              raise SystemExit(0)
+          inside = any(address in ipaddress.ip_network(c, strict=False) for c in cidrs)
+          print(json.dumps({"outside": not inside, "reason": "" if inside else "not in admin_cidrs"}))
+      environment:
+        CIDRS: "{{ admin_cidrs | default([]) | to_json }}"
+        LOCATION: "{{ session_location | default('') }}"
+      register: cidr_check
+      changed_when: false
+
+    - name: Keep the verdict
+      ansible.builtin.set_fact:
+        session_outside: "{{ (cidr_check.stdout | from_json).outside | bool }}"
+        session_reason: "{{ (cidr_check.stdout | from_json).reason }}"
+
+    - name: Show the verdict
+      ansible.builtin.debug:
+        msg: >-
+          {{ session_user | default('?') }} logged in to {{ target_array | default('?') }} from {{ session_location | default('?') }}
+          via {{ session_method | default('?') }} ({{ session_interface | default('?') }}):
+          {{ 'outside the admin networks (' ~ session_reason ~ ')' if session_outside | bool
+             else ('inside the admin networks' if session_reason == '' else session_reason) }}
+
+# The notification, only for a login from outside; every task of the
+# imported playbook carries the condition.
+- name: Notify a login from outside the admin networks
+  import_playbook: notify.yml
+  when: hostvars['localhost'].session_outside | default(false) | bool
+  vars:
+    severity: warning
+    subject: "{{ session_user }} logged in to {{ target_array }} from {{ session_location }}"
+    detail: >-
+      {{ hostvars['localhost'].session_reason }}; via {{ session_method | default('') }}
+      ({{ session_interface | default('') }}), session {{ session_id | default('') }}
+      started {{ session_start_time | default('') }}; admin networks {{ admin_cidrs | default([]) }}

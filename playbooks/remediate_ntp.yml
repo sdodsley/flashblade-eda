@@ -1,0 +1,49 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Reapply the baseline NTP servers to one array. Called by the config drift
+# rulebook with target_array, baseline_ntp_servers_csv, observed_ntp_servers
+# and alert_log as extra_vars.
+- name: Reapply baseline NTP servers
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  vars:
+    baseline_ntp_servers: "{{ baseline_ntp_servers_csv.split(',') }}"
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    # On Ansible Automation Platform the FlashBlade API credential injects
+    # credential_array and fb_url/api_token point at that array whatever
+    # host this play runs on, so another array's credential is refused.
+    - name: Refuse to run with another array's credential attached
+      ansible.builtin.assert:
+        that:
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: "the attached credential is for {{ credential_array | default('') }}, not {{ inventory_hostname }}"
+
+    - name: Set NTP servers to baseline
+      everpure.flashblade.purefb_ntp:
+        fb_url: "{{ fb_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        state: present
+        ntp_servers: "{{ baseline_ntp_servers }}"
+      register: ntp_result
+
+    - name: Record the remediation
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'remediation',
+              'severity': 'warning' if ntp_result.changed else 'info', 'array': inventory_hostname,
+              'setting': 'ntp_servers',
+              'observed': {'servers': (observed_ntp_servers | default('')).split(',') | reject('equalto', '') | list},
+              'applied': {'servers': baseline_ntp_servers}, 'changed': ntp_result.changed} | to_json }}
+      delegate_to: localhost

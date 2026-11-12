@@ -1,0 +1,47 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Alert 1139 (message drop for remote syslog, audit related): the array could
+# not deliver data-audit records to a syslog target, so file-access audit
+# events are being lost. List the syslog servers and which carry the
+# data-audit service, then run the array's own connectivity test against
+# them (GET /syslog-servers/test), so the ticket says whether the target is
+# unreachable or just slow. Included by playbooks/alert_runbook.yml (route:
+# tasks) on localhost with the array's credentials resolved onto
+# hostvars[target_array]. Nothing is changed on the array.
+- name: List the syslog servers
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+  vars:
+    fb_rest_url: "{{ hostvars[target_array].fb_url }}"
+    fb_rest_token: "{{ hostvars[target_array].api_token }}"
+    fb_rest_method: GET
+    fb_rest_path: "syslog-servers"
+    fb_rest_ignore_errors: true
+
+- name: Keep the servers and the ones carrying data-audit
+  ansible.builtin.set_fact:
+    syslog_servers: "{{ fb_rest_json.items | default([]) }}"
+    data_audit_servers: >-
+      {{ fb_rest_json.items | default([]) | selectattr('services', 'defined')
+         | selectattr('services', 'contains', 'data-audit') | map(attribute='name') | list }}
+
+- name: Test the syslog servers from the array
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+  vars:
+    fb_rest_url: "{{ hostvars[target_array].fb_url }}"
+    fb_rest_token: "{{ hostvars[target_array].api_token }}"
+    fb_rest_method: GET
+    fb_rest_path: "syslog-servers/test"
+    fb_rest_ignore_errors: true
+
+- name: Say what the runbook found
+  ansible.builtin.debug:
+    msg: >-
+      alert 1139 on {{ target_array }}: syslog servers
+      {{ syslog_servers | map(attribute='uri', default='?') | list }},
+      data-audit on {{ data_audit_servers }};
+      test: {{ fb_rest_json.items | default([]) | map(attribute='success', default='?') | list }}
+      {{ fb_rest_error | default('') }}

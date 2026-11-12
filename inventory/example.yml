@@ -1,0 +1,31 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# One inventory host per array, named exactly as the `name` in purefb_arrays,
+# so an event's array field selects the host for the remediation playbooks.
+# Credentials come from the environment; nothing secret lives in this tree.
+# Copy to inventory/local-<site>.yml (gitignored) and edit. For a single
+# array delete fb-b here and in vars (purefb_arrays).
+all:
+  vars:
+    ansible_connection: local
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  hosts:
+    # ansible-rulebook limits run_playbook to the ruleset's `hosts:` (all), and
+    # the implicit localhost is not part of `all`, so declare it explicitly for
+    # the notify / capacity-request playbooks.
+    localhost:
+    fb-a:
+      fb_url: "{{ lookup('env', 'FB_A_URL') }}"
+      api_token: "{{ lookup('env', 'FB_A_TOKEN') }}"
+    fb-b:
+      fb_url: "{{ lookup('env', 'FB_B_URL') }}"
+      api_token: "{{ lookup('env', 'FB_B_TOKEN') }}"
+    # NFS or SMB clients client_diagnose.yml may look at (client.yml with
+    # client_actions_enabled true): ansible_host must be the address the
+    # array reports for the client, and the connection is SSH, not local.
+    # client-01:
+    #   ansible_host: 192.0.2.10
+    #   ansible_connection: ssh
+    #   ansible_user: root

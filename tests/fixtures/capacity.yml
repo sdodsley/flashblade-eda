@@ -1,0 +1,52 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Recorded-shape telemetry events for replay through ansible.eda.generic: an
+# array at 62 % that the 7-day growth rate fills in 9 days (inside the
+# warning horizon, so a request is raised although the risk threshold is
+# not crossed), and a hard-limited file system at 86 % of its provisioned
+# size. REPLAY_ARRAY is substituted with sed when the test builds its vars
+# file; it must be an inventory host for the candidates to be read.
+fixture_events:
+  - purefb_capacity:
+      array: "REPLAY_ARRAY"
+      time: 1794503490000
+      capacity_bytes: 648743485440000
+      used_bytes: 402220960972800
+      used_pct: 62.0
+      data_reduction: 2.1
+      snapshot_bytes: 12000000000000
+      destroyed_bytes: 3500000000000
+      destroyed_virtual_bytes: 7000000000000
+      total_provisioned_bytes: 900000000000000
+      growth_bytes_per_day: 27000000000000
+      days_to_full: 9
+      days_to_full_known: true
+      file_system_bytes: 380000000000000
+      object_store_bytes: 22220960972800
+      file_system_growth_bytes_per_day: 25000000000000
+      object_store_growth_bytes_per_day: 2000000000000
+      pending_eradication_file_systems: 2
+      pending_eradication_buckets: 1
+      pending_eradication_snapshots: 5
+      top_growers:
+        - {name: analytics-scratch, kind: file_system, delta_bytes: 900000000000, total_physical: 120000000000000}
+        - {name: ml-datasets, kind: bucket, delta_bytes: 400000000000, total_physical: 20000000000000}
+      drr_week_ago: 2.3
+      drr_drop_pct: 8.7
+      drr_drop: false
+      snapshot_growth_pct: 4.0
+      snapshot_surge: false
+      others:
+        - {array: fb-b, used_pct: 41.0}
+  - purefb_fs_quota:
+      array: "REPLAY_ARRAY"
+      file_system: eda-demo-quota
+      provisioned: 1073741824
+      used_bytes: 923795456
+      used_pct: 86.0
+      hard_limit_enabled: true
+      snapshot_bytes: 0
+      qos_policy: ""
+      destroyed: false

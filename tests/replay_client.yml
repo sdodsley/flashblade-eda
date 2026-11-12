@@ -1,0 +1,131 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Replay a noisy-client event and the file system behind it through the
+# client rules, without fio on a real client.
+#   { cat vars/local-lab.yml; \
+#     sed "/^---$/d; /^#/d; s/REPLAY_ARRAY/<array>/; s/REPLAY_CLIENT/<client ip>/" tests/fixtures/client.yml; } \
+#     > tests/out/vars_replay.yml
+#   FBEDA_VARS=tests/out/vars_replay.yml ./run.sh tests/replay_client.yml
+# Expected: with client_actions_enabled true and an inventory host whose
+# ansible_host is the client address, one client record with the commands
+# run there (client_diagnose.yml), else one notification; with qos_auto_cap
+# true one qos_cap record for eda-demo-quota (the file system must exist on
+# the array, REST 2.17 or later), else one notification. The rules are
+# copies of the ones in extensions/eda/rulebooks/client.yml, throttles
+# included; tests/unit/test_rulebooks.py fails if a copy drifts.
+- name: FlashBlade clients (replayed fixtures)
+  hosts: all
+
+  sources:
+    - ansible.eda.generic:
+        payload: "{{ fixture_events }}"
+        loop_count: 1
+        delay: 1
+
+  rules:
+    - name: Noisy client on a slow array - diagnose on the host
+      condition: >-
+        event.purefb_client_performance.high_share_polls is defined and
+        event.purefb_client_performance.high_share_polls >= vars.client_consecutive_polls and
+        event.purefb_client_performance.baseline_known == true and
+        event.purefb_client_performance.array_write_latency_ratio >= vars.baseline_latency_ratio and
+        vars.client_actions_enabled == true
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.purefb_client_performance.array
+          - event.purefb_client_performance.client
+      action:
+        run_playbook:
+          name: playbooks/client_diagnose.yml
+          extra_vars:
+            target_array: "{{ event.purefb_client_performance.array }}"
+            client: "{{ event.purefb_client_performance.client }}"
+            ops_share_pct: "{{ event.purefb_client_performance.ops_share_pct }}"
+            high_share_polls: "{{ event.purefb_client_performance.high_share_polls }}"
+            reads_per_sec: "{{ event.purefb_client_performance.reads_per_sec }}"
+            writes_per_sec: "{{ event.purefb_client_performance.writes_per_sec }}"
+            usec_per_write_op: "{{ event.purefb_client_performance.usec_per_write_op }}"
+            array_usec_per_write_op: "{{ event.purefb_client_performance.array_usec_per_write_op }}"
+            array_write_latency_ratio: "{{ event.purefb_client_performance.array_write_latency_ratio }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Noisy client on a slow array - notify
+      condition: >-
+        event.purefb_client_performance.high_share_polls is defined and
+        event.purefb_client_performance.high_share_polls >= vars.client_consecutive_polls and
+        event.purefb_client_performance.baseline_known == true and
+        event.purefb_client_performance.array_write_latency_ratio >= vars.baseline_latency_ratio and
+        vars.client_actions_enabled == false
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.purefb_client_performance.array
+          - event.purefb_client_performance.client
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "Client {{ event.purefb_client_performance.client }} holds {{ event.purefb_client_performance.ops_share_pct }}% of the ops on {{ event.purefb_client_performance.array }}"
+            detail: >-
+              iops={{ event.purefb_client_performance.reads_per_sec }}r/{{ event.purefb_client_performance.writes_per_sec }}w
+              write={{ event.purefb_client_performance.usec_per_write_op }}us
+              for {{ event.purefb_client_performance.high_share_polls }} polls;
+              array write={{ event.purefb_client_performance.array_usec_per_write_op }}us,
+              {{ event.purefb_client_performance.array_write_latency_ratio }}x the same half hour last week
+            target_array: "{{ event.purefb_client_performance.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: File system hogging the array - apply a temporary QoS cap
+      condition: >-
+        event.purefb_fs_performance.high_share_polls is defined and
+        event.purefb_fs_performance.high_share_polls >= vars.client_consecutive_polls and
+        event.purefb_fs_performance.ops_share_pct >= vars.qos_cap_min_share_pct and
+        event.purefb_fs_performance.eda_capped == false and
+        vars.qos_auto_cap == true
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefb_fs_performance.array
+          - event.purefb_fs_performance.file_system
+      action:
+        run_playbook:
+          name: playbooks/qos_cap.yml
+          extra_vars:
+            target_array: "{{ event.purefb_fs_performance.array }}"
+            object_kind: file_system
+            object_name: "{{ event.purefb_fs_performance.file_system }}"
+            cap_ops_per_sec: "{{ qos_cap_ops_per_sec }}"
+            reason: >-
+              iops={{ event.purefb_fs_performance.reads_per_sec }}r/{{ event.purefb_fs_performance.writes_per_sec }}w
+              ({{ event.purefb_fs_performance.ops_share_pct }}% of the array) for {{ event.purefb_fs_performance.high_share_polls }} polls
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: File system hogging the array - notify
+      condition: >-
+        event.purefb_fs_performance.high_share_polls is defined and
+        event.purefb_fs_performance.high_share_polls >= vars.client_consecutive_polls and
+        event.purefb_fs_performance.ops_share_pct >= vars.qos_cap_min_share_pct and
+        event.purefb_fs_performance.eda_capped == false and
+        vars.qos_auto_cap == false
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.purefb_fs_performance.array
+          - event.purefb_fs_performance.file_system
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "File system {{ event.purefb_fs_performance.file_system }} holds {{ event.purefb_fs_performance.ops_share_pct }}% of the ops on {{ event.purefb_fs_performance.array }}"
+            detail: >-
+              iops={{ event.purefb_fs_performance.reads_per_sec }}r/{{ event.purefb_fs_performance.writes_per_sec }}w
+              write={{ event.purefb_fs_performance.usec_per_write_op }}us
+              for {{ event.purefb_fs_performance.high_share_polls }} polls; qos_policy={{ event.purefb_fs_performance.qos_policy }}
+            target_array: "{{ event.purefb_fs_performance.array }}"
+            alert_log: "{{ alert_log }}"

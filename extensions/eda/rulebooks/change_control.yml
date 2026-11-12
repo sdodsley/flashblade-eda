@@ -1,0 +1,183 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Change control: react to the audit record, not to the next drift poll.
+#
+# Every configuration change the array logs arrives as purefb_audit with the
+# user, user agent, source address, interface, command, subcommand and
+# arguments. Anything on a governed command by an identity other than the
+# automation service account is reconciled from the git baseline
+# (baseline_dir/<array>.yml) and reported with who did it and how.
+# Destructive subcommands by humans on the data-holding commands are
+# reported. Automation's own changes are logged. Nothing is actioned inside
+# a maintenance window.
+#
+# The second ruleset listens for a git push webhook and applies the baseline
+# forward to every array: merges apply, out-of-band changes revert.
+# The push is verified with GitHub's signature header: GIT_WEBHOOK_SECRET
+# comes from the environment (run.sh --env-vars), the sender signs the exact
+# body as X-Hub-Signature-256: sha256=<hex hmac>, and unsigned or wrongly
+# signed posts are rejected by the source.
+
+- name: FlashBlade change control
+  hosts: all
+
+  sources:
+    - sdodsley.flashblade_eda.purefb_events:
+        arrays: "{{ config_arrays | default(purefb_arrays) }}"
+        signals: [audits]
+        audits_interval: "{{ audits_interval }}"
+        automation_users: "{{ automation_users }}"
+        automation_user_agents: "{{ automation_user_agents }}"
+        destructive_subcommands: "{{ destructive_subcommands }}"
+
+  rules:
+    # A poll that fails once is a blip; one that keeps failing is an array
+    # nobody is watching. The first failure of a streak is recorded at info
+    # (the alert log; under the default Slack floor), once an hour per array
+    # and signal, because health.yml already pages for the array itself and
+    # nine rulebooks poll the same arrays; a streak the plugin flags as
+    # escalated (poll_error_escalate, default 10 polls) pages at critical once
+    # every six hours, since a signal that fails on its own is worth a page.
+    # Anything in between is logged below.
+    - name: Poll failing for many polls - escalate
+      condition: >-
+        event.purefb_poll_error is defined and
+        event.purefb_poll_error.escalate == true
+      throttle:
+        once_within: 6 hours
+        group_by_attributes:
+          - event.purefb_poll_error.array
+          - event.purefb_poll_error.signal
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row"
+            detail: "{{ event.purefb_poll_error.error }}"
+            target_array: "{{ event.purefb_poll_error.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Poll failed - notify once
+      condition: >-
+        event.purefb_poll_error is defined and
+        event.purefb_poll_error.consecutive == 1
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_poll_error.array
+          - event.purefb_poll_error.signal
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: info
+            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed"
+            detail: "{{ event.purefb_poll_error.error }}"
+            target_array: "{{ event.purefb_poll_error.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Report poll errors without acting
+      condition: event.purefb_poll_error is defined
+      action:
+        debug:
+          msg: "poll failed ({{ event.purefb_poll_error.signal }} on {{ event.purefb_poll_error.array }}): {{ event.purefb_poll_error.error }}"
+
+    - name: Governed setting changed by a human - reconcile from the baseline
+      condition: >-
+        event.purefb_audit.command is defined and
+        event.purefb_audit.command in vars.governed_commands and
+        event.purefb_audit.by_automation == false and
+        event.purefb_audit.maintenance_active == false
+      throttle:
+        once_within: 2 minutes
+        group_by_attributes:
+          - event.purefb_audit.array
+          - event.purefb_audit.command
+      action:
+        run_playbook:
+          name: playbooks/reconcile.yml
+          extra_vars:
+            target_array: "{{ event.purefb_audit.array }}"
+            baseline_dir: "{{ baseline_dir }}"
+            audit_user: "{{ event.purefb_audit.user }}"
+            audit_interface: "{{ event.purefb_audit.user_interface }}"
+            audit_ip_address: "{{ event.purefb_audit.ip_address }}"
+            audit_command: "{{ event.purefb_audit.command }}"
+            audit_subcommand: "{{ event.purefb_audit.subcommand }}"
+            audit_arguments: "{{ event.purefb_audit.arguments }}"
+            audit_time: "{{ event.purefb_audit.time }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Governed setting changed during a maintenance window - log only
+      condition: >-
+        event.purefb_audit.command is defined and
+        event.purefb_audit.command in vars.governed_commands and
+        event.purefb_audit.by_automation == false and
+        event.purefb_audit.maintenance_active == true
+      action:
+        debug:
+          msg: >-
+            maintenance window on {{ event.purefb_audit.array }}: {{ event.purefb_audit.user }} ran
+            {{ event.purefb_audit.command }} {{ event.purefb_audit.subcommand }} {{ event.purefb_audit.arguments }}; not reconciled
+
+    # The plugin sets destructive when the subcommand contains one of
+    # destructive_subcommands (purefs destroy, purebucket eradicate,
+    # purepolicy nfs delete, ...); the command list keeps it to the
+    # commands that hold or protect data.
+    - name: Destructive command by a human - notify
+      condition: >-
+        event.purefb_audit.command is defined and
+        event.purefb_audit.command in vars.destructive_commands and
+        event.purefb_audit.destructive == true and
+        event.purefb_audit.by_automation == false
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "{{ event.purefb_audit.user }} ran {{ event.purefb_audit.command }} {{ event.purefb_audit.subcommand }} on {{ event.purefb_audit.array }}"
+            detail: >-
+              arguments: {{ event.purefb_audit.arguments }}
+              (from {{ event.purefb_audit.ip_address }} over {{ event.purefb_audit.user_interface }},
+              audit {{ event.purefb_audit.audit_id }})
+            target_array: "{{ event.purefb_audit.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Change by the automation account - log
+      condition: event.purefb_audit.by_automation == true
+      action:
+        debug:
+          msg: >-
+            automation ({{ event.purefb_audit.user }}) on {{ event.purefb_audit.array }}:
+            {{ event.purefb_audit.command }} {{ event.purefb_audit.subcommand }} {{ event.purefb_audit.arguments }}
+
+- name: FlashBlade baseline apply on git push
+  hosts: all
+
+  sources:
+    - ansible.eda.webhook:
+        host: 0.0.0.0
+        port: "{{ webhook_port }}"
+        hmac_secret: "{{ GIT_WEBHOOK_SECRET }}"
+        hmac_algo: sha256
+        hmac_header: x-hub-signature-256
+        hmac_format: hex
+
+  rules:
+    - name: Push to the baseline repository - apply the baseline to every array
+      condition: event.payload.ref is defined and event.payload.after is defined
+      throttle:
+        once_within: 1 minute
+        group_by_attributes:
+          - event.payload.ref
+      action:
+        run_playbook:
+          name: playbooks/apply_baseline.yml
+          extra_vars:
+            baseline_dir: "{{ baseline_dir }}"
+            git_ref: "{{ event.payload.ref }}"
+            git_after: "{{ event.payload.after | default('') }}"
+            alert_log: "{{ alert_log }}"

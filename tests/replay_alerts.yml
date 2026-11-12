@@ -1,0 +1,101 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Replay recorded alert events through the alert rules.
+#   { cat vars/local-lab.yml; sed "/^---$/d; /^#/d; s/REPLAY_ARRAY/<array>/" tests/fixtures/alerts.yml; } > tests/out/vars_replay.yml
+#   FBEDA_VARS=tests/out/vars_replay.yml ./run.sh tests/replay_alerts.yml
+# With alert_flag_handled true the flag step runs against the array and the
+# fixture ids do not exist there, so each flag is recorded as refused; that
+# is the path being exercised. Rules are copies of the ones in
+# extensions/eda/rulebooks/alerts.yml; tests/unit/test_rulebooks.py fails if
+# a copy drifts from the real rule.
+- name: FlashBlade alerts (replayed fixtures)
+  hosts: all
+
+  sources:
+    - ansible.eda.generic:
+        payload: "{{ fixture_events }}"
+        loop_count: 1
+        delay: 1
+
+  rules:
+    - name: Alert opened during a maintenance window - log only
+      condition: >-
+        event.purefb_alert.transition == "opened" and
+        event.purefb_alert.maintenance_active == true
+      action:
+        debug:
+          msg: "maintenance window on {{ event.purefb_alert.array }}: alert {{ event.purefb_alert.code }} {{ event.purefb_alert.summary }} not routed"
+
+    - name: Alert opened - route through the runbook map and flag it on the array
+      condition: >-
+        event.purefb_alert.transition == "opened" and
+        event.purefb_alert.maintenance_active == false and
+        vars.alert_flag_handled == true
+      actions:
+        - run_playbook:
+            name: playbooks/alert_runbook.yml
+            extra_vars:
+              severity: "{{ event.purefb_alert.severity }}"
+              transition: opened
+              subject: "{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }}: {{ event.purefb_alert.summary }}"
+              component: "{{ event.purefb_alert.component_type }}:{{ event.purefb_alert.component_name }}"
+              component_name: "{{ event.purefb_alert.component_name }}"
+              array_action: "{{ event.purefb_alert.action }}"
+              knowledge_base_url: "{{ event.purefb_alert.knowledge_base_url }}"
+              alert_description: "{{ event.purefb_alert.description }}"
+              alert_variables: "{{ event.purefb_alert.variables }}"
+              target_array: "{{ event.purefb_alert.array }}"
+              alert_id: "{{ event.purefb_alert.alert_id }}"
+              alert_code: "{{ event.purefb_alert.code }}"
+              alert_runbooks: "{{ alert_runbooks }}"
+              fb_api_version: "{{ fb_api_version }}"
+              alert_log: "{{ alert_log }}"
+        - run_playbook:
+            name: playbooks/flag_alert.yml
+            extra_vars:
+              target_array: "{{ event.purefb_alert.array }}"
+              alert_id: "{{ event.purefb_alert.alert_id }}"
+              alert_code: "{{ event.purefb_alert.code }}"
+              fb_api_version: "{{ fb_api_version }}"
+              alert_log: "{{ alert_log }}"
+
+    - name: Alert opened - route through the runbook map
+      condition: >-
+        event.purefb_alert.transition == "opened" and
+        event.purefb_alert.maintenance_active == false and
+        vars.alert_flag_handled == false
+      action:
+        run_playbook:
+          name: playbooks/alert_runbook.yml
+          extra_vars:
+            severity: "{{ event.purefb_alert.severity }}"
+            transition: opened
+            subject: "{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }}: {{ event.purefb_alert.summary }}"
+            component: "{{ event.purefb_alert.component_type }}:{{ event.purefb_alert.component_name }}"
+            component_name: "{{ event.purefb_alert.component_name }}"
+            array_action: "{{ event.purefb_alert.action }}"
+            knowledge_base_url: "{{ event.purefb_alert.knowledge_base_url }}"
+            alert_description: "{{ event.purefb_alert.description }}"
+            alert_variables: "{{ event.purefb_alert.variables }}"
+            target_array: "{{ event.purefb_alert.array }}"
+            alert_id: "{{ event.purefb_alert.alert_id }}"
+            alert_code: "{{ event.purefb_alert.code }}"
+            alert_runbooks: "{{ alert_runbooks }}"
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Alert closed - notify
+      condition: event.purefb_alert.transition == "closed"
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: info
+            subject: "{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }} closed: {{ event.purefb_alert.summary }}"
+            detail: "open for {{ event.purefb_alert.resolved_after_s }} s; {{ event.purefb_alert.action }}"
+            target_array: "{{ event.purefb_alert.array }}"
+            alert_id: "{{ event.purefb_alert.alert_id }}"
+            alert_code: "{{ event.purefb_alert.code }}"
+            alert_log: "{{ alert_log }}"

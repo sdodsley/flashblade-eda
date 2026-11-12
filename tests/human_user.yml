@@ -1,0 +1,40 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Test helper: create (or remove) a local array user that plays the "human"
+# in the change control tests, with an API token. purefb_user mints the
+# token when api is true and returns it as user_info (a new token every run:
+# the module is not idempotent for that option); it is written to an env
+# file (mode 0600) and never printed.
+#   ansible-playbook -i inventory/local-lab.yml tests/human_user.yml \
+#       -e target_array=<array> -e human_user=eda-human -e human_password=... \
+#       -e human_env_file=tests/out/human.env [-e user_state=absent]
+# Keep the file under tests/out (gitignored) and remove it, with the user
+# (user_state=absent), when the test is done.
+- name: Test "human" user for change control tests
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  no_log: true
+  tasks:
+    - name: Create or remove the user, with an API token
+      everpure.flashblade.purefb_user:
+        fb_url: "{{ fb_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ human_user }}"
+        password: "{{ human_password }}"
+        role: array_admin
+        api: "{{ user_state | default('present') == 'present' }}"
+        state: "{{ user_state | default('present') }}"
+      register: human
+
+    - name: Write the env file
+      when: user_state | default('present') == 'present'
+      ansible.builtin.copy:
+        dest: "{{ human_env_file }}"
+        mode: "0600"
+        content: |
+          HUMAN_URL={{ fb_url }}
+          HUMAN_TOKEN={{ human.user_info }}
+      delegate_to: localhost

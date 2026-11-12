@@ -1,0 +1,141 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Replay a capacity event and a file system quota event through the capacity
+# rules, to exercise the request path (or the orchestrator handoff) and the
+# file system growth without waiting for an array to fill.
+#   { cat vars/local-lab.yml; sed "/^---$/d; /^#/d; s/REPLAY_ARRAY/<array>/" tests/fixtures/capacity.yml; } \
+#     > tests/out/vars_replay.yml
+#   FBEDA_VARS=tests/out/vars_replay.yml ./run.sh tests/replay_capacity.yml
+# Expected with orchestrator_enabled false: one capacity_request record (the
+# array is 9 days from full) and a request file listing what is pending
+# eradication on the array; with fs_auto_grow true one fs_grow record for
+# eda-demo-quota (the file system must exist on the array and be
+# hard-limited, lab exit test 2), else an fs quota notification. With
+# orchestrator_enabled true the capacity event goes to the orchestrator
+# instead (one orchestrator_post record, status 202). ansible-rulebook
+# matches one rule per event unless the ruleset sets match_multiple_rules,
+# same as the real rulebook. The rules are copies of the ones in
+# extensions/eda/rulebooks/capacity.yml, throttles included; the approvals
+# webhook ruleset is not replayed. tests/unit/test_rulebooks.py fails if a
+# copy drifts from the real rule.
+- name: FlashBlade capacity (replayed fixtures)
+  hosts: all
+
+  sources:
+    - ansible.eda.generic:
+        payload: "{{ fixture_events }}"
+        loop_count: 1
+        delay: 1
+
+  rules:
+    - name: Report poll errors without acting
+      condition: event.purefb_poll_error is defined
+      action:
+        debug:
+          msg: "poll failed ({{ event.purefb_poll_error.signal }} on {{ event.purefb_poll_error.array }}): {{ event.purefb_poll_error.error }}"
+
+    - name: Array at capacity risk - raise an approval request
+      condition: >-
+        event.purefb_capacity.used_pct is defined and
+        (event.purefb_capacity.used_pct >= vars.capacity_risk_pct or
+         (event.purefb_capacity.days_to_full_known == true and
+          event.purefb_capacity.days_to_full <= vars.capacity_days_to_full_warning)) and
+        vars.orchestrator_enabled == false
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefb_capacity.array
+      action:
+        run_playbook:
+          name: playbooks/capacity_request.yml
+          extra_vars:
+            at_risk_array: "{{ event.purefb_capacity.array }}"
+            used_pct: "{{ event.purefb_capacity.used_pct }}"
+            used_bytes: "{{ event.purefb_capacity.used_bytes }}"
+            capacity_bytes: "{{ event.purefb_capacity.capacity_bytes }}"
+            days_to_full: "{{ event.purefb_capacity.days_to_full }}"
+            growth_bytes_per_day: "{{ event.purefb_capacity.growth_bytes_per_day }}"
+            top_growers: "{{ event.purefb_capacity.top_growers }}"
+            pending_eradication_file_systems: "{{ event.purefb_capacity.pending_eradication_file_systems }}"
+            pending_eradication_buckets: "{{ event.purefb_capacity.pending_eradication_buckets }}"
+            pending_eradication_snapshots: "{{ event.purefb_capacity.pending_eradication_snapshots }}"
+            candidate_targets: "{{ event.purefb_capacity.others }}"
+            request_dir: "{{ request_dir }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Array at capacity risk - hand the event to the orchestrator
+      condition: >-
+        event.purefb_capacity.used_pct is defined and
+        (event.purefb_capacity.used_pct >= vars.capacity_risk_pct or
+         (event.purefb_capacity.days_to_full_known == true and
+          event.purefb_capacity.days_to_full <= vars.capacity_days_to_full_warning)) and
+        vars.orchestrator_enabled == true
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefb_capacity.array
+      action:
+        run_playbook:
+          name: playbooks/orchestrator_post.yml
+          extra_vars:
+            orchestrator_url: "{{ orchestrator_url }}"
+            orchestrator_webhook_path: "{{ orchestrator_paths.capacity }}"
+            orchestrator_validate_certs: "{{ orchestrator_validate_certs }}"
+            event: "{{ event }}"
+            array: "{{ event.purefb_capacity.array }}"
+            alert_log: "{{ alert_log }}"
+            orchestrator_fallback_local: "{{ orchestrator_fallback_local }}"
+            request_dir: "{{ request_dir }}"
+
+    - name: Hard-limited file system near its provisioned size - grow it
+      condition: >-
+        event.purefb_fs_quota.used_pct is defined and
+        event.purefb_fs_quota.used_pct >= vars.fs_quota_grow_pct and
+        event.purefb_fs_quota.hard_limit_enabled == true and
+        event.purefb_fs_quota.destroyed == false and
+        vars.fs_auto_grow == true
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_fs_quota.array
+          - event.purefb_fs_quota.file_system
+      action:
+        run_playbook:
+          name: playbooks/grow_fs.yml
+          extra_vars:
+            target_array: "{{ event.purefb_fs_quota.array }}"
+            file_system: "{{ event.purefb_fs_quota.file_system }}"
+            observed_provisioned: "{{ event.purefb_fs_quota.provisioned }}"
+            observed_used_bytes: "{{ event.purefb_fs_quota.used_bytes }}"
+            observed_used_pct: "{{ event.purefb_fs_quota.used_pct }}"
+            fs_grow_step_pct: "{{ fs_grow_step_pct }}"
+            fs_grow_max_bytes: "{{ fs_grow_max_bytes }}"
+            fs_grow_exclude: "{{ fs_grow_exclude }}"
+            request_dir: "{{ request_dir }}"
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: File system near its provisioned size - notify
+      condition: >-
+        event.purefb_fs_quota.used_pct is defined and
+        event.purefb_fs_quota.used_pct >= vars.fs_quota_warn_pct and
+        event.purefb_fs_quota.destroyed == false
+      throttle:
+        once_within: 6 hours
+        group_by_attributes:
+          - event.purefb_fs_quota.array
+          - event.purefb_fs_quota.file_system
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "{{ event.purefb_fs_quota.array }}/{{ event.purefb_fs_quota.file_system }} is at {{ event.purefb_fs_quota.used_pct }}% of its provisioned size"
+            detail: >-
+              used={{ event.purefb_fs_quota.used_bytes }} of provisioned={{ event.purefb_fs_quota.provisioned }} bytes,
+              hard_limit={{ event.purefb_fs_quota.hard_limit_enabled }}
+              snapshots={{ event.purefb_fs_quota.snapshot_bytes }} bytes qos_policy={{ event.purefb_fs_quota.qos_policy }}
+            target_array: "{{ event.purefb_fs_quota.array }}"
+            alert_log: "{{ alert_log }}"

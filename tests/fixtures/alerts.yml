@@ -1,0 +1,116 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Recorded-shape alert events for replay through ansible.eda.generic: a file
+# system quota alert (1101, per-code runbook tasks), a superuser password
+# login (1140, routed as a ticket), the fixture code with runbook tasks
+# (9999), an unknown code (default route), a blade alert opened inside a
+# maintenance window (logged, not routed) and the quota alert closing.
+# REPLAY_ARRAY is substituted with sed when the test builds its vars file.
+fixture_events:
+  - purefb_alert:
+      array: "REPLAY_ARRAY"
+      transition: opened
+      maintenance_active: false
+      alert_id: "900000001"
+      code: 1101
+      severity: warning
+      state: open
+      component_type: file-system
+      component_name: eda-demo-quota
+      summary: "File system eda-demo-quota has reached 80% of its space quota"
+      description: "The file system is at 86% of its provisioned size and is hard-limited."
+      action: >-
+        Increase the file system's provisioned size or free space in it; a hard-limited
+        file system becomes read-only at 100%.
+      knowledge_base_url: "https://support.purestorage.com/?cid=Alert_1101"
+      flagged: false
+      variables:
+        file_system: eda-demo-quota
+        percentage: 86
+  - purefb_alert:
+      array: "REPLAY_ARRAY"
+      transition: opened
+      maintenance_active: false
+      alert_id: "900000002"
+      code: 1140
+      severity: warning
+      state: open
+      component_type: network-access-policies
+      component_name: default-network-access-policy
+      summary: "Superuser logged in using a password"
+      description: "A superuser account logged in with a password instead of an API token or SSO."
+      action: "Review the network access policy and the session list."
+      knowledge_base_url: "https://support.purestorage.com/?cid=Alert_1140"
+      flagged: false
+      variables: {}
+  - purefb_alert:
+      array: "REPLAY_ARRAY"
+      transition: opened
+      maintenance_active: false
+      alert_id: "900000003"
+      code: 9999
+      severity: warning
+      state: open
+      component_type: fixture
+      component_name: fixture
+      summary: "(fixture): per-code runbook tasks"
+      description: ""
+      action: ""
+      knowledge_base_url: ""
+      flagged: false
+      variables: {}
+  - purefb_alert:
+      array: "REPLAY_ARRAY"
+      transition: opened
+      maintenance_active: false
+      alert_id: "900000004"
+      code: 777
+      severity: info
+      state: open
+      component_type: fixture
+      component_name: fixture
+      summary: "(fixture): unknown code takes the default route"
+      description: ""
+      action: ""
+      knowledge_base_url: ""
+      flagged: false
+      variables: {}
+  - purefb_alert:
+      array: "REPLAY_ARRAY"
+      transition: opened
+      maintenance_active: true
+      alert_id: "900000005"
+      code: 1000
+      severity: critical
+      state: open
+      component_type: fb
+      component_name: CH1.FB3
+      summary: "Blade CH1.FB3 is unhealthy during maintenance"
+      description: ""
+      action: ""
+      knowledge_base_url: "https://support.purestorage.com/?cid=Alert_1000"
+      flagged: false
+      variables: {}
+  - purefb_alert:
+      array: "REPLAY_ARRAY"
+      transition: closed
+      maintenance_active: false
+      alert_id: "900000001"
+      code: 1101
+      severity: warning
+      previous_severity: null
+      severity_raised: false
+      state: closed
+      component_type: file-system
+      component_name: eda-demo-quota
+      summary: "File system eda-demo-quota has reached 80% of its space quota"
+      description: ""
+      action: ""
+      knowledge_base_url: "https://support.purestorage.com/?cid=Alert_1101"
+      flagged: true
+      variables:
+        file_system: eda-demo-quota
+      age_s: 300
+      resolved_after_s: 300

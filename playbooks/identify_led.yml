@@ -1,0 +1,86 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Light (or clear) the identify LED on a hardware component and record it.
+# Called by the health rulebook with target_array, component, component_type,
+# component_status, component_details, led_state and alert_log, plus the
+# LLDP neighbour the plugin read for a port (neighbor_switch,
+# neighbor_switch_address, neighbor_port; empty for a blade or a power
+# supply), so the record names the switch port a dead uplink sits on. The
+# recovery rule also passes `severity` (info), which overrides the severity
+# otherwise derived from component_status. Components without an identify
+# LED make the module fail; that is recorded and the notification still
+# goes out.
+- name: Identify LED on a hardware component
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    - name: Set the identify LED
+      everpure.flashblade.purefb_hardware:
+        fb_url: "{{ fb_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ component }}"
+        enabled: "{{ led_state | default(true) | bool }}"
+      register: led_result
+      ignore_errors: true
+
+    - name: Record the action
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'hardware',
+              'severity': severity | default('critical' if component_status | default('') in ['critical', 'unhealthy', 'failed'] else 'warning'),
+              'array': inventory_hostname, 'component': component,
+              'type': component_type | default(''), 'status': component_status | default(''),
+              'details': component_details | default(''),
+              'slot': component_slot | default(''), 'serial': component_serial | default(''),
+              'neighbor_switch': neighbor_switch | default(''),
+              'neighbor_switch_address': neighbor_switch_address | default(''),
+              'neighbor_port': neighbor_port | default(''),
+              'identify_led': 'on' if led_state | default(true) | bool else 'off',
+              'led_changed': led_result.changed | default(false),
+              'led_error': (led_result.msg | default('')) if led_result.failed | default(false) else ''} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the action
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} {{ component }} ({{ component_type | default('') }}) is {{ component_status | default('') }};
+          {{ ('switch port ' ~ neighbor_switch ~ ' ' ~ neighbor_port ~ '; ') if neighbor_switch | default('') else '' }}
+          identify LED {{ 'on' if led_state | default(true) | bool else 'off' }}
+          {{ '(failed: ' ~ led_result.msg ~ ')' if led_result.failed | default(false)
+             else '(changed)' if led_result.changed | default(false) else '(unchanged)' }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one
+    # (led_state is on or off, as in the alert-log record).
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'component': component,
+              'led_state': ('on' if led_state | default(true) | bool else 'off'),
+              'led_changed': led_result.changed | default(false),
+              'led_error': ((led_result.msg | default('')) if led_result.failed | default(false) else ''),
+              'neighbor_switch': neighbor_switch | default(''), 'neighbor_port': neighbor_port | default('')} }}
+      run_once: true
+      delegate_to: localhost

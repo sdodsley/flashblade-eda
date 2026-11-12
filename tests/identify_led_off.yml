@@ -1,0 +1,18 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Test helper: clear an identify LED after the replay test.
+#   ansible-playbook -i inventory/local-lab.yml tests/identify_led_off.yml \
+#       -e target_array=<array> -e component=CH1.FB1
+- name: Clear an identify LED
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Turn the identify LED off
+      everpure.flashblade.purefb_hardware:
+        fb_url: "{{ fb_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ component }}"
+        enabled: false

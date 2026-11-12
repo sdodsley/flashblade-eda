@@ -1,0 +1,63 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Recorded-shape health events for replay through ansible.eda.generic: a
+# critical blade, an uplink port down during a maintenance window with its
+# LLDP neighbour, the LAG that port belongs to running one link short, and
+# the blade recovering, as purefb_events would emit them. Real hardware
+# cannot be failed on demand, so the health rules are exercised from here.
+# REPLAY_ARRAY / REPLAY_COMPONENT are substituted with sed when the test
+# builds its vars file (a --vars file is not templated); REPLAY_COMPONENT is
+# the component the identify LED is set on (a real blade on the array, such
+# as CH1.FB1, so the actuator runs against hardware).
+fixture_events:
+  - purefb_hardware:
+      array: "REPLAY_ARRAY"
+      component: "REPLAY_COMPONENT"
+      type: fb
+      status: critical
+      details: "replayed fixture: blade reported critical"
+      slot: 1
+      serial: "FIXTURE"
+      part_number: "FIXTURE"
+      identify_enabled: false
+      neighbor_switch: ""
+      neighbor_switch_address: ""
+      neighbor_port: ""
+      maintenance_active: false
+  - purefb_hardware:
+      array: "REPLAY_ARRAY"
+      component: CH1.FM1.ETH1
+      type: eth
+      status: unhealthy
+      details: "replayed fixture: uplink port down during maintenance"
+      slot: 1
+      serial: "FIXTURE"
+      part_number: "FIXTURE"
+      identify_enabled: false
+      neighbor_switch: rsw-a19-43
+      neighbor_switch_address: 192.0.2.72
+      neighbor_port: Ethernet1/13
+      maintenance_active: true
+  - purefb_lag:
+      array: "REPLAY_ARRAY"
+      lag: uplink
+      status: healthy
+      lag_speed: 700000000000
+      expected_speed: 800000000000
+      ports:
+        - {name: CH1.FM1.ETH1, neighbor_switch: rsw-a19-43, neighbor_port: Ethernet1/13}
+        - {name: CH1.FM1.ETH2, neighbor_switch: rsw-a19-43, neighbor_port: Ethernet1/14}
+        - {name: CH1.FM2.ETH1, neighbor_switch: rsw-a19-44, neighbor_port: Ethernet1/13}
+        - {name: CH1.FM2.ETH2, neighbor_switch: rsw-a19-44, neighbor_port: Ethernet1/14}
+      degraded: true
+      recovered: false
+      maintenance_active: false
+  - purefb_hardware_recovered:
+      array: "REPLAY_ARRAY"
+      component: "REPLAY_COMPONENT"
+      type: fb
+      status: healthy
+      previous_status: critical
+      maintenance_active: false

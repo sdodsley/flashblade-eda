@@ -1,0 +1,90 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# One FlashBlade REST request, for what everpure.flashblade has no module
+# for: the alert flag, maintenance windows, QoS policies, per-file-system
+# quota usage. Included with:
+#   fb_rest_method        GET | POST | PATCH | DELETE (default GET)
+#   fb_rest_path          path under /api/<version>/, query string included,
+#                         e.g. "maintenance-windows?names=array"
+#   fb_rest_body          optional JSON body; write it as one templated dict
+#                         ("{{ {'timeout': ms} }}") so numbers stay numbers
+#   fb_rest_status_codes  statuses that count as success (default [200])
+#   fb_rest_ignore_errors true leaves the decision to the caller (default
+#                         false: a status outside the list fails the include)
+#   fb_rest_api_version   REST version (default fb_api_version, else "2.16":
+#                         maintenance windows arrived there; QoS policies need
+#                         2.17 and the callers say so)
+#   fb_rest_url, fb_rest_token  default to fb_url and api_token of the host
+# Leaves fb_rest_status (compare it with | int), fb_rest_json (the parsed
+# body, {} when there is none) and fb_rest_error (the array's first error
+# message, "" on success) set.
+# Session: POST /api/login with the api-token header returns an x-auth-token
+# header that the request carries; POST /api/logout ends the session, so the
+# array's session list does not grow by one login per playbook run. Every
+# task that handles a token runs with no_log, and the failure message names
+# the request, never the token. The certificate check is off by default
+# (fb_validate_certs), as disable_warnings is on the modules: lab arrays
+# carry self-signed certificates.
+- name: Settle the array URL for the request
+  ansible.builtin.set_fact:
+    fb_rest_base: "{{ (fb_rest_url | default(fb_url)) | regex_replace('/+$', '') }}"
+
+- name: Log in to the array
+  ansible.builtin.uri:
+    url: "{{ fb_rest_base }}/api/login"
+    method: POST
+    headers:
+      api-token: "{{ fb_rest_token | default(api_token) }}"
+    status_code: [200]
+    validate_certs: "{{ fb_validate_certs | default(false) | bool }}"
+    timeout: 30
+  register: fb_login
+  no_log: true
+
+- name: Send the request
+  ansible.builtin.uri:
+    url: "{{ fb_rest_base }}/api/{{ fb_rest_api_version | default(fb_api_version | default('2.16')) }}/{{ fb_rest_path }}"
+    method: "{{ fb_rest_method | default('GET') }}"
+    headers:
+      x-auth-token: "{{ fb_login.x_auth_token }}"
+    body_format: json
+    body: "{{ fb_rest_body | default(omit) }}"
+    return_content: true
+    validate_certs: "{{ fb_validate_certs | default(false) | bool }}"
+    timeout: 60
+  register: fb_rest_raw
+  failed_when: false
+  no_log: true
+
+- name: Keep the outcome (status, body and error message; never the token)
+  ansible.builtin.set_fact:
+    fb_rest_status: "{{ fb_rest_raw.status | default(-1) }}"
+    fb_rest_json: "{{ fb_rest_raw.json | default({}) }}"
+    fb_rest_error: >-
+      {{ '' if (fb_rest_raw.status | default(-1) | int) in [200, 201, 202, 204]
+         else (fb_rest_raw.json.errors[0].message
+               if (fb_rest_raw.json.errors | default([]) | length) > 0
+               else fb_rest_raw.msg | default('no response')) | string | truncate(240) }}
+
+- name: Log out of the array
+  ansible.builtin.uri:
+    url: "{{ fb_rest_base }}/api/logout"
+    method: POST
+    headers:
+      x-auth-token: "{{ fb_login.x_auth_token }}"
+    validate_certs: "{{ fb_validate_certs | default(false) | bool }}"
+    timeout: 30
+  failed_when: false
+  no_log: true
+
+- name: Refuse a failed request unless the caller handles the outcome
+  when: not (fb_rest_ignore_errors | default(false) | bool)
+  ansible.builtin.assert:
+    that:
+      - fb_rest_status | int in (fb_rest_status_codes | default([200]))
+    quiet: true
+    fail_msg: >-
+      {{ fb_rest_method | default('GET') }} {{ fb_rest_path }} on {{ fb_rest_base }}
+      returned {{ fb_rest_status }}: {{ fb_rest_error | trim }}

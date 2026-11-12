@@ -1,0 +1,76 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Flag one alert on the array: PATCH /alerts?names=<alert name> with
+# {"flagged": true}. The alerts rulebook runs this after the runbook map when
+# alert_flag_handled is true, so the GUI and `purealert list` show which
+# alerts automation has already routed, and the mark survives a rulebook
+# restart, which no rulebook fact does. No collection module sets the flag,
+# hence tasks/fb_rest.yml. Called with target_array, alert_id, alert_code,
+# alert_log and optionally fb_api_version. A refused PATCH (an alert that
+# closed meanwhile, an older REST version) is recorded, not fatal.
+- name: Flag an alert on the array
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    # The alert name is the numeric id the array shows; it goes into a query
+    # string, so anything else is refused.
+    - name: Refuse an alert id that is not the array's numeric alert name
+      ansible.builtin.assert:
+        that:
+          - alert_id | string is match('^[0-9]+$')
+        fail_msg: "alert_id {{ alert_id | string | truncate(40) }} is not a numeric alert name"
+
+    - name: Flag the alert
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: PATCH
+        fb_rest_path: "alerts?names={{ alert_id }}"
+        fb_rest_body: {flagged: true}
+        fb_rest_ignore_errors: true
+
+    - name: Record the flag
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'alert_flag', 'severity': 'info',
+              'array': inventory_hostname, 'alert_id': alert_id | string, 'alert_code': alert_code | default(''),
+              'flagged': fb_rest_status | int == 200,
+              'error': fb_rest_error | trim} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the outcome
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} alert {{ alert_id }}:
+          {{ 'flagged' if fb_rest_status | int == 200 else 'not flagged (' ~ fb_rest_status ~ ' ' ~ fb_rest_error | trim ~ ')' }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'alert_id': alert_id | string,
+              'flagged': fb_rest_status | int == 200} }}
+      run_once: true
+      delegate_to: localhost

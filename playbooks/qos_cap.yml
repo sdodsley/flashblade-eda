@@ -1,0 +1,174 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Apply a temporary QoS cap to a file system or a bucket. Called by the
+# client rulebook with target_array, object_kind (file_system | bucket),
+# object_name, cap_ops_per_sec, reason and alert_log.
+#
+# The state is the policy name: a QoS policy eda-cap-<object> at
+# cap_ops_per_sec is created when it does not exist and assigned to the
+# object (PATCH /file-systems or /buckets {"qos_policy": {"name": ...}}).
+# FlashBlade has no tags, so the name is what the plugin reads back as
+# eda_capped and what an operator sees in `purepolicy qos list`. An object
+# that already carries a policy of its own is left alone and recorded: a
+# cap never replaces a limit a human set, and the lift (qos_lift.yml) only
+# removes eda-cap- policies. Both modes are idempotent: a second cap on an
+# object already capped changes nothing. QoS policies arrived with REST
+# 2.17, so the requests ask for that version whatever fb_api_version says.
+# No collection module manages QoS policies in everpure.flashblade 1.29,
+# hence tasks/fb_rest.yml throughout.
+# verify: on the lab, POST /qos-policies takes max_total_ops_per_sec and the
+# object PATCH takes qos_policy as a name reference.
+- name: Temporary QoS cap on a file system or bucket
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  vars:
+    policy_name: "eda-cap-{{ object_name }}"
+    object_path: "{{ 'file-systems' if object_kind == 'file_system' else 'buckets' }}"
+    qos_api_version: "2.17"
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    - name: Refuse an unknown object kind, a name that is not plain, or a cap that is not a count
+      ansible.builtin.assert:
+        that:
+          - object_kind in ['file_system', 'bucket']
+          - object_name is match('^[A-Za-z0-9][A-Za-z0-9_.:-]*$')
+          - cap_ops_per_sec | int > 0
+        fail_msg: >-
+          object_kind {{ object_kind | string | truncate(20) }} must be file_system or bucket,
+          object_name {{ object_name | string | truncate(80) }} a plain name and cap_ops_per_sec a positive count
+
+    - name: Read the object
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "{{ object_path }}?names={{ object_name }}"
+        fb_rest_api_version: "{{ qos_api_version }}"
+        fb_rest_ignore_errors: true
+
+    - name: Keep what the array said
+      ansible.builtin.set_fact:
+        before: "{{ (fb_rest_json.items | default([{}]))[0] | default({}) }}"
+        read_error: "{{ fb_rest_error | trim }}"
+
+    - name: Refuse an object the array does not know
+      ansible.builtin.assert:
+        that:
+          - before.name is defined
+        fail_msg: "{{ object_kind }} {{ object_name }} on {{ inventory_hostname }}: {{ read_error if read_error else 'not found' }}; nothing capped"
+
+    - name: Note the policy it carries now
+      ansible.builtin.set_fact:
+        previous_policy: "{{ before.qos_policy.name | default('', true) }}"
+
+    - name: Decide what to do
+      ansible.builtin.set_fact:
+        already_capped: "{{ previous_policy == policy_name }}"
+        has_own_policy: "{{ previous_policy | length > 0 and previous_policy != policy_name }}"
+        assign_status: 0
+        assign_error: ""
+        policy_created: false
+
+    - name: Apply the cap
+      when: not already_capped | bool and not has_own_policy | bool
+      block:
+        - name: Look for the cap policy
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+          vars:
+            fb_rest_method: GET
+            fb_rest_path: "qos-policies?names={{ policy_name }}"
+            fb_rest_api_version: "{{ qos_api_version }}"
+            fb_rest_ignore_errors: true
+
+        - name: Note whether it exists
+          ansible.builtin.set_fact:
+            policy_exists: "{{ fb_rest_status | int == 200 and (fb_rest_json.items | default([]) | length) > 0 }}"
+
+        - name: Create the cap policy
+          when: not policy_exists | bool
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+          vars:
+            fb_rest_method: POST
+            fb_rest_path: "qos-policies?names={{ policy_name }}"
+            fb_rest_body: "{{ {'max_total_ops_per_sec': cap_ops_per_sec | int} }}"
+            fb_rest_api_version: "{{ qos_api_version }}"
+            fb_rest_status_codes: [200, 201]
+
+        - name: Note the creation
+          ansible.builtin.set_fact:
+            policy_created: "{{ not policy_exists | bool }}"
+
+        - name: Assign the cap policy to the object
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+          vars:
+            fb_rest_method: PATCH
+            fb_rest_path: "{{ object_path }}?names={{ object_name }}"
+            fb_rest_body: "{{ {'qos_policy': {'name': policy_name}} }}"
+            fb_rest_api_version: "{{ qos_api_version }}"
+            fb_rest_ignore_errors: true
+
+        - name: Keep the assignment outcome
+          ansible.builtin.set_fact:
+            assign_status: "{{ fb_rest_status }}"
+            assign_error: "{{ fb_rest_error | trim }}"
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        capped: "{{ assign_status | int == 200 }}"
+        outcome: >-
+          {{ 'already capped' if already_capped | bool
+             else ('left alone: carries its own policy ' ~ previous_policy) if has_own_policy | bool
+             else 'capped' if assign_status | int == 200
+             else 'assignment refused by the array: ' ~ assign_error }}
+
+    - name: Record the action
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'qos_cap',
+              'severity': 'warning' if capped | bool else 'info',
+              'array': inventory_hostname, 'object_kind': object_kind, 'object_name': object_name,
+              'policy': policy_name, 'cap_ops_per_sec': cap_ops_per_sec | int,
+              'previous_policy': previous_policy, 'policy_created': policy_created | bool,
+              'reason': reason | default('') | trim, 'outcome': outcome | trim,
+              'changed': capped | bool} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the action
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} {{ object_kind }} {{ object_name }}: QoS cap {{ cap_ops_per_sec }} ops/s
+          ({{ policy_name }}) :: {{ outcome | trim }} :: {{ reason | default('') | trim }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'object_kind': object_kind, 'object_name': object_name,
+              'policy': policy_name, 'capped': capped | bool or already_capped | bool,
+              'previous_policy': previous_policy, 'changed': capped | bool} }}
+      run_once: true
+      delegate_to: localhost

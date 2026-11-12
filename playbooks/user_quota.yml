@@ -1,0 +1,200 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# A user (alert 1106) or group (1107) reached its quota on a file system:
+# read the quota and the usage behind the alert and record them; raise the
+# quota when the site allows it. Called by the quota_user rulebook with
+# target_array, the alert fields (alert_id, alert_code, component_name,
+# alert_variables, ...), auto_raise_user_quota, user_quota_step_pct,
+# user_quota_max_bytes and alert_log.
+# /quotas/users and /usage/users take file_system_names plus uids or
+# user_names (groups: gids or group_names), so the file system and the
+# principal come from the alert. verify: on the lab the alert's variables
+# carry the file system and the user or group under those names; the
+# fallbacks are the component_name and nothing, in which case the alert is
+# recorded as not identified and nothing is read.
+# The raise uses purefb_userquota / purefb_groupquota (quota in MiB) by
+# user_quota_step_pct, never above user_quota_max_bytes (0 = never raise:
+# the record is the notification and a human decides).
+- name: User or group quota reached
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  vars:
+    is_group: "{{ alert_code | int == 1107 }}"
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    - name: Work out the file system and the principal the alert names
+      ansible.builtin.set_fact:
+        quota_fs: "{{ alert_variables.file_system | default(component_name | default(''), true) }}"
+        quota_principal: >-
+          {{ (alert_variables.group | default(alert_variables.gid | default('', true), true)) if is_group | bool
+             else (alert_variables.user | default(alert_variables.uid | default('', true), true)) }}
+
+    - name: Decide whether the alert can be read back
+      ansible.builtin.set_fact:
+        identified: >-
+          {{ quota_fs is match('^[A-Za-z0-9][A-Za-z0-9_.:-]*$') and
+             (quota_principal | trim) is match('^[A-Za-z0-9][A-Za-z0-9_.@\\-]*$') }}
+        principal_is_id: "{{ (quota_principal | trim) is match('^[0-9]+$') }}"
+        principal: "{{ quota_principal | trim }}"
+
+    - name: Record an alert whose file system or principal could not be identified
+      when: not identified | bool
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'user_quota', 'severity': 'warning',
+              'array': inventory_hostname, 'alert_id': alert_id | string, 'alert_code': alert_code,
+              'file_system': quota_fs, 'principal': principal,
+              'principal_kind': 'group' if is_group | bool else 'user',
+              'outcome': 'not identified from the alert: ' ~ (subject | default('')),
+              'variables': alert_variables | default({})} | to_json }}
+      delegate_to: localhost
+
+    - name: Stop when there is nothing to read
+      when: not identified | bool
+      ansible.builtin.meta: end_play
+
+    - name: Read the quota
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: >-
+          quotas/{{ 'groups' if is_group | bool else 'users' }}?file_system_names={{ quota_fs }}&{{
+          ('gids' if is_group | bool else 'uids') if principal_is_id | bool
+          else ('group_names' if is_group | bool else 'user_names') }}={{ principal }}
+        fb_rest_ignore_errors: true
+
+    # verify: the quota item's fields are quota and usage on the lab
+    # (UserQuota / GroupQuota models); a principal without an explicit quota
+    # inherits the file system default and has no item here.
+    - name: Keep the quota
+      ansible.builtin.set_fact:
+        quota_item: "{{ (fb_rest_json.items | default([{}]))[0] | default({}) }}"
+        quota_error: "{{ fb_rest_error | trim }}"
+
+    - name: Read the usage
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: >-
+          usage/{{ 'groups' if is_group | bool else 'users' }}?file_system_names={{ quota_fs }}&{{
+          ('gids' if is_group | bool else 'uids') if principal_is_id | bool
+          else ('group_names' if is_group | bool else 'user_names') }}={{ principal }}
+        fb_rest_ignore_errors: true
+
+    - name: Keep the usage and the effective quota
+      ansible.builtin.set_fact:
+        usage_item: "{{ (fb_rest_json.items | default([{}]))[0] | default({}) }}"
+        usage_error: "{{ fb_rest_error | trim }}"
+
+    - name: Settle the figures
+      ansible.builtin.set_fact:
+        quota_bytes: "{{ quota_item.quota | default(usage_item.quota | default(0, true), true) | int }}"
+        usage_bytes: "{{ usage_item.usage | default(quota_item.usage | default(0, true), true) | int }}"
+
+    # The raise: a step above the current quota, rounded up to a MiB, capped
+    # at user_quota_max_bytes; no raise without an explicit quota to raise.
+    - name: Work out the new quota
+      ansible.builtin.set_fact:
+        new_quota_bytes: >-
+          {{ [((((quota_bytes | int) * (100 + (user_quota_step_pct | default(25) | int))) / 100 / 1048576) | round(0, 'ceil') | int) * 1048576,
+              user_quota_max_bytes | default(0) | int] | min }}
+
+    - name: Decide whether to raise it
+      ansible.builtin.set_fact:
+        raise_wanted: >-
+          {{ auto_raise_user_quota | default(false) | bool and
+             (user_quota_max_bytes | default(0) | int) > 0 and
+             (quota_bytes | int) > 0 and
+             (new_quota_bytes | int) > (quota_bytes | int) }}
+
+    - name: Raise the user quota
+      when: raise_wanted | bool and not is_group | bool
+      everpure.flashblade.purefb_userquota:
+        fb_url: "{{ fb_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ quota_fs }}"
+        quota: "{{ ((new_quota_bytes | int) / 1048576) | int }}M"
+        uid: "{{ (principal | int) if principal_is_id | bool else omit }}"
+        uname: "{{ principal if not principal_is_id | bool else omit }}"
+      register: user_raised
+
+    - name: Raise the group quota
+      when: raise_wanted | bool and is_group | bool
+      everpure.flashblade.purefb_groupquota:
+        fb_url: "{{ fb_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ quota_fs }}"
+        quota: "{{ ((new_quota_bytes | int) / 1048576) | int }}M"
+        gid: "{{ (principal | int) if principal_is_id | bool else omit }}"
+        gname: "{{ principal if not principal_is_id | bool else omit }}"
+      register: group_raised
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        raised: "{{ (user_raised.changed | default(false)) or (group_raised.changed | default(false)) }}"
+        outcome: >-
+          {{ ('quota raised to ' ~ new_quota_bytes ~ ' bytes') if (user_raised.changed | default(false)) or (group_raised.changed | default(false))
+             else 'read only: auto_raise_user_quota is off' if not (auto_raise_user_quota | default(false) | bool)
+             else 'read only: user_quota_max_bytes is 0 (ask)' if (user_quota_max_bytes | default(0) | int) == 0
+             else 'read only: no explicit quota to raise' if (quota_bytes | int) == 0
+             else 'read only: already at the ceiling' }}
+
+    - name: Record the quota and usage
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'user_quota',
+              'severity': 'warning' if raised | bool else 'info',
+              'array': inventory_hostname, 'alert_id': alert_id | string, 'alert_code': alert_code,
+              'file_system': quota_fs, 'principal': principal,
+              'principal_kind': 'group' if is_group | bool else 'user',
+              'quota_bytes': quota_bytes | int, 'usage_bytes': usage_bytes | int,
+              'percentage_used': usage_item.percentage_used | default(''),
+              'raised': raised | bool, 'new_quota_bytes': new_quota_bytes | int if raised | bool else 0,
+              'outcome': outcome | trim,
+              'error': (quota_error ~ ' ' ~ usage_error) | trim} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the outcome
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}/{{ quota_fs }} {{ 'group' if is_group | bool else 'user' }} {{ principal }}:
+          usage {{ usage_bytes }} of quota {{ quota_bytes }} bytes :: {{ outcome | trim }}
+          {{ (quota_error ~ ' ' ~ usage_error) | trim }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'file_system': quota_fs, 'principal': principal,
+              'quota_bytes': quota_bytes | int, 'usage_bytes': usage_bytes | int,
+              'raised': raised | bool, 'new_quota_bytes': new_quota_bytes | int if raised | bool else 0} }}
+      run_once: true
+      delegate_to: localhost

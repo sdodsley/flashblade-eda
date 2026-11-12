@@ -1,0 +1,149 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Sessions: who logged in to the array, from where and how. /sessions lists
+# every management login with its source address (location), method
+# (password, API token, SSO) and interface; the plugin emits each new one.
+# The automation account's own sessions are ignored.
+#
+#   login from outside admin_cidrs -> playbooks/session_check.yml tests the
+#                                     address against the list (plain python
+#                                     ipaddress, so no extra collection) and
+#                                     notifies at warning when it is outside;
+#                                     an empty list disables the check
+#   repeated non-login events       -> failed attempts and lockouts repeated
+#                                     failed_login_count times: notify
+#   alerts 1140 and 1123            -> superuser login with a password
+#                                     (network-access-policies) and the
+#                                     default pureuser password still set:
+#                                     notify at warning; alerts.yml tickets
+#                                     them as well through the runbook map
+
+- name: FlashBlade sessions
+  hosts: all
+
+  sources:
+    - sdodsley.flashblade_eda.purefb_events:
+        arrays: "{{ purefb_arrays }}"
+        signals: [sessions, alerts]
+        sessions_interval: "{{ sessions_interval }}"
+        alerts_interval: "{{ alerts_interval }}"
+
+  rules:
+    # A poll that fails once is a blip; one that keeps failing is an array
+    # nobody is watching. The first failure of a streak is recorded at info
+    # (the alert log; under the default Slack floor), once an hour per array
+    # and signal, because health.yml already pages for the array itself and
+    # nine rulebooks poll the same arrays; a streak the plugin flags as
+    # escalated (poll_error_escalate, default 10 polls) pages at critical once
+    # every six hours, since a signal that fails on its own is worth a page.
+    # Anything in between is logged below.
+    - name: Poll failing for many polls - escalate
+      condition: >-
+        event.purefb_poll_error is defined and
+        event.purefb_poll_error.escalate == true
+      throttle:
+        once_within: 6 hours
+        group_by_attributes:
+          - event.purefb_poll_error.array
+          - event.purefb_poll_error.signal
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row"
+            detail: "{{ event.purefb_poll_error.error }}"
+            target_array: "{{ event.purefb_poll_error.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Poll failed - notify once
+      condition: >-
+        event.purefb_poll_error is defined and
+        event.purefb_poll_error.consecutive == 1
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_poll_error.array
+          - event.purefb_poll_error.signal
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: info
+            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed"
+            detail: "{{ event.purefb_poll_error.error }}"
+            target_array: "{{ event.purefb_poll_error.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Report poll errors without acting
+      condition: event.purefb_poll_error is defined
+      action:
+        debug:
+          msg: "poll failed ({{ event.purefb_poll_error.signal }} on {{ event.purefb_poll_error.array }}): {{ event.purefb_poll_error.error }}"
+
+    - name: Login by a human - check the source address against admin_cidrs
+      condition: >-
+        event.purefb_session.event is defined and
+        event.purefb_session.event == "login" and
+        event.purefb_session.user not in vars.automation_users
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefb_session.array
+          - event.purefb_session.user
+          - event.purefb_session.location
+      action:
+        run_playbook:
+          name: playbooks/session_check.yml
+          extra_vars:
+            target_array: "{{ event.purefb_session.array }}"
+            session_id: "{{ event.purefb_session.session_id }}"
+            session_user: "{{ event.purefb_session.user }}"
+            session_location: "{{ event.purefb_session.location }}"
+            session_method: "{{ event.purefb_session.method }}"
+            session_interface: "{{ event.purefb_session.user_interface }}"
+            session_start_time: "{{ event.purefb_session.start_time }}"
+            admin_cidrs: "{{ admin_cidrs }}"
+            alert_log: "{{ alert_log }}"
+
+    # verify: the event value the array uses for a failed login on the lab
+    # (the session list shows login and logout; failed attempts arrive as
+    # another event word with event_count climbing).
+    - name: Repeated failed logins - notify
+      condition: >-
+        event.purefb_session.event is defined and
+        event.purefb_session.event not in ["login", "logout"] and
+        event.purefb_session.event_count >= vars.failed_login_count
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.purefb_session.array
+          - event.purefb_session.user
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "{{ event.purefb_session.event_count }} x {{ event.purefb_session.event }} for {{ event.purefb_session.user }} on {{ event.purefb_session.array }}"
+            detail: "from {{ event.purefb_session.location }} via {{ event.purefb_session.method }} ({{ event.purefb_session.user_interface }}); session {{ event.purefb_session.session_id }}"
+            target_array: "{{ event.purefb_session.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Superuser password login or default password - notify
+      condition: >-
+        event.purefb_alert.code is defined and
+        event.purefb_alert.code in [1140, 1123] and
+        event.purefb_alert.transition in ["opened", "updated"]
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: "{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }}: {{ event.purefb_alert.summary }}"
+            detail: "{{ event.purefb_alert.description }} {{ event.purefb_alert.action }}"
+            target_array: "{{ event.purefb_alert.array }}"
+            alert_id: "{{ event.purefb_alert.alert_id }}"
+            alert_code: "{{ event.purefb_alert.code }}"
+            alert_log: "{{ alert_log }}"

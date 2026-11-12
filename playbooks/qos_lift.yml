@@ -1,0 +1,148 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Lift a temporary QoS cap from a file system or a bucket. Called by the
+# client rulebook with target_array, object_kind (file_system | bucket),
+# object_name, reason and alert_log once the object's share has been normal
+# for qos_lift_normal_polls.
+#
+# Only an eda-cap- policy is removed: the assignment is cleared on the
+# object (PATCH with an empty policy name, the form the file system PATCH
+# uses to drop a share or client policy) and the policy itself is deleted,
+# so nothing of the cap remains. An object carrying a policy with another
+# name, or none, is left alone and recorded; a duplicate lift changes
+# nothing. QoS policies arrived with REST 2.17, so the requests ask for
+# that version whatever fb_api_version says.
+# verify: on the lab, PATCH {"qos_policy": {"name": ""}} clears the
+# assignment; if it does not, DELETE /qos-policies/members?member_names=
+# <object>&policy_names=<policy> is the other form.
+- name: Lift a temporary QoS cap
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  vars:
+    object_path: "{{ 'file-systems' if object_kind == 'file_system' else 'buckets' }}"
+    qos_api_version: "2.17"
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    - name: Refuse an unknown object kind or a name that is not plain
+      ansible.builtin.assert:
+        that:
+          - object_kind in ['file_system', 'bucket']
+          - object_name is match('^[A-Za-z0-9][A-Za-z0-9_.:-]*$')
+        fail_msg: >-
+          object_kind {{ object_kind | string | truncate(20) }} must be file_system or bucket and
+          object_name {{ object_name | string | truncate(80) }} a plain name
+
+    - name: Read the object
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "{{ object_path }}?names={{ object_name }}"
+        fb_rest_api_version: "{{ qos_api_version }}"
+        fb_rest_ignore_errors: true
+
+    - name: Keep what the array said
+      ansible.builtin.set_fact:
+        before: "{{ (fb_rest_json.items | default([{}]))[0] | default({}) }}"
+        read_error: "{{ fb_rest_error | trim }}"
+
+    - name: Refuse an object the array does not know
+      ansible.builtin.assert:
+        that:
+          - before.name is defined
+        fail_msg: "{{ object_kind }} {{ object_name }} on {{ inventory_hostname }}: {{ read_error if read_error else 'not found' }}; nothing lifted"
+
+    - name: Note the policy it carries now
+      ansible.builtin.set_fact:
+        previous_policy: "{{ before.qos_policy.name | default('', true) }}"
+        clear_status: 0
+        clear_error: ""
+        policy_deleted: false
+
+    - name: Lift the cap
+      when: previous_policy is match('^eda-cap-')
+      block:
+        - name: Clear the policy assignment on the object
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+          vars:
+            fb_rest_method: PATCH
+            fb_rest_path: "{{ object_path }}?names={{ object_name }}"
+            fb_rest_body: "{{ {'qos_policy': {'name': ''}} }}"
+            fb_rest_api_version: "{{ qos_api_version }}"
+            fb_rest_ignore_errors: true
+
+        - name: Keep the outcome
+          ansible.builtin.set_fact:
+            clear_status: "{{ fb_rest_status }}"
+            clear_error: "{{ fb_rest_error | trim }}"
+
+        # The policy is named for this object alone, so once the assignment
+        # is gone nothing else uses it.
+        - name: Delete the cap policy
+          when: clear_status | int == 200
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+          vars:
+            fb_rest_method: DELETE
+            fb_rest_path: "qos-policies?names={{ previous_policy }}"
+            fb_rest_api_version: "{{ qos_api_version }}"
+            fb_rest_ignore_errors: true
+
+        - name: Note the deletion
+          ansible.builtin.set_fact:
+            policy_deleted: "{{ clear_status | int == 200 and fb_rest_status | int == 200 }}"
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        lifted: "{{ clear_status | int == 200 }}"
+        outcome: >-
+          {{ 'not capped by this automation' ~ ((': carries ' ~ previous_policy) if previous_policy else '')
+             if previous_policy is not match('^eda-cap-')
+             else 'lifted' if clear_status | int == 200
+             else 'refused by the array: ' ~ clear_error }}
+
+    - name: Record the action
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'qos_lift', 'severity': 'info',
+              'array': inventory_hostname, 'object_kind': object_kind, 'object_name': object_name,
+              'policy': previous_policy, 'policy_deleted': policy_deleted | bool,
+              'reason': reason | default('') | trim, 'outcome': outcome | trim,
+              'changed': lifted | bool} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the action
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} {{ object_kind }} {{ object_name }}: QoS lift :: {{ outcome | trim }} :: {{ reason | default('') | trim }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'object_kind': object_kind, 'object_name': object_name,
+              'policy': previous_policy, 'lifted': lifted | bool, 'changed': lifted | bool} }}
+      run_once: true
+      delegate_to: localhost

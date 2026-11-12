@@ -1,0 +1,42 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Alert 1101 (file system space quota at 80, 90 or 100 %): read the file
+# system the alert names and put its provisioned size, usage and hard-limit
+# setting in the record, so the ticket says how close to read-only it is.
+# Included by playbooks/alert_runbook.yml (route: tasks) on localhost with
+# the array's credentials resolved onto hostvars[target_array]. Nothing is
+# grown here: capacity.yml grows a hard-limited file system on the plugin's
+# purefb_fs_quota event when fs_auto_grow is true (playbooks/grow_fs.yml),
+# otherwise a human decides from this record.
+# verify: on the lab the file system name arrives in component_name; the
+# alert's variables may carry it too, so both are tried.
+- name: Pick the file system the alert names
+  ansible.builtin.set_fact:
+    quota_fs: "{{ alert_variables.file_system | default(component_name | default(''), true) }}"
+
+- name: Read the file system
+  when: quota_fs is match('^[A-Za-z0-9][A-Za-z0-9_.:-]*$')
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+  vars:
+    fb_rest_url: "{{ hostvars[target_array].fb_url }}"
+    fb_rest_token: "{{ hostvars[target_array].api_token }}"
+    fb_rest_method: GET
+    fb_rest_path: "file-systems?names={{ quota_fs }}"
+    fb_rest_ignore_errors: true
+
+- name: Keep what the array said
+  ansible.builtin.set_fact:
+    quota_fs_item: "{{ (fb_rest_json.items | default([{}]))[0] | default({}) }}"
+    quota_fs_error: "{{ fb_rest_error | default('file system name not recognised: ' ~ quota_fs) }}"
+
+- name: Say what the runbook found
+  ansible.builtin.debug:
+    msg: >-
+      alert 1101 on {{ target_array }}/{{ quota_fs }}:
+      {{ ('provisioned=' ~ quota_fs_item.provisioned ~ ' used=' ~ quota_fs_item.space.virtual
+          ~ ' hard_limit=' ~ quota_fs_item.hard_limit_enabled
+          ~ ' snapshots=' ~ quota_fs_item.space.snapshots ~ ' bytes')
+         if quota_fs_item.provisioned is defined else ('not read: ' ~ quota_fs_error) }}

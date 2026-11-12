@@ -1,0 +1,49 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Alert 1016 (blade evacuation cannot complete for lack of space): read the
+# blades and the array's space so the ticket carries the evacuating blade,
+# its progress and how full the array is. Freeing space is a capacity
+# decision: capacity.yml raises the approval request when the array is at
+# risk, and an approver answers it; this runbook only puts the facts next to
+# the alert. Included by playbooks/alert_runbook.yml (route: tasks) on
+# localhost with the array's credentials resolved onto hostvars[target_array].
+- name: Read the blades
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+  vars:
+    fb_rest_url: "{{ hostvars[target_array].fb_url }}"
+    fb_rest_token: "{{ hostvars[target_array].api_token }}"
+    fb_rest_method: GET
+    fb_rest_path: "blades"
+    fb_rest_ignore_errors: true
+
+- name: Keep the blades that are not healthy
+  ansible.builtin.set_fact:
+    evacuating_blades: "{{ fb_rest_json.items | default([]) | rejectattr('status', 'equalto', 'healthy') | list }}"
+
+- name: Read the array's space
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+  vars:
+    fb_rest_url: "{{ hostvars[target_array].fb_url }}"
+    fb_rest_token: "{{ hostvars[target_array].api_token }}"
+    fb_rest_method: GET
+    fb_rest_path: "arrays/space"
+    fb_rest_ignore_errors: true
+
+- name: Keep the space figures
+  ansible.builtin.set_fact:
+    array_space: "{{ (fb_rest_json.items | default([{}]))[0] | default({}) }}"
+
+- name: Say what the runbook found
+  ansible.builtin.debug:
+    msg: >-
+      alert 1016 on {{ target_array }}: blades not healthy
+      {{ evacuating_blades | map(attribute='name') | list }}
+      ({{ evacuating_blades | map(attribute='status') | list }},
+      progress {{ evacuating_blades | map(attribute='progress', default='') | list }});
+      array capacity={{ array_space.capacity | default('?') }}
+      used={{ array_space.space.total_physical | default('?') }}
+      destroyed={{ array_space.space.destroyed | default('?') }} bytes

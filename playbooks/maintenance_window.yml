@@ -1,0 +1,132 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Open, extend or close the array's maintenance window. Called by the
+# maintenance rulebook (change-ticket webhook) with target_array,
+# window_action (open | extend | close), window_hours, requested_by and
+# alert_log; or by hand:
+#   ansible-playbook -i inventory/local-lab.yml playbooks/maintenance_window.yml \
+#       -e target_array=fb-a -e window_action=open -e window_hours=2 -e alert_log=$PWD/alerts.log
+# One window per array (Purity//FB 4.5.2, REST 2.16): POST
+# /maintenance-windows?names=array with the timeout in milliseconds opens it
+# or, when one is active, replaces its expiry (that is the extend); DELETE
+# /maintenance-windows?names=array closes it. The array accepts 1 to 48
+# hours. No collection module manages the window, hence tasks/fb_rest.yml.
+# The window before and after is recorded; a refusal (an older REST
+# version, a bad length) is recorded, not fatal, so the ticket flow sees it.
+# verify: the POST body is one object {"timeout": <ms>}, as the SDK's
+# post_maintenance_windows(names, maintenance_window) sends it.
+- name: Open, extend or close a maintenance window
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    - name: Refuse an unknown action or a length the array would not take
+      ansible.builtin.assert:
+        that:
+          - window_action in ['open', 'extend', 'close']
+          - window_action == 'close' or (window_hours | int >= 1 and window_hours | int <= 48)
+        fail_msg: >-
+          window_action {{ window_action | string | truncate(20) }} must be open, extend or close and
+          window_hours {{ window_hours | default('') | string | truncate(10) }} between 1 and 48
+
+    - name: Read the current window
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "maintenance-windows"
+        fb_rest_ignore_errors: true
+
+    - name: Keep the window before the change
+      ansible.builtin.set_fact:
+        window_before: "{{ (fb_rest_json.items | default([{}]))[0] | default({}) }}"
+        read_status: "{{ fb_rest_status }}"
+        read_error: "{{ fb_rest_error | trim }}"
+
+    - name: Open or extend the window
+      when: window_action in ['open', 'extend']
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: POST
+        fb_rest_path: "maintenance-windows?names=array"
+        fb_rest_body: "{{ {'timeout': (window_hours | int) * 3600000} }}"
+        fb_rest_ignore_errors: true
+
+    # Closing a window that is not open is already the desired state.
+    - name: Close the window
+      when: window_action == 'close' and window_before.name is defined
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: DELETE
+        fb_rest_path: "maintenance-windows?names=array"
+        fb_rest_ignore_errors: true
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        attempted: "{{ window_action != 'close' or window_before.name is defined }}"
+        window_after: "{{ (fb_rest_json.items | default([{}]))[0] | default({}) if window_action != 'close' else {} }}"
+        write_status: "{{ fb_rest_status if (window_action != 'close' or window_before.name is defined) else 200 }}"
+        write_error: "{{ fb_rest_error | trim if (window_action != 'close' or window_before.name is defined) else '' }}"
+
+    - name: Settle the outcome text
+      ansible.builtin.set_fact:
+        changed: "{{ attempted | bool and write_status | int == 200 }}"
+        outcome: >-
+          {{ 'no window to close' if not attempted | bool
+             else (window_action ~ 'ed' if window_action != 'close' else 'closed') if write_status | int == 200
+             else 'refused by the array: ' ~ write_error }}
+
+    - name: Record the window
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'maintenance_window', 'severity': 'info',
+              'array': inventory_hostname, 'action': window_action,
+              'hours': (window_hours | int) if window_action != 'close' else 0,
+              'requested_by': requested_by | default(''),
+              'had_window': window_before.name is defined,
+              'expires_before': window_before.expires | default(''),
+              'expires_after': window_after.expires | default(''),
+              'status': write_status | int, 'outcome': outcome | trim,
+              'changed': changed | bool} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the outcome
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} maintenance window {{ window_action }}
+          {{ (window_hours ~ ' h') if window_action != 'close' else '' }} :: {{ outcome | trim }}
+          {{ ('(expires ' ~ window_after.expires ~ ')') if window_after.expires is defined else '' }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'action': window_action,
+              'hours': (window_hours | int) if window_action != 'close' else 0,
+              'status': write_status | int, 'expires': window_after.expires | default(''),
+              'changed': changed | bool} }}
+      run_once: true
+      delegate_to: localhost
