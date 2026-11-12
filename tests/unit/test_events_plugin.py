@@ -654,6 +654,25 @@ def test_alerts_first_poll_emits_initial_then_transitions(events):
     assert "closing" not in {e["purefb_alert"]["transition"] for e in third}
 
 
+def test_alert_updated_timestamp_alone_is_not_a_transition(events):
+    # the lab's 1112 alerts bump `updated` every minute; only a change in
+    # severity, flag or summary is worth an "updated" event
+    client = FakeClient(alerts=[alert("1", summary="link down")])
+    arr = FakeArray(client)
+    state = {}
+    events.poll_alerts(arr, state, {})
+    client.alerts = [alert("1", updated=7, summary="link down")]
+    assert events.poll_alerts(arr, state, {}) == []
+    client.alerts = [alert("1", updated=8, summary="link down", flagged=True)]
+    out = events.poll_alerts(arr, state, {})
+    assert [e["purefb_alert"]["transition"] for e in out] == ["updated"]
+    assert out[0]["purefb_alert"]["flagged"] is True
+    assert out[0]["purefb_alert"]["severity_raised"] is False
+    client.alerts = [alert("1", updated=9, summary="link still down", flagged=True)]
+    out = events.poll_alerts(arr, state, {})
+    assert [e["purefb_alert"]["transition"] for e in out] == ["updated"]
+
+
 def test_alert_closed_without_a_duration_uses_updated_minus_created(events):
     client = FakeClient(alerts=[alert("1")])
     arr = FakeArray(client)
@@ -1481,6 +1500,35 @@ def test_client_share_streaks_per_protocol(events):
     counters = state["telemetry"]["fb-a"]["high_share_polls"]
     assert "client:nfs:10.0.0.1" not in counters
     assert "client:nfs:10.0.0.2" in counters
+
+
+def test_client_rows_split_the_port_off_the_address(events):
+    # the array names a client row <address>:<port> (lab: 10.21.200.129:893)
+    client = FakeClient(
+        clients=[
+            perf_row("10.21.200.129:893", 800, 800),
+            perf_row("[fe80::1]:2049", 1, 1),
+        ],
+        baseline=[],
+    )
+    arr = FakeArray(client)
+    state = {}
+    out = events._performance_events(arr, state, {"top_clients": 5})
+    rows = {
+        e["purefb_client_performance"]["client"]: e["purefb_client_performance"]
+        for e in out
+        if "purefb_client_performance" in e
+    }
+    assert set(rows) == {"10.21.200.129", "fe80::1"}
+    assert rows["10.21.200.129"]["client_port"] == 893
+    assert rows["fe80::1"]["client_port"] == 2049
+    # the streak is kept per address, so a reconnect on a new port continues it
+    client.clients = [perf_row("10.21.200.129:901", 800, 800)]
+    out = events._performance_events(arr, state, {"top_clients": 5})
+    busy = [e for e in out if "purefb_client_performance" in e][0]
+    assert busy["purefb_client_performance"]["high_share_polls"] == 2
+    assert events._split_client("10.0.0.1") == ("10.0.0.1", None)
+    assert events._split_client(None) == ("", None)
 
 
 def test_s3_clients_are_skipped_where_the_call_lacks_protocol(events):

@@ -88,10 +88,18 @@ FlashBlade on 4.5.6 (REST 2.17) is the replication peer of later parts.
   `resolution=1800000&start_time=-3h` returned 6 half-hour points;
   `protocol=nfs` works; `/arrays/nfs-specific-performance` adds
   per-op-class metadata rates and latencies.
-- `/arrays/clients/performance` is per NFS or SMB client address (the row
-  `name`), empty while the array is idle; `sort=writes_per_sec-` and
-  `limit` give the top N. `/file-systems/performance` and
-  `/buckets/performance` take the same `sort` and `limit`.
+- `/arrays/clients/performance` is per client connection: the row `name` is
+  `<address>:<port>` (lab: `10.21.200.129:893`), so the plugin splits it into
+  `client` and `client_port`; the figures are a lagged sample (a 4 s dd burst
+  showed on `/file-systems/performance` first) and the list is empty while
+  the array is idle. `sort=writes_per_sec-` and `limit` give the top N;
+  `/file-systems/performance` and `/buckets/performance` take the same.
+- `/hardware` reports an empty DFM bay on a //S as status `unclaimed` (the lab
+  has two of four bays populated per blade: 20 such rows), so the default
+  `hardware_ignore_status` includes it beside healthy, not_installed, unused.
+- Some alerts (1112 on the lab) bump `updated` every minute without any other
+  change; the alert diff keys on state, severity, flag and summary, not on
+  `updated`.
 - `/quotas/users` and `/usage/users` (and the group forms) require a file
   system identifier (`file_system_names`), so they are read when alert
   1106 or 1107 arrives, never polled across every file system.

@@ -65,7 +65,8 @@ poll_error_escalate
                   which purefb_poll_error carries escalate: true (default 10)
 hardware_ignore_status
                   hardware statuses that are not issues
-                  (default: healthy, not_installed, unused)
+                  (default: healthy, not_installed, unused, unclaimed; an
+                  empty DFM bay on a //S reports unclaimed)
 blade_ignore_status
                   blade statuses that are not issues (default: healthy,
                   unused)
@@ -173,8 +174,9 @@ purefb_array_performance
                         write_latency_ratio, write_bw_ratio; always
                         baseline_known, write_surge
 purefb_client_performance
-                        one per client (an NFS or S3 client address, the
-                        row's name): client, protocol, reads_per_sec,
+                        one per client row (named <address>:<port> by the
+                        array; the address is the inventory key): client,
+                        client_port, protocol, reads_per_sec,
                         writes_per_sec, others_per_sec, read_bytes_per_sec,
                         write_bytes_per_sec, usec_per_read_op,
                         usec_per_write_op, usec_per_other_op, ops_share_pct,
@@ -309,7 +311,7 @@ options:
     description: Hardware statuses that are not issues.
     type: list
     elements: str
-    default: [healthy, not_installed, unused]
+    default: [healthy, not_installed, unused, unclaimed]
   blade_ignore_status:
     description: Blade statuses that are not issues.
     type: list
@@ -797,17 +799,26 @@ def poll_alerts(arr, state, args):
             }
         }
 
+    # The change key leaves `updated` out on purpose: the array re-evaluates
+    # some alerts every minute (1112 on the lab) and bumps `updated` each
+    # time, which would make every poll an "updated" transition. What a rule
+    # can act on is the severity, the flag and the summary text.
     for a in active:
         aid = a.get("name")
-        key = (a.get("state"), a.get("updated"), a.get("severity"))
+        key = (
+            a.get("state"),
+            a.get("severity"),
+            bool(a.get("flagged")),
+            a.get("summary"),
+        )
         current[aid] = key
         if first:
             if _truthy(args.get("include_initial_alerts"), True):
                 events.append(event(a, "initial"))
         elif aid not in seen:
             events.append(event(a, "opened"))
-        elif seen[aid][:2] != key[:2]:
-            previous = seen[aid][2] if len(seen[aid]) > 2 else None
+        elif seen[aid] != key:
+            previous = seen[aid][1] if len(seen[aid]) > 1 else None
             events.append(event(a, "updated", previous=previous))
     if not first:
         for aid in set(seen) - set(current):
@@ -996,7 +1007,7 @@ def poll_health(arr, state, args):
     st = state.setdefault("health", {}).setdefault(arr.name, {"issues": {}, "lags": {}})
     hw_ignore = set(
         _as_list(args.get("hardware_ignore_status"))
-        or ["healthy", "not_installed", "unused"]
+        or ["healthy", "not_installed", "unused", "unclaimed"]
     )
     blade_ignore = set(
         _as_list(args.get("blade_ignore_status")) or ["healthy", "unused"]
@@ -1405,6 +1416,20 @@ def _perf_fields(perf, prefix=""):
     return {prefix + k: perf.get(k) for k in PERF_FIELDS}
 
 
+def _split_client(name):
+    """A client row is named <address>:<port> (IPv6 as [address]:port); the
+    address is what maps to an inventory host, the port rides along."""
+    s = str(name or "")
+    if s.startswith("["):
+        addr, _, rest = s[1:].partition("]")
+        port = rest[1:] if rest.startswith(":") else ""
+    elif s.count(":") == 1:
+        addr, _, port = s.partition(":")
+    else:
+        addr, port = s, ""
+    return addr, (int(port) if port.isdigit() else None)
+
+
 def _ops(perf):
     return (
         (perf.get("reads_per_sec") or 0)
@@ -1573,7 +1598,10 @@ def _performance_events(arr, state, args):
             )
             continue
         for v in rows:
-            key = f"client:{protocol}:{v.get('name')}"
+            # the row is named <address>:<port> (lab: 10.21.200.129:893); the
+            # address is the inventory key, the port is kept beside it
+            client, client_port = _split_client(v.get("name"))
+            key = f"client:{protocol}:{client}"
             seen.add(key)
             share = _pct(_ops(v), array_ops)
             high, normal = _share_streaks(st, key, share, threshold)
@@ -1581,7 +1609,8 @@ def _performance_events(arr, state, args):
                 {
                     "purefb_client_performance": {
                         "array": arr.name,
-                        "client": v.get("name"),
+                        "client": client,
+                        "client_port": client_port,
                         "protocol": protocol,
                         **_perf_fields(v),
                         "ops_share_pct": share,
