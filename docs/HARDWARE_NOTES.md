@@ -129,9 +129,10 @@ FlashBlade on 4.5.6 (REST 2.17) is the replication peer of later parts.
 - `/log-targets/file-systems` and `/audit-file-systems-policies` answer
   400 "Operation not permitted" on the lab: file log targets are a
   directed-availability feature in 4.6.x.
-- `/buckets/audit-filter-actions` lists 43 S3 actions (for example
+- `/bucket-audit-filter-actions` lists the 43 S3 actions (for example
   `s3:PutObjectLegalHold`, `s3:All`) a bucket audit filter may select; a
-  filter takes actions and a prefix or suffix, not both.
+  filter takes actions and optional `s3_prefixes`, nothing else
+  ("Object audit" below).
 - Defaults that posture rules will flag: the NFS export policy `all` has
   one rule, client `*`, permission `rw`, access `no-squash`; the SMB share
   policy `_smb_share_allow_everyone` grants everyone read, change and full
@@ -144,8 +145,8 @@ FlashBlade on 4.5.6 (REST 2.17) is the replication peer of later parts.
 - Public access is a set of fields, not an endpoint:
   `Bucket.public_access_config {block_new_public_policies,
   block_public_access}`, `Bucket.public_status`,
-  `ObjectStoreAccount.public_access_config` (FB_2_30 models; verify: the
-  version they first appear on).
+  `ObjectStoreAccount.public_access_config`; the 2.21 bucket item carries
+  both bucket fields, which is what the posture signal reads.
 - Syslog servers carry `services` (`management`, `data-audit`); there is
   no separate `log-targets/syslog` resource. `/syslog-servers/settings`
   has `ca_certificate` and `ca_certificate_group` per service.
@@ -181,19 +182,154 @@ FlashBlade on 4.5.6 (REST 2.17) is the replication peer of later parts.
   with success and failure operations); HTTP access is never audited;
   before 4.8 an SMB-audited file system refuses NFS mounts. Disabling
   audit drops pending records.
-- Object audit (Purity//FB 4.6.3, REST 2.20): a per-bucket policy writes
-  CloudTrail-style JSON records as log objects named
-  `[array_identifier][prefix][yyyymmdd][HH-MM-SS]A[authority-id].[sequence].log`
-  into another bucket on the same array, rotated every 5 minutes to 24
-  hours (default 15 minutes) or by size. Record fields: `eventVersion`,
-  `eventId`, `eventTime`, `eventName`, `readOnly`, `eventCategory`,
-  `eventSource "onPrem"`, `sourceIPAddress`, `userAgent`, `bucketName`,
-  `recipientAccountId`, `resources[{type, ARN}]`, `userIdentity {type,
-  accountId, accessKeyId, userName, sessionContext}`,
-  `requestParameters`, `errorCode`, `errorMessage`. Records are dropped
-  when the log bucket hits its quota, and an admin can detach the policy.
-  The lab has the endpoints and no accounts or buckets yet. Object
-  notifications to Kafka arrive with 4.10.a (REST 2.32).
+- Object audit is not syslog: a per-bucket policy writes its records as
+  objects into another bucket on the same array ("Object audit" below).
+  Object notifications to Kafka arrive with 4.10.a (REST 2.32).
+
+## Object audit
+
+Verified in part 2 on the lab array (Purity//FB 4.6.4, REST 2.21,
+py-pure-client 1.98.0); everything below exists from REST 2.20
+(Purity//FB 4.6.3). The lab object store, which the vars and env examples
+assume:
+
+| Object | Value |
+| --- | --- |
+| account | `eda` |
+| users | `eda/eda-tail` (policies `pure:policy/object-list`, `object-read`, `bucket-list`, `bucket-info`: the plugin's read-only identity), `eda/eda-state` (full access: the cursor copy, request, receipt and legal-hold writes), `eda/eda-app` (full access: demo traffic, the "attacker" of the tests) |
+| buckets | `eda-log` (versioning enabled, Object Lock enabled, governance mode, default retention 1 day on the lab and 90 days in production, `quota_limit` 1073741824 soft); `eda-state` (versioning enabled); `eda-data` (versioning enabled, Object Lock enabled, no default retention: legal holds per object) |
+| log target | `eda-audit`: bucket `eda-log`, `log_name_prefix {"prefix": "audit_"}`, `log_rotate {"duration": 300000}` |
+| audit policy | `eda-audit`, enabled, `log_targets [{name eda-audit, resource_type log-targets/object-store}]`, members `eda-data` and `eda-log` |
+| filters | `eda-data`: `edaall` actions `[s3:All]`; `eda-log`: `edaapprovals` actions `[s3:PutObject]`, `s3_prefixes [approvals/, requests/]` |
+| S3 endpoint | the data VIP over HTTPS, path-style addressing, the array's self-signed certificate (`verify_ssl` false) |
+| env (`~/.flashblade-eda.env`, chmod 600) | `FB_A_S3_ENDPOINT`, `FB_A_S3_ACCESS_KEY` / `FB_A_S3_SECRET_KEY` (eda-tail), `FB_A_S3_STATE_ACCESS_KEY` / `FB_A_S3_STATE_SECRET_KEY` (eda-state), `FB_A_S3_APP_ACCESS_KEY` / `FB_A_S3_APP_SECRET_KEY` (eda-app, tests only) |
+
+REST, all under `/api/2.21/`:
+
+- Log targets: `GET/POST/PATCH/DELETE log-targets/object-store?names=<n>`.
+  POST body `{"bucket": {"name": "<bucket>"}, "log_name_prefix": {"prefix":
+  "<p>"}, "log_rotate": {"duration": <ms>}}`; `duration` 300000 to 86400000
+  ms (5 minutes to 24 hours; the array's own defaults, verified by a POST
+  with only the bucket set, are a `log_rotate` of 900000 ms, 15 minutes,
+  and the prefix `audit-logs`); a plain string for `log_name_prefix` is rejected
+  with "invalid value for log_name_prefix". Item: `{name, id, bucket{name,
+  id}, log_rotate{duration}, log_name_prefix{prefix}}`. A target in use by
+  a policy cannot be deleted; the module surfaces the array's message.
+- Audit policies: `GET/POST/PATCH/DELETE audit-object-store-policies?names=<n>`.
+  POST body `{"enabled": true, "log_targets": [{"name": "<lt>",
+  "resource_type": "log-targets/object-store"}]}`; PATCH takes `enabled`,
+  `log_targets` (the full list) or `add_log_targets` / `remove_log_targets`.
+  Item: `{name, id, enabled, is_local, location, log_targets[{name, id,
+  resource_type}], policy_type "audit"}`.
+- Members: `GET audit-object-store-policies/members?policy_names=<p>` items
+  `{policy{name, id, resource_type}, member{name, id, resource_type
+  "buckets"}}`; `POST` and `DELETE
+  audit-object-store-policies/members?policy_names=<p>&member_names=<bucket>`
+  with no body.
+- Bucket audit filters: `GET buckets/audit-filters?bucket_names=<b>` items
+  `{name, actions[], s3_prefixes[] or null, bucket{name, id}}`; `POST
+  buckets/audit-filters?bucket_names=<b>&names=<f>` body `{"actions":
+  [...], "s3_prefixes": [...]}` (`s3_prefixes` optional); `DELETE` with the
+  same query; no PATCH, so a change is delete plus create. Filter names
+  are alphanumeric only, 1 to 63 characters: `eda-all` was rejected,
+  `edaall` works. The 43 actions come from `GET
+  bucket-audit-filter-actions` and include `s3:All`, `s3:ReadOnly`,
+  `s3:WriteOnly`, `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`,
+  `s3:DeleteMultipleObjects`, `s3:PutObjectLegalHold` and
+  `s3:PutObjectRetention`.
+- Buckets: `POST buckets?names=<b>` body `{"account": {"name": ..},
+  "quota_limit": "<bytes>", "hard_limit_enabled": false}`; `quota_limit`
+  must be a string. Object Lock cannot be set in the POST that creates the
+  bucket (versioning is `none` then): three steps, POST the bucket, `PATCH
+  {"versioning": "enabled"}`, `PATCH {"object_lock_config": {"enabled":
+  true}}`; `default_retention_mode` and `default_retention` go together,
+  the retention in ms as a string. Item: `space{virtual, total_physical,
+  ...}`, `object_count`, `quota_limit` (int bytes or null),
+  `hard_limit_enabled`, `object_lock_config`, `versioning`,
+  `public_status`, `public_access_config`, `account{name}`. The health
+  event's used bytes are `space.virtual`.
+- Access keys: `GET object-store-access-keys` items `{name (the access
+  key id), user{name "<account>/<user>"}, created (ms), enabled}`; `PATCH
+  object-store-access-keys?names=<key>` body `{"enabled": false}` disables
+  one key (SDK: `patch_object_store_access_keys(names=,
+  object_store_access_key=ObjectStoreAccessKey(enabled=False))`; the
+  collection's `purefb_s3user state=keystate key_name= enable_key=` does
+  the same). The canary and anomaly playbooks use the PATCH through
+  `tasks/fb_rest.yml`.
+- Other reads the posture signal and the plugin use: `certificates`
+  (`valid_to` ms), `nfs-export-policies/rules` (`client`, `permission`,
+  `access`), `object-store-accounts`, `object-store-users`, `arrays` (its
+  `id` is the array id that prefixes every log key).
+
+SDK (the negotiated FB_2_21 client), for the modules:
+`get/post/patch/delete_log_targets_object_store` (keyword
+`log_target_object_store`; models `flashblade.LogTargetsObjectStorePost`
+and `flashblade.LogTargetsObjectStore` with `bucket=flashblade.Reference(name=)`,
+`log_name_prefix=flashblade.AuditLogNamePrefix(prefix=)`,
+`log_rotate=flashblade.AuditLogRotate(duration=)`);
+`get/post/patch/delete_audit_object_store_policies` (keyword `policy`;
+`AuditObjectStorePoliciesPost(enabled=, log_targets=[flashblade.ReferenceWritable(name=,
+resource_type="log-targets/object-store")])` and
+`AuditObjectStorePoliciesPatch(enabled=, log_targets= | add_log_targets= |
+remove_log_targets=)`); `get/post/delete_audit_object_store_policies_members(policy_names=[..],
+member_names=[..])`; `get_buckets_audit_filters(bucket_names=[..])`,
+`post_buckets_audit_filters(bucket_names=[b], names=[f],
+audit_filter=flashblade.BucketAuditFilterPost(actions=, s3_prefixes=))`,
+`delete_buckets_audit_filters(bucket_names=[b], names=[f])`;
+`get_bucket_audit_filter_actions()`. Model classes are lazy attributes of
+`pypureclient.flashblade`: `getattr(flashblade, "Name")` raises
+`ImportError` for a name that does not exist, and there is no `LogRotate`,
+`LegalHoldPost` or `ObjectStoreAccessKeyPatch`. The collection's
+module_utils is `ansible_collections.everpure.flashblade.plugins.module_utils.purefb`
+with `get_system(module)` (the negotiated client from `fb_url`,
+`api_token`, `disable_warnings`; fails without pypureclient) and
+`purefb_argument_spec()`.
+
+The log objects, read back from `eda-log` after traffic from `eda-app`:
+
+- Key layout `<array id>/<log_name_prefix>/<yyyy>/<mm>/<dd>/<HHMMSS>.A<authority>.<sequence>.log`,
+  for example `<array id>/audit_/2026/11/12/200500.A198.1.log`. `HHMMSS`
+  is the start of the rotation window, not the write time; one object per
+  authority (blade partition) that had records in the window, so the
+  objects of one window share the timestamp and differ in the authority
+  (12 objects for 14 records in the lab's one busy window); written within
+  seconds of the window closing (records from 20:08:50 appeared at
+  20:10:00 to 20:10:04 under `200500`). Lexical order of the keys under
+  the prefix is time order. An idle window produces no object at all, so a
+  missing object is not a dropped record; `stale` in the health event is
+  only meaningful where traffic is continuous.
+- Content: one JSON object per line (NDJSON), plain text, no gzip, no
+  `Records` wrapper. Fields: `eventId` (int, up to 2^56 range: keep it an
+  integer, never a float), `eventTime` (ISO 8601 with milliseconds, `Z`),
+  `eventVersion` "1.0", `eventName` (`GetObject`, `PutObject`,
+  `HeadObject`, `ListObjectsV2`, `DeleteObject`, ...), `readOnly`,
+  `eventCategory` "Data", `managementEvent` false, `eventSource` "onPrem",
+  `sourceIPAddress`, `bucketName`, `recipientAccountId` (the account),
+  `resources` `[{type Pure::S3::Object, ARN prn::s3:::<bucket>/<key>},
+  {accountId, type Pure::S3::Bucket, ARN prn::s3:::<bucket>}]` (a
+  `ListObjectsV2` record carries `ARNPrefix prn::s3:::<bucket>/` on the
+  object resource instead of `ARN`), `userIdentity {type IAMUser, arn
+  prn::iam:array-id/local:obj-account-id/<n>:user/<user>, accountId,
+  accessKeyId, userName (without the account)}`, `userAgent` (the
+  client's own string), `requestParameters {bucketName, key, Host, ...}`
+  (`key` absent on bucket operations; `Content-Encoding aws-chunked` on a
+  put, `x-amz-checksum-mode` on a get, `list-type` and `encoding-type` on
+  a list), `responseElements {x-amz-version-id, ETag}` or `null`. A
+  successful `GetObject` record carried `responseElements` twice;
+  `json.loads` keeps the last. Error records add `errorCode` and
+  `errorMessage` (`NoSuchKey` "The specified key does not exist.",
+  `SignatureDoesNotMatch`) with `responseElements` null; there is no
+  separate error record type.
+- Latency: one rotation (5 minutes on the lab, the minimum) plus the
+  seconds the write takes, plus the poll interval; the plugin keeps
+  re-listing the last `late_windows` windows for authorities that write
+  late.
+
+- Bucket `public_status` reads `bucket-and-objects-not-public` on a bucket with no
+  public policy (not `none`), with `public_access_config` `{block_public_access:
+  true, block_new_public_policies: true}` inherited from the account on the lab;
+  the posture signal counts a bucket public only when the status names a public
+  side without `not-public`, or when `block_public_access` is false.
 
 ## py-pure-client SDK
 
@@ -220,11 +356,31 @@ FlashBlade on 4.5.6 (REST 2.17) is the replication peer of later parts.
   and `purefb_fs` take `state: absent` with `eradicate: true`.
 - `purefb_userquota` and `purefb_groupquota` set per-file-system quotas by
   user or group name or numeric id.
-- No module exists for maintenance windows, QoS policies, alert flagging,
-  session or lock termination, audit policies, log targets, telemetry
-  targets or legal holds ([DESIGN.md](DESIGN.md), "Collection gaps");
-  `playbooks/tasks/fb_rest.yml` covers the ones this part needs. Only
-  `purefb_realm` has a QoS option in 1.29.0.
+- No module exists in 1.29.0 for maintenance windows, QoS policies, alert
+  flagging, session or lock termination, audit policies, log targets,
+  telemetry targets or legal holds ([DESIGN.md](DESIGN.md), "Collection
+  gaps"); `playbooks/tasks/fb_rest.yml` covers the ones the playbooks
+  need, and `tasks/s3_object.yml` does the legal hold over S3
+  (`put_object_legal_hold`). Only `purefb_realm` has a QoS option in
+  1.29.0.
+- Part 2 adds `purefb_log_target`, `purefb_audit_policy` and
+  `purefb_bucket_audit_filter` under `plugins/modules/` of this
+  repository, in the collection's style (DOCUMENTATION, EXAMPLES, RETURN,
+  check mode, idempotent, the collection's `module_utils.purefb` for
+  `get_system` and `purefb_argument_spec`), on the SDK models
+  `LogTargetsObjectStorePost` / `LogTargetsObjectStore` (`Reference`,
+  `AuditLogNamePrefix`, `AuditLogRotate`), `AuditObjectStorePoliciesPost` /
+  `AuditObjectStorePoliciesPatch` (`ReferenceWritable` with
+  `resource_type log-targets/object-store`) and `BucketAuditFilterPost`
+  ("Object audit" above). `purefb_log_target` takes `log_rotate` as
+  `5m` to `24h` and converts to ms; `purefb_bucket_audit_filter`
+  recreates a filter that differs, because the array has no PATCH for
+  them; `purefb_audit_policy` makes the member set exactly `buckets` and
+  removes the members before an absent policy.
+- Already sufficient for part 2: `purefb_s3user state=keystate key_name=
+  enable_key=` (the re-enable after a canary test), `purefb_bucket`
+  (quota, hard limit, Object Lock options, `block_public_access`,
+  `block_new_public_policies`), `purefb_s3acc`.
 - Known array behaviours from the collection's QA suite: snapshot policies
   cannot be renamed; SMB share rules are one permission ladder keyed by
   principal; bucket access rules store only `s3:GetObject`/allow; SNMP
@@ -270,6 +426,15 @@ FlashBlade on 4.5.6 (REST 2.17) is the replication peer of later parts.
   `n`, not a line break; a real one belongs to the YAML. Regex arguments
   are the exception. A unit test refuses such literals outside `regex_*`
   filters.
+- A JSON text handed from one task to another through `vars:` can arrive
+  as a dict: `lookup('file', ...)` of a request file, passed as
+  `s3_body` and templated again in a task's `environment:`, reached the
+  S3 helper as a Python repr with single quotes (seen on the lab: the
+  mirrored request object was not JSON). `tasks/s3_object.yml` therefore
+  carries bodies base64-encoded (`S3_BODY_B64`, a string or a dict
+  turned back into JSON first) and decodes them in the helper, and
+  `s3_approval.yml` treats an object that parses to an empty dict as
+  missing.
 
 ## State
 
@@ -279,6 +444,14 @@ FlashBlade on 4.5.6 (REST 2.17) is the replication peer of later parts.
   the QoS cap is a policy named `eda-cap-<fs>` (read back as
   `eda_capped`), a handled alert is `flagged`, the approval request is a
   file under `request_dir`, the maintenance window is itself the state.
+- The object-audit cursor (`last_key`, the seen keys of the retained
+  windows, the time) is a file `<cursor_dir>/<array>.json` written
+  atomically and, when the state key is configured, an object
+  `cursors/object_audit/<array>.json` in `eda-state` (best effort, a
+  warning on failure); a request also written as
+  `<log_bucket>/requests/<id>.json` is answered by
+  `approvals/<id>.json` and closed by `receipts/<id>.json`, and a disabled
+  key reads back as `enabled false`.
 
 ## What the lab cannot show
 
@@ -291,3 +464,6 @@ FlashBlade on 4.5.6 (REST 2.17) is the replication peer of later parts.
   is also the platform host.
 - Replication: no links or connections exist yet; the 4.5.6 peer has no
   LLDP, CSR or object audit.
+- Object-audit latency below one rotation: 5 minutes is the floor the
+  array accepts for `log_rotate`, and a disabled key is seen by its next
+  request, not by the one that tripped the canary.

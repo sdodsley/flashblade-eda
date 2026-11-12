@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # The repository root is the Ansible collection sdodsley.flashblade_eda: the
-# two event source plugins (extensions/eda/plugins/event_source), the
-# rulebooks (extensions/eda/rulebooks) and the playbooks (playbooks/) are
-# already laid out as collection content. `make collection` builds the
+# three event source plugins (extensions/eda/plugins/event_source), the
+# modules (plugins/modules), the rulebooks (extensions/eda/rulebooks) and
+# the playbooks (playbooks/) are already laid out as collection content. `make collection` builds the
 # tarball into build/ and installs it under ./collections, which env.sh puts
 # first on ANSIBLE_COLLECTIONS_PATH. Everything else in the tree (tests,
 # docs, local tooling) is development material and stays out of the
@@ -34,7 +34,7 @@ repository: https://github.com/sdodsley/flashblade-eda
 documentation: https://github.com/sdodsley/flashblade-eda/blob/main/README.md
 homepage: https://github.com/sdodsley/flashblade-eda
 issues: https://github.com/sdodsley/flashblade-eda/issues
-# Kept in the artifact: extensions/, playbooks/, meta/, README.md, LICENSE.
+# Kept in the artifact: extensions/, plugins/, playbooks/, meta/, README.md, LICENSE.
 build_ignore:
   - .git
   - .github

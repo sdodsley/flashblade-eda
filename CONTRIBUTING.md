@@ -14,9 +14,11 @@ make deps      # Python requirements and the two collections
 make check     # black, pyflakes, yamllint, unit tests, playbook syntax
 ```
 
-`make check` is what CI runs; black and pyflakes cover the plugins and the
-tests. The unit tests need no array: the plugins are exercised with a fake
-SDK client, and the rulebook tests validate every rulebook against
+`make check` is what CI runs; black and pyflakes cover the plugins, the
+modules and the tests. The unit tests need no array: the plugins are
+exercised with a fake SDK client and a fake boto3 client (`boto3` is
+stubbed when it is not installed), the modules with a fake AnsibleModule
+and client, and the rulebook tests validate every rulebook against
 ansible-rulebook's own schema, check that every lowercase variable a
 rulebook references is documented in `vars/example.yml` (uppercase names
 such as `APPROVAL_TOKEN` are environment variables passed with
@@ -39,19 +41,36 @@ throttles included.
 - An action that changes an array is gated by what its event carries:
   `maintenance_active` where the event has it (alert, audit, session,
   health, hardware and config events; telemetry events do not),
-  `automation_users` on audit events so the automation never reacts to
-  itself, and a per-site switch that falls back to notify on the file
-  system grow, the user quota raise, the client diagnostics and the QoS
-  cap. A new action states which of the three it has, and README.md's
-  gating paragraph says so.
+  `automation_users` on audit events and `automation_keys` on S3 events so
+  the automation never reacts to itself, and a per-site switch that falls
+  back to notify on the file system grow, the user quota raise, the client
+  diagnostics, the QoS cap, the canary and anomaly key disable, the audit
+  re-attach and the public-bucket revert. A new action states which of
+  the three it has, and README.md's gating paragraph says so.
 - Every record a playbook appends to the alert log carries `time`, `kind`,
   `severity` and `array`.
 - State that must survive a rulebook restart lives on the array or in a
   file, never in a rulebook fact. FlashBlade has no tags on file systems
   or buckets, so the array-side state is a name or a bit: QoS policies
   `eda-cap-<object>` and `eda-tarpit`, the alert `flagged` bit, an export
-  rule `client == <ip>, permission ro`
-  ([docs/DESIGN.md](docs/DESIGN.md), "State without tags").
+  rule `client == <ip>, permission ro`, a key's `enabled` state; the
+  object-audit cursor is a file under `cursor_dir` with a copy in the
+  state bucket, and requests, approvals and receipts are objects in the
+  log bucket ([docs/DESIGN.md](docs/DESIGN.md), "State without tags").
+- S3 credentials are named, never carried: the plugin and the playbooks
+  take the environment variable names (`s3_access_key_env`,
+  `state_secret_key_env`, ...) and read the values from the environment;
+  `tasks/s3_object.yml` hands them to its Python snippet through the
+  environment, not the command line, and every task with a secret in
+  scope is `no_log`. A fixture or a test uses a made-up access key id such
+  as `PSFBSAZRTESTKEY0001`; no real key id or secret goes into the tree.
+- A module under `plugins/modules/` follows the collection's style
+  (DOCUMENTATION, EXAMPLES and RETURN blocks, check mode, idempotent, the
+  collection's `module_utils` imported inside a guarded try) so that it
+  can move to `everpure.flashblade` unchanged, and has unit tests in
+  `tests/unit/test_modules.py` that drive `main()` with a fake
+  AnsibleModule and a fake client ([docs/PACKAGING.md](docs/PACKAGING.md)
+  has the licence note for the move).
 - Use the endpoint, field, module and option names the array and the
   collection actually have (`docs/HARDWARE_NOTES.md` lists the verified
   ones); where something still has to be confirmed on an array, say so in
