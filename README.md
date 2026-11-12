@@ -14,9 +14,15 @@ its plugin skeleton, rulebook conventions, approval paths and notify
 playbook.
 
 Status: a prototype, not a supported product. This first part (the REST
-pull plugin, the management syslog listener and ten rulebooks) is written
-against Purity//FB 4.6.4 (REST 2.21) on a FlashBlade//S200 and
-py-pure-client 1.98.0; [docs/VERIFICATION.md](docs/VERIFICATION.md) lists
+pull plugin, the management syslog listener and ten rulebooks) is verified
+against Purity//FB 4.6.4 (REST 2.21) on a FlashBlade//S200 with
+py-pure-client 1.98.0: the seven lab exit tests (all six signals live, a
+file system grown on alert 1101, a user quota raised on 1106, a human's
+NTP change reconciled and a destroy notified from the audit log, the
+identify LED lit by a replayed blade fault, a client burst attributed to
+its address, a maintenance window gating the rules) have passed; the
+syslog listener is unit-tested only until a syslog server points at it.
+[docs/VERIFICATION.md](docs/VERIFICATION.md) lists
 the lab exit tests and their state, [docs/DESIGN.md](docs/DESIGN.md) the
 design and the parts that come later, and
 [docs/HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md) the array and rulebook
@@ -156,6 +162,7 @@ playbooks/                             notify, alert_runbook (+ runbooks/<code>.
                                        user_quota, client_diagnose, qos_cap, qos_lift, maintenance_window,
                                        tasks/resolve_array.yml (the array's URL and token), tasks/fb_rest.yml (one raw
                                        REST call for the endpoints the collection has no module for)
+baseline/                              schema of the git baseline (README); the real <array>.yml files live in a separate checkout
 vars/example.yml, inventory/example.yml  copy to vars/local-<site>.yml and inventory/local-<site>.yml (gitignored)
 env.example, env.sh, run.sh            env file template, shared environment setup, launcher
 tests/                                 unit/ (no array needed), fixtures, replay rulebooks, e2e_sources.sh (everything
