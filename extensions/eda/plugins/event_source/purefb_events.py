@@ -9,9 +9,10 @@ One instance can run several signals, each on its own interval.
 
 Written against Purity//FB 4.6.4 (REST 2.21) with py-pure-client 1.98.0.
 Every call it makes exists from REST 2.16 except the per-protocol client
-performance (2.21), and the calls an older array lacks (maintenance windows,
-SAML identity providers, Active Directory) are skipped rather than failing
-the signal.
+performance (2.21) and the posture signal's audit policy reads (2.20), and
+the calls an older array lacks (maintenance windows, SAML identity
+providers, Active Directory, the posture reads) are skipped rather than
+failing the signal.
 
 Arguments
 ---------
@@ -26,9 +27,9 @@ arrays            list of arrays (required). Each entry:
                   list as one variable; it is decoded before validation and
                   never echoed into an error or a log.
 signals           list or comma-separated string, default: all of
-                  alerts | audits | sessions | health | telemetry | config.
-                  replication and posture are reserved for a later release
-                  and are rejected with an error that says so.
+                  alerts | audits | sessions | health | telemetry | config |
+                  posture. replication is reserved for a later release and
+                  is rejected with an error that says so.
 interval          default seconds between polls (default 60)
 <signal>_interval per-signal override, e.g. audits_interval: 15
 verify_ssl        verify the array certificate (default false)
@@ -99,11 +100,20 @@ snapshot_growth_threshold_pct
                   snapshot_surge (default 25)
 write_surge_ratio telemetry: write bandwidth this many times last week's
                   sets write_surge (default 3)
+key_max_age_days  posture: an object store access key created more than
+                  this many days ago is reported in old_keys (default 90)
+cert_warn_days    posture: a certificate within this many days of its
+                  valid_to is reported in expiring_certs (default 30)
+coverage_exclude  posture: bucket name globs that may stay without an
+                  enabled audit policy (default: eda-state)
+posture_exclude_file_systems
+                  posture: file system name globs whose legacy NFS rules are
+                  not checked (default: share-*-manila)
 
 Events (one dict per event, exactly one top-level key, always with `array`;
-alert, audit, session, health, hardware, lag and config events also carry
-`maintenance_active`, true while the array has an open maintenance window
-and false on an array without the endpoint, REST before 2.16)
+alert, audit, session, health, hardware, lag, config and posture events also
+carry `maintenance_active`, true while the array has an open maintenance
+window and false on an array without the endpoint, REST before 2.16)
 -------------------------------------------------------------------------
 purefb_alert            transition: initial|opened|updated|closing|closed
                         (closing: the array parked a resolved alert before
@@ -205,6 +215,32 @@ purefb_config           purity_version, ntp_servers_csv, time_zone,
                         default_inbound_tls_policy, data_at_rest_encryption,
                         smb_mode, network_access_policy (csv fields are
                         sorted and comma-joined)
+purefb_posture          one per poll, the whole posture read afresh (the
+                        rulebook throttles; nothing is diffed here):
+                        purity_version, public_buckets[{bucket,account,
+                        public_status}] (live buckets whose public_status is
+                        not none, or whose public access is not blocked),
+                        public_count, uncovered_buckets (live buckets that no
+                        enabled audit object store policy covers, minus the
+                        coverage_exclude globs; empty on an array without
+                        the policy endpoint), uncovered_count,
+                        world_open_exports[{policy,rule,client,permission,
+                        access}] (export policy rules for client * with
+                        permission rw, plus live file systems without an
+                        export policy whose legacy NFS rule string grants *
+                        rw: those carry an empty policy and the file system
+                        name as the rule), world_open_export_count,
+                        old_keys[{key,user,age_days,enabled}] (access keys
+                        created more than key_max_age_days ago),
+                        old_key_count, disabled_key_count (every disabled
+                        key, whatever its age), expiring_certs[{name,
+                        days_left}] (within cert_warn_days of valid_to,
+                        negative once expired), expiring_cert_count,
+                        smb_everyone_full_control (names of the enabled share
+                        policies with a rule that allows Everyone full
+                        control), smb_everyone_full_control_count,
+                        issue_count (the six counts added up),
+                        maintenance_active
 purefb_poll_error       signal, error, consecutive (failed polls in a row on
                         that array and signal; 0 for a poll that succeeded
                         but dropped records), escalate (one per failed poll;
@@ -220,10 +256,10 @@ description:
   - Polls one or more FlashBlades with py-pure-client and emits plain fact
     events (C(purefb_alert), C(purefb_audit), C(purefb_session),
     C(purefb_health), C(purefb_hardware), C(purefb_lag), C(purefb_capacity),
-    C(purefb_fs_quota), C(purefb_client_performance), C(purefb_config) and
-    others). Thresholds and policy live in the rulebook. One instance runs
-    several signals, each on its own interval. The module docstring lists
-    every event and its fields.
+    C(purefb_fs_quota), C(purefb_client_performance), C(purefb_config),
+    C(purefb_posture) and others). Thresholds and policy live in the
+    rulebook. One instance runs several signals, each on its own interval.
+    The module docstring lists every event and its fields.
 options:
   arrays:
     description:
@@ -238,12 +274,12 @@ options:
     required: true
   signals:
     description:
-      - Signals to run (list or comma-separated string). C(replication) and
-        C(posture) are reserved for a later release and are rejected.
+      - Signals to run (list or comma-separated string). C(replication) is
+        reserved for a later release and is rejected.
     type: list
     elements: str
-    choices: [alerts, audits, sessions, health, telemetry, config]
-    default: [alerts, audits, sessions, health, telemetry, config]
+    choices: [alerts, audits, sessions, health, telemetry, config, posture]
+    default: [alerts, audits, sessions, health, telemetry, config, posture]
   interval:
     description: Default seconds between polls.
     type: int
@@ -265,6 +301,9 @@ options:
     type: int
   config_interval:
     description: Poll interval for the config signal; overrides I(interval).
+    type: int
+  posture_interval:
+    description: Poll interval for the posture signal; overrides I(interval).
     type: int
   verify_ssl:
     description: Verify the array certificate.
@@ -364,6 +403,24 @@ options:
     description: Write bandwidth this many times last week's sets write_surge.
     type: float
     default: 3
+  key_max_age_days:
+    description: An object store access key created more than this many days ago is reported in old_keys.
+    type: int
+    default: 90
+  cert_warn_days:
+    description: A certificate within this many days of its valid_to is reported in expiring_certs.
+    type: int
+    default: 30
+  coverage_exclude:
+    description: Bucket name globs that may stay without an enabled audit policy.
+    type: list
+    elements: str
+    default: [eda-state]
+  posture_exclude_file_systems:
+    description: File system name globs whose legacy NFS rules are not checked.
+    type: list
+    elements: str
+    default: ["share-*-manila"]
 """
 
 EXAMPLES = r"""
@@ -387,6 +444,7 @@ EXAMPLES = r"""
 """
 
 import asyncio
+import fnmatch
 import inspect
 import json
 import logging
@@ -404,9 +462,9 @@ except ImportError:  # ansible-rulebook ships PyYAML; a bare interpreter may not
 
 logger = logging.getLogger(__name__)
 
-SIGNALS = ("alerts", "audits", "sessions", "health", "telemetry", "config")
-# signals a later release adds: named so the error says "later", not "unknown"
-RESERVED_SIGNALS = ("replication", "posture")
+SIGNALS = ("alerts", "audits", "sessions", "health", "telemetry", "config", "posture")
+# a signal a later release adds: named so the error says "later", not "unknown"
+RESERVED_SIGNALS = ("replication",)
 DAY_MS = 86_400_000
 HALF_HOUR_MS = 1_800_000
 CONNECT_TIMEOUT = 10  # seconds to open the connection; the read timeout is an argument
@@ -1732,6 +1790,240 @@ def poll_config(arr, state, args):
     ]
 
 
+# --------------------------------------------------------------------------
+# posture: the security posture, read whole every poll
+# --------------------------------------------------------------------------
+def _matches_any(name, globs):
+    """Whether a name matches one of the shell-style globs; case counts, as
+    it does for a bucket or file system name on the array."""
+    return any(fnmatch.fnmatchcase(str(name or ""), g) for g in globs)
+
+
+def _globs(value, default):
+    """A glob-list argument: only an absent one takes the default, so an
+    explicit empty list switches the exclusion off."""
+    return list(default) if value is None else _as_list(value)
+
+
+def _public_buckets(buckets):
+    """Buckets the array reports as public, or whose public access is not
+    blocked. public_status reads "none" on an older array and
+    "bucket-and-objects-not-public" on 4.6.4 when no public policy exists,
+    so only a status naming a public side counts; public_access_config came
+    later, so a missing field means blocked."""
+    out = []
+    for b in buckets:
+        status = b.get("public_status")
+        is_public = bool(status) and status != "none" and "not-public" not in status
+        blocked = (b.get("public_access_config") or {}).get("block_public_access")
+        if is_public or blocked is False:
+            out.append(
+                {
+                    "bucket": b.get("name"),
+                    "account": _name(b.get("account")),
+                    "public_status": status or "none",
+                }
+            )
+    return out
+
+
+def _uncovered_buckets(c, buckets, exclude):
+    """Buckets that no enabled audit object store policy has as a member,
+    minus the exclusion globs. An array without the policy endpoint (REST
+    before 2.20) cannot audit at all, so it reports none rather than all."""
+    if not hasattr(c, "get_audit_object_store_policies"):
+        return []
+    enabled = {
+        p.get("name")
+        for p in _optional_items(
+            c, "get_audit_object_store_policies", "audit object store policies"
+        )
+        if p.get("enabled")
+    }
+    covered = {
+        _name(m.get("member"))
+        for m in _optional_items(
+            c, "get_audit_object_store_policies_members", "audit policy members"
+        )
+        if _name(m.get("policy")) in enabled
+    }
+    return sorted(
+        b["name"]
+        for b in buckets
+        if b.get("name")
+        and b["name"] not in covered
+        and not _matches_any(b["name"], exclude)
+    )
+
+
+def _legacy_world_open(rules):
+    """The options of the `*` entry of a legacy NFS rule string such as
+    "*(rw,no_root_squash)" or "10.0.0.1(rw) *(ro)" when it grants rw, else
+    None."""
+    for entry in str(rules or "").split():
+        client, _, rest = entry.partition("(")
+        options = [o.strip() for o in rest.rstrip(")").split(",")]
+        if client == "*" and "rw" in options:
+            return options
+    return None
+
+
+def _squash(options):
+    """A legacy rule's squash option in the export policy vocabulary; root
+    squash is what the array applies when neither is written."""
+    if "no_root_squash" in options:
+        return "no-root-squash"
+    if "all_squash" in options:
+        return "all-squash"
+    return "root-squash"
+
+
+def _world_open_exports(c, exclude):
+    """Export rules that let every client write: export policy rules for
+    client * with permission rw, plus the legacy rule string of a live file
+    system that has no export policy (the policy governs once one is
+    attached). A legacy entry carries an empty policy and the file system
+    name as its rule."""
+    out = []
+    for r in _optional_items(c, "get_nfs_export_policies_rules", "export rules"):
+        if r.get("client") == "*" and r.get("permission") == "rw":
+            out.append(
+                {
+                    "policy": _name(r.get("policy")),
+                    "rule": r.get("name"),
+                    "client": "*",
+                    "permission": "rw",
+                    "access": r.get("access"),
+                }
+            )
+    for f in _optional_items(c, "get_file_systems", "file systems", destroyed=False):
+        nfs = f.get("nfs") or {}
+        if (
+            f.get("destroyed")
+            or _name(nfs.get("export_policy"))
+            or _matches_any(f.get("name"), exclude)
+        ):
+            continue
+        options = _legacy_world_open(nfs.get("rules"))
+        if options is not None:
+            out.append(
+                {
+                    "policy": "",
+                    "rule": f.get("name"),
+                    "client": "*",
+                    "permission": "rw",
+                    "access": _squash(options),
+                }
+            )
+    return out
+
+
+def _old_keys(c, max_age_days, now_ms):
+    """Access keys created more than max_age_days ago, and how many keys of
+    all are disabled. A key without a created time cannot be aged."""
+    old, disabled = [], 0
+    for k in _optional_items(c, "get_object_store_access_keys", "access keys"):
+        if k.get("enabled") is False:
+            disabled += 1
+        created = k.get("created")
+        if not created:
+            continue
+        age_days = int((now_ms - created) / DAY_MS)
+        if age_days > max_age_days:
+            old.append(
+                {
+                    "key": k.get("name"),
+                    "user": _name(k.get("user")),
+                    "age_days": age_days,
+                    "enabled": k.get("enabled"),
+                }
+            )
+    return old, disabled
+
+
+def _expiring_certs(c, warn_days, now_ms):
+    """Certificates within warn_days of valid_to; days_left turns negative
+    once one has expired."""
+    out = []
+    for cert in _optional_items(c, "get_certificates", "certificates"):
+        valid_to = cert.get("valid_to")
+        if not valid_to:
+            continue
+        days_left = (valid_to - now_ms) // DAY_MS
+        if days_left <= warn_days:
+            out.append({"name": cert.get("name"), "days_left": days_left})
+    return out
+
+
+def _everyone_full_control(c):
+    """Names of the enabled share policies with a rule that allows Everyone
+    full control."""
+    out = []
+    for p in _optional_items(c, "get_smb_share_policies", "share policies"):
+        if p.get("enabled") is False:
+            continue
+        if any(
+            str(r.get("principal") or "").lower() == "everyone"
+            and r.get("full_control") == "allow"
+            for r in (p.get("rules") or [])
+        ):
+            out.append(p.get("name"))
+    return out
+
+
+def poll_posture(arr, state, args):
+    """The security posture, read whole every poll: the array keeps no
+    change feed for these objects, so the rulebook throttles the findings
+    rather than this poller diffing them. Every read but the array row is
+    optional, so an array without an endpoint reports empty lists."""
+    c = arr.client
+    now = _now_ms()
+    a = _first(_items(c.get_arrays(), "arrays"))
+    buckets = [
+        b
+        for b in _optional_items(c, "get_buckets", "buckets", destroyed=False)
+        if not b.get("destroyed")
+    ]
+    public = _public_buckets(buckets)
+    uncovered = _uncovered_buckets(
+        c, buckets, _globs(args.get("coverage_exclude"), ["eda-state"])
+    )
+    exports = _world_open_exports(
+        c, _globs(args.get("posture_exclude_file_systems"), ["share-*-manila"])
+    )
+    old_keys, disabled = _old_keys(c, int(args.get("key_max_age_days", 90)), now)
+    certs = _expiring_certs(c, int(args.get("cert_warn_days", 30)), now)
+    everyone = _everyone_full_control(c)
+    return [
+        {
+            "purefb_posture": {
+                "array": arr.name,
+                "maintenance_active": bool(_maintenance(arr, state)),
+                "purity_version": a.get("version"),
+                "public_buckets": public,
+                "public_count": len(public),
+                "uncovered_buckets": uncovered,
+                "uncovered_count": len(uncovered),
+                "world_open_exports": exports,
+                "world_open_export_count": len(exports),
+                "old_keys": old_keys,
+                "old_key_count": len(old_keys),
+                "disabled_key_count": disabled,
+                "expiring_certs": certs,
+                "expiring_cert_count": len(certs),
+                "smb_everyone_full_control": everyone,
+                "smb_everyone_full_control_count": len(everyone),
+                "issue_count": len(public)
+                + len(uncovered)
+                + len(exports)
+                + len(old_keys)
+                + len(certs)
+                + len(everyone),
+            }
+        }
+    ]
+
+
 # telemetry is the only signal that needs every array's result before it can
 # emit: the capacity event lists the other polled arrays, least used first.
 def _capacity_events(rows):
@@ -1755,6 +2047,7 @@ POLLERS = {
     "sessions": poll_sessions,
     "health": poll_health,
     "config": poll_config,
+    "posture": poll_posture,
 }
 
 

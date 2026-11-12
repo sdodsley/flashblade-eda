@@ -4,8 +4,9 @@
 the alert transition diff and its unfiltered fallback, the audit and session
 cursors, the health issue sets and the LAG check with the LLDP cache, the
 capacity history, the file system quota events, the per-client and
-per-object share streaks, the config fields, the SDK client construction
-and the asyncio driver, all driven by a fake SDK client."""
+per-object share streaks, the config fields, the posture findings, the SDK
+client construction and the asyncio driver, all driven by a fake SDK
+client."""
 
 import asyncio
 import contextlib
@@ -208,6 +209,14 @@ class FakeClient:
                 }
             ],
         )
+        # posture: empty by default, so an array with nothing to report is
+        # the baseline every other test runs against
+        self.audit_policies = data.get("audit_policies", [])
+        self.audit_members = data.get("audit_members", [])
+        self.export_rules = data.get("export_rules", [])
+        self.access_keys = data.get("access_keys", [])
+        self.certificates = data.get("certificates", [])
+        self.share_policies = data.get("share_policies", [])
 
     # --- alerts / audits / sessions --------------------------------------
     def get_alerts(self, **kw):
@@ -360,6 +369,26 @@ class FakeClient:
     def get_alert_watchers(self, **kw):
         return FakeResponse(self.watchers)
 
+    # --- posture ---------------------------------------------------------
+    def get_audit_object_store_policies(self, **kw):
+        self.calls.append(("get_audit_object_store_policies", kw))
+        return FakeResponse(self.audit_policies)
+
+    def get_audit_object_store_policies_members(self, **kw):
+        return FakeResponse(self.audit_members)
+
+    def get_nfs_export_policies_rules(self, **kw):
+        return FakeResponse(self.export_rules)
+
+    def get_object_store_access_keys(self, **kw):
+        return FakeResponse(self.access_keys)
+
+    def get_certificates(self, **kw):
+        return FakeResponse(self.certificates)
+
+    def get_smb_share_policies(self, **kw):
+        return FakeResponse(self.share_policies)
+
 
 class FakeArray:
     def __init__(self, client, name="fb-a"):
@@ -490,6 +519,12 @@ def test_documentation_block_covers_every_argument(events):
     assert doc["options"]["signals"]["choices"] == list(events.SIGNALS)
     assert doc["options"]["request_timeout"]["default"] == 30
     assert doc["options"]["fs_quota_warn_pct"]["default"] == 80
+    assert doc["options"]["key_max_age_days"]["default"] == 90
+    assert doc["options"]["cert_warn_days"]["default"] == 30
+    assert doc["options"]["coverage_exclude"]["default"] == ["eda-state"]
+    assert doc["options"]["posture_exclude_file_systems"]["default"] == [
+        "share-*-manila"
+    ]
     assert yaml.safe_load(events.EXAMPLES)[0]["sources"][0][
         "sdodsley.flashblade_eda.purefb_events"
     ]
@@ -593,14 +628,16 @@ def test_main_rejects_a_malformed_arrays_string_without_echoing_it(
     assert "s3cret" not in str(exc.value) and "s3cret" not in caplog.text
 
 
-@pytest.mark.parametrize("signal", ["replication", "posture"])
-def test_main_rejects_the_reserved_signals_with_a_clear_error(events, signal):
+def test_main_rejects_the_reserved_signal_with_a_clear_error(events):
+    # posture shipped with the object side; replication is the one still to come
+    assert "posture" in events.SIGNALS
+    assert events.RESERVED_SIGNALS == ("replication",)
     arrays = [{"name": "a", "fb_url": "192.0.2.1", "api_token": "t"}]
     with pytest.raises(ValueError, match="not supported") as exc:
         asyncio.run(
-            events.main(_NoQueue(), {"arrays": arrays, "signals": f"alerts,{signal}"})
+            events.main(_NoQueue(), {"arrays": arrays, "signals": "alerts,replication"})
         )
-    assert signal in str(exc.value)
+    assert "replication" in str(exc.value)
     for supported in events.SIGNALS:
         assert supported in str(exc.value)
 
@@ -1284,12 +1321,13 @@ def fs(name, physical, virtual=0, provisioned=1000, qos=None, **extra):
     }
 
 
-def bucket(name, physical, qos=None):
+def bucket(name, physical, qos=None, **extra):
     return {
         "name": name,
         "destroyed": False,
         "qos_policy": {"name": qos} if qos else None,
         "space": {"total_physical": physical, "virtual": physical},
+        **extra,
     }
 
 
@@ -1767,6 +1805,366 @@ def test_config_tolerates_missing_optional_endpoints_and_fields(events):
     assert out["purefb_config"]["sso_enabled"] is False
 
 
+# --- posture ---------------------------------------------------------------
+def posture_bucket(name, public_status="none", blocked=True, account="eda", **x):
+    """A bucket row with the public fields the posture poller reads."""
+    return bucket(
+        name,
+        1,
+        public_status=public_status,
+        public_access_config={
+            "block_public_access": blocked,
+            "block_new_public_policies": blocked,
+        },
+        account={"name": account},
+        **x,
+    )
+
+
+def member(policy, name):
+    return {
+        "policy": {"name": policy, "resource_type": "audit-object-store-policies"},
+        "member": {"name": name, "resource_type": "buckets"},
+    }
+
+
+def export_rule(policy, index, client, permission="rw", access="root-squash"):
+    return {
+        "name": f"{policy}.{index}",
+        "policy": {"name": policy},
+        "client": client,
+        "permission": permission,
+        "access": access,
+    }
+
+
+def legacy_export(name, rules, policy=None, destroyed=False):
+    return {
+        "name": name,
+        "destroyed": destroyed,
+        "nfs": {"rules": rules, "export_policy": {"name": policy} if policy else None},
+    }
+
+
+def access_key(name, user, age_days, enabled=True):
+    return {
+        "name": name,
+        "user": {"name": user},
+        "created": NOW_MS - age_days * DAY_MS if age_days is not None else None,
+        "enabled": enabled,
+    }
+
+
+def share_policy(name, principal, full_control, enabled=True):
+    return {
+        "name": name,
+        "enabled": enabled,
+        "rules": [
+            {
+                "principal": principal,
+                "full_control": full_control,
+                "change": "allow",
+                "read": "allow",
+            }
+        ],
+    }
+
+
+def posture(events, client, args=None):
+    (out,) = events.poll_posture(FakeArray(client), {}, args or {})
+    return out["purefb_posture"]
+
+
+POSTURE_LISTS = (
+    "public_buckets",
+    "uncovered_buckets",
+    "world_open_exports",
+    "old_keys",
+    "expiring_certs",
+    "smb_everyone_full_control",
+)
+
+
+def test_posture_public_buckets(events):
+    client = FakeClient(
+        buckets=[
+            posture_bucket("eda-data"),
+            # what 4.6.4 reports for a bucket with no public policy
+            posture_bucket("quiet", public_status="bucket-and-objects-not-public"),
+            posture_bucket("www", public_status="public", account="web"),
+            posture_bucket("scratch", blocked=False),
+            posture_bucket("gone", public_status="public", destroyed=True),
+            bucket("legacy", 1),  # an older array: neither public field
+        ]
+    )
+    row = posture(events, client)
+    assert row["public_buckets"] == [
+        {"bucket": "www", "account": "web", "public_status": "public"},
+        {"bucket": "scratch", "account": "eda", "public_status": "none"},
+    ]
+    assert row["public_count"] == 2
+    # live buckets only: asked of the array, and checked again locally
+    kw = next(kw for n, kw in client.calls if n == "get_buckets")
+    assert kw == {"destroyed": False}
+    # a destroyed row the array returns anyway is dropped locally as well,
+    # so it is neither public nor uncovered
+    client.get_buckets = lambda **kw: FakeResponse(
+        [posture_bucket("gone", public_status="public", destroyed=True)]
+    )
+    row = posture(events, client)
+    assert row["public_count"] == 0 and row["uncovered_count"] == 0
+
+
+def test_posture_audit_coverage_minus_the_exclusion_globs(events):
+    client = FakeClient(
+        buckets=[
+            posture_bucket("eda-data"),
+            posture_bucket("eda-log"),
+            posture_bucket("eda-state"),
+            posture_bucket("www"),
+            posture_bucket("scratch"),
+        ],
+        audit_policies=[
+            {"name": "eda-audit", "enabled": True},
+            {"name": "old-audit", "enabled": False},
+        ],
+        audit_members=[
+            member("eda-audit", "eda-data"),
+            member("eda-audit", "eda-log"),
+            member("old-audit", "www"),  # a disabled policy covers nothing
+        ],
+    )
+    row = posture(events, client)
+    assert row["uncovered_buckets"] == ["scratch", "www"]
+    assert row["uncovered_count"] == 2
+    # the globs are an argument, as a list or a comma-separated string, and
+    # an explicit empty list excludes nothing
+    row = posture(events, client, {"coverage_exclude": ["www", "scr*"]})
+    assert row["uncovered_buckets"] == ["eda-state"]
+    row = posture(events, client, {"coverage_exclude": "eda-*, www"})
+    assert row["uncovered_buckets"] == ["scratch"]
+    row = posture(events, client, {"coverage_exclude": []})
+    assert row["uncovered_buckets"] == ["eda-state", "scratch", "www"]
+    # no policy at all on an array that has the endpoint: every bucket
+    client.audit_policies = []
+    client.audit_members = []
+    assert posture(events, client)["uncovered_count"] == 4
+
+
+def test_posture_world_open_exports_from_policies_and_legacy_rules(events):
+    client = FakeClient(
+        export_rules=[
+            export_rule("default", 1, "*", access="no-root-squash"),
+            export_rule("default", 2, "10.0.0.0/24"),
+            export_rule("readers", 1, "*", permission="ro"),
+        ],
+        file_systems=[
+            legacy_export("home", "*(rw,no_root_squash)"),
+            legacy_export("plain", "*(rw)"),
+            legacy_export("anon", "10.0.0.1(ro) *(rw,all_squash)"),
+            legacy_export("data", "10.0.0.1(rw) *(ro)"),
+            legacy_export("share-01-manila", "*(rw)"),
+            legacy_export("policied", "*(rw)", policy="default"),
+            legacy_export("dead", "*(rw)", destroyed=True),
+            {"name": "object-only", "destroyed": False, "nfs": None},
+        ],
+    )
+    row = posture(events, client)
+    assert row["world_open_exports"] == [
+        {
+            "policy": "default",
+            "rule": "default.1",
+            "client": "*",
+            "permission": "rw",
+            "access": "no-root-squash",
+        },
+        {
+            "policy": "",
+            "rule": "home",
+            "client": "*",
+            "permission": "rw",
+            "access": "no-root-squash",
+        },
+        {
+            "policy": "",
+            "rule": "plain",
+            "client": "*",
+            "permission": "rw",
+            "access": "root-squash",
+        },
+        {
+            "policy": "",
+            "rule": "anon",
+            "client": "*",
+            "permission": "rw",
+            "access": "all-squash",
+        },
+    ]
+    assert row["world_open_export_count"] == 4
+    # the file system globs are an argument and replace the default
+    row = posture(
+        events, client, {"posture_exclude_file_systems": ["home", "plain", "anon"]}
+    )
+    assert [e["rule"] for e in row["world_open_exports"]] == [
+        "default.1",
+        "share-01-manila",
+    ]
+    assert events._legacy_world_open(None) is None
+    assert events._legacy_world_open("*(ro) 10.0.0.0/8(rw)") is None
+
+
+def test_posture_old_and_disabled_access_keys(events):
+    client = FakeClient(
+        access_keys=[
+            access_key("PSFBSAZRTESTKEY0001", "eda/eda-app", 100),
+            access_key("PSFBSAZRTESTKEY0002", "eda/eda-tail", 10),
+            access_key("PSFBSAZRTESTKEY0003", "eda/eda-state", 200, enabled=False),
+            access_key("PSFBSAZRTESTKEY0004", "eda/eda-app", None),
+        ]
+    )
+    row = posture(events, client)
+    assert row["old_keys"] == [
+        {
+            "key": "PSFBSAZRTESTKEY0001",
+            "user": "eda/eda-app",
+            "age_days": 100,
+            "enabled": True,
+        },
+        {
+            "key": "PSFBSAZRTESTKEY0003",
+            "user": "eda/eda-state",
+            "age_days": 200,
+            "enabled": False,
+        },
+    ]
+    assert row["old_key_count"] == 2
+    assert row["disabled_key_count"] == 1
+    row = posture(events, client, {"key_max_age_days": 150})
+    assert [k["key"] for k in row["old_keys"]] == ["PSFBSAZRTESTKEY0003"]
+    # a key exactly at the limit is not older than it
+    row = posture(events, client, {"key_max_age_days": 100})
+    assert [k["key"] for k in row["old_keys"]] == ["PSFBSAZRTESTKEY0003"]
+
+
+def test_posture_expiring_certificates(events):
+    client = FakeClient(
+        certificates=[
+            {"name": "management", "valid_to": NOW_MS + 400 * DAY_MS},
+            {"name": "data-vip", "valid_to": NOW_MS + 10 * DAY_MS + HOUR_MS},
+            {"name": "old-ca", "valid_to": NOW_MS - 3 * DAY_MS + HOUR_MS},
+            {"name": "pending", "valid_to": None},
+        ]
+    )
+    row = posture(events, client)
+    assert row["expiring_certs"] == [
+        {"name": "data-vip", "days_left": 10},
+        {"name": "old-ca", "days_left": -3},
+    ]
+    assert row["expiring_cert_count"] == 2
+    row = posture(events, client, {"cert_warn_days": 5})
+    assert [c["name"] for c in row["expiring_certs"]] == ["old-ca"]
+
+
+def test_posture_share_policies_that_give_everyone_full_control(events):
+    client = FakeClient(
+        share_policies=[
+            share_policy("open", "Everyone", "allow"),
+            share_policy("shout", "EVERYONE", "allow"),
+            share_policy("readers", "Everyone", None),
+            share_policy("admins", "LAB\\storage-admins", "allow"),
+            share_policy("denied", "everyone", "deny"),
+            share_policy("off", "Everyone", "allow", enabled=False),
+            {"name": "bare", "enabled": True, "rules": None},
+        ]
+    )
+    row = posture(events, client)
+    assert row["smb_everyone_full_control"] == ["open", "shout"]
+    assert row["smb_everyone_full_control_count"] == 2
+
+
+def test_posture_issue_count_version_and_maintenance(events):
+    client = FakeClient(
+        buckets=[posture_bucket("www", public_status="public")],
+        export_rules=[export_rule("default", 1, "*")],
+        access_keys=[access_key("PSFBSAZRTESTKEY0001", "eda/eda-app", 400)],
+        certificates=[{"name": "old", "valid_to": NOW_MS - DAY_MS}],
+        share_policies=[share_policy("open", "Everyone", "allow")],
+        windows=[{"name": "array", "created": NOW_MS, "expires": NOW_MS + HOUR_MS}],
+    )
+    row = posture(events, client)
+    assert row["array"] == "fb-a"
+    assert row["purity_version"] == "4.6.4"
+    assert row["maintenance_active"] is True
+    # www is public and, with no audit policy on the array, uncovered too
+    assert row["public_count"] == 1 and row["uncovered_count"] == 1
+    assert row["world_open_export_count"] == 1 and row["old_key_count"] == 1
+    assert row["expiring_cert_count"] == 1
+    assert row["smb_everyone_full_control_count"] == 1
+    assert row["disabled_key_count"] == 0  # not an issue, so not in the sum
+    assert row["issue_count"] == 6
+    # an array with nothing to report
+    row = posture(events, FakeClient())
+    assert row["issue_count"] == 0 and row["maintenance_active"] is False
+    for key in POSTURE_LISTS:
+        assert row[key] == []
+    for key in (
+        "public_count",
+        "uncovered_count",
+        "world_open_export_count",
+        "old_key_count",
+        "disabled_key_count",
+        "expiring_cert_count",
+        "smb_everyone_full_control_count",
+    ):
+        assert row[key] == 0
+
+
+def test_posture_on_an_array_without_the_endpoints_reports_empty_lists(events):
+    reads = (
+        "get_audit_object_store_policies",
+        "get_audit_object_store_policies_members",
+        "get_nfs_export_policies_rules",
+        "get_object_store_access_keys",
+        "get_certificates",
+        "get_smb_share_policies",
+    )
+
+    def absent(self):
+        raise AttributeError("absent at this REST version")
+
+    OldClient = type("OldClient", (FakeClient,), {m: property(absent) for m in reads})
+    client = OldClient(
+        buckets=[posture_bucket("www", public_status="public")],
+        file_systems=[legacy_export("home", "*(rw)")],
+        audit_policies=[{"name": "eda-audit", "enabled": True}],
+        access_keys=[access_key("PSFBSAZRTESTKEY0001", "eda/eda-app", 400)],
+        certificates=[{"name": "old", "valid_to": NOW_MS - DAY_MS}],
+        share_policies=[share_policy("open", "Everyone", "allow")],
+    )
+    row = posture(events, client)
+    # the bucket row and the file system row exist on every array, so public
+    # and legacy findings still come through; coverage cannot be judged
+    # without the policy endpoint, so no bucket is reported uncovered
+    assert row["public_count"] == 1
+    assert row["uncovered_buckets"] == [] and row["uncovered_count"] == 0
+    assert [e["rule"] for e in row["world_open_exports"]] == ["home"]
+    assert row["old_keys"] == [] and row["disabled_key_count"] == 0
+    assert row["expiring_certs"] == [] and row["smb_everyone_full_control"] == []
+    assert row["issue_count"] == 2
+    # a read the array rejects is an empty list too, and the poll completes
+    client = FakeClient(
+        certificates=[{"name": "old", "valid_to": NOW_MS - DAY_MS}],
+        access_keys=[access_key("PSFBSAZRTESTKEY0001", "eda/eda-app", 400)],
+    )
+    client.get_certificates = lambda **kw: FakeError("busy", 503)
+    row = posture(events, client)
+    assert row["expiring_certs"] == [] and row["old_key_count"] == 1
+    # an unreachable array is a poll error, not a clean posture
+    client.get_arrays = lambda **kw: FakeError("down", 500)
+    with pytest.raises(RuntimeError, match="arrays: down"):
+        events.poll_posture(FakeArray(client), {}, {})
+
+
 # --- the asyncio driver ----------------------------------------------------
 class LockedArray(FakeArray):
     def __init__(self, client, name):
@@ -1900,6 +2298,7 @@ def test_signal_loop_runs_every_poller(events):
         "sessions": None,
         "health": "purefb_health",
         "config": "purefb_config",
+        "posture": "purefb_posture",
     }
     for signal, kind in expected.items():
         if kind is None:
@@ -1907,3 +2306,23 @@ def test_signal_loop_runs_every_poller(events):
         got = _run_loop(events, signal, [arr], {}, lambda got: len(got) >= 1)
         assert next(iter(got[0])) == kind
         assert got[0][kind]["array"] == "fb-a"
+
+
+def test_signal_loop_runs_posture_on_its_own_interval(events):
+    client = FakeClient(
+        buckets=[posture_bucket("www", public_status="public")],
+        access_keys=[access_key("PSFBSAZRTESTKEY0001", "eda/eda-app", 400)],
+    )
+    arr = LockedArray(client, "fb-a")
+    got = _run_loop(
+        events,
+        "posture",
+        [arr],
+        {"posture_interval": 1, "key_max_age_days": 365},
+        lambda got: len(got) >= 2,
+    )
+    assert [next(iter(e)) for e in got] == ["purefb_posture", "purefb_posture"]
+    row = got[0]["purefb_posture"]
+    assert row["array"] == "fb-a" and row["public_count"] == 1
+    assert row["old_key_count"] == 1 and row["issue_count"] == 3  # + uncovered
+    assert arr.resets == 0
