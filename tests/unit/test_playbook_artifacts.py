@@ -33,9 +33,8 @@ ARTIFACT_KEYS = {
     "grow_fs.yml": {"file_system", "old_size", "new_size", "outcome"},
     "user_quota.yml": {
         "file_system",
-        "principal",
-        "quota_bytes",
-        "usage_bytes",
+        "principal_kind",
+        "principals",
         "raised",
     },
     "client_diagnose.yml": {"client", "client_host", "commands_ran"},

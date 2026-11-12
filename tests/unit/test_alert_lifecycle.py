@@ -76,7 +76,10 @@ def test_alerts_rulebook_logs_initial_routes_opened_and_notifies_rise_and_closed
     extra = closed["action"]["run_playbook"]["extra_vars"]
     assert extra["severity"] == "info"
     assert "resolved_after_s" in extra["detail"]
-    assert "closing" not in yaml.safe_dump(list(rules.values()))
+    # closing is the array parking a resolved alert: logged, not notified
+    closing = rules["Alert closing - log"]
+    assert 'transition == "closing"' in closing["condition"]
+    assert "debug" in closing["action"]
     assert names.index("Alert already open at start-up - log only") < names.index(
         "Alert closed - notify"
     )

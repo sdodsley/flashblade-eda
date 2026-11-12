@@ -16,8 +16,10 @@ FlashBlade on 4.5.6 (REST 2.17) is the replication peer of later parts.
 - There is no `/alerts/events` on FlashBlade. The alerts signal fetches
   `get_alerts(filter="state!='closed'")`, falls back to an unfiltered
   `get_alerts(limit=...)` if the filter answers 400 (logged once), and
-  diffs the result locally. An alert is `open` or `closed`, nothing else;
-  there is no `closing` state to wait a day for.
+  diffs the result locally. An alert is `open`, then `closing` once the
+  condition has cleared (1101 went there within a minute of the grow on the
+  lab and still answers the `state!='closed'` filter), then `closed`; the
+  plugin emits `closing` as its own transition and the rulebook logs it.
 - Alert fields: `action`, `code`, `component_name`, `component_type`,
   `created`, `description`, `duration`, `flagged`, `id`, `index`,
   `knowledge_base_url`, `name` (a numeric string, the plugin's

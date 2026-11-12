@@ -179,6 +179,14 @@
 
     # Closed is the resolved signal on FlashBlade: one notice at info (the
     # alert log, under the default Slack floor) with the time it was open.
+    # the array parks a resolved alert in "closing" before it closes (1101 did
+    # after a grow on the lab); the record comes with the close
+    - name: Alert closing - log
+      condition: event.purefb_alert.transition == "closing"
+      action:
+        debug:
+          msg: "{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }} is closing: {{ event.purefb_alert.summary }}"
+
     - name: Alert closed - notify
       condition: event.purefb_alert.transition == "closed"
       action:

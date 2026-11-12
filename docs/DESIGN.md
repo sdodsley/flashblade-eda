@@ -164,10 +164,11 @@ belongs to, or marks it design intent.
   (`alert_runbooks`, keys are FlashBlade codes as strings) to notify,
   ticket, or ticket plus per-code tasks under
   `playbooks/runbooks/<code>.yml`, carrying the array's own action text
-  and knowledge base link; unknown codes take the default entry. A
-  FlashBlade alert is open or closed, so the lifecycle is opened, updated
-  (routed again when `severity_raised`) and closed (notified at info with
-  `resolved_after_s`). The handled marker is the alert's own `flagged`
+  and knowledge base link; unknown codes take the default entry. The
+  lifecycle is opened, updated (routed again when `severity_raised`),
+  closing (the array parks a resolved alert there first; logged) and
+  closed (notified at info with `resolved_after_s`). The handled marker is
+  the alert's own `flagged`
   bit (`flag_alert.yml`, behind `alert_flag_handled`); a human flagging an
   alert in the GUI reads as handled, which is the intent.
 - Time-boxed remote assist (`purefb_ra`): design intent; `health.yml`

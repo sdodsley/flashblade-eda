@@ -105,8 +105,10 @@ alert, audit, session, health, hardware, lag and config events also carry
 `maintenance_active`, true while the array has an open maintenance window
 and false on an array without the endpoint, REST before 2.16)
 -------------------------------------------------------------------------
-purefb_alert            transition: initial|opened|updated|closed (a
-                        FlashBlade alert is open or closed, nothing else);
+purefb_alert            transition: initial|opened|updated|closing|closed
+                        (closing: the array parked a resolved alert before
+                        it closes; only severity, flag or summary changes
+                        count as updated, `updated` alone does not);
                         alert_id, code, severity, state, component_type,
                         component_name, summary, description, action,
                         knowledge_base_url, flagged, created, updated,
@@ -819,7 +821,10 @@ def poll_alerts(arr, state, args):
             events.append(event(a, "opened"))
         elif seen[aid] != key:
             previous = seen[aid][1] if len(seen[aid]) > 1 else None
-            events.append(event(a, "updated", previous=previous))
+            # the array parks a resolved alert in "closing" for a while
+            # before it closes (1101 did on the lab after the grow)
+            closing = a.get("state") == "closing" and seen[aid][0] != "closing"
+            events.append(event(a, "closing" if closing else "updated", previous))
     if not first:
         for aid in set(seen) - set(current):
             final = _first(

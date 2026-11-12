@@ -86,6 +86,12 @@
             fb_api_version: "{{ fb_api_version }}"
             alert_log: "{{ alert_log }}"
 
+    - name: Alert closing - log
+      condition: event.purefb_alert.transition == "closing"
+      action:
+        debug:
+          msg: "{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }} is closing: {{ event.purefb_alert.summary }}"
+
     - name: Alert closed - notify
       condition: event.purefb_alert.transition == "closed"
       action:

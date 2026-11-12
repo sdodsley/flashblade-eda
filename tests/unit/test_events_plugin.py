@@ -651,7 +651,24 @@ def test_alerts_first_poll_emits_initial_then_transitions(events):
     assert by_id["1"]["resolved_after_s"] == 100
     assert by_id["1"]["state"] == "closed"
     assert all(e["purefb_alert"]["array"] == "fb-a" for e in third)
-    assert "closing" not in {e["purefb_alert"]["transition"] for e in third}
+
+
+def test_alert_parked_in_closing_is_a_closing_transition(events):
+    # the array held 1101 in "closing" after the grow before it closed
+    client = FakeClient(alerts=[alert("1")])
+    arr = FakeArray(client)
+    state = {}
+    events.poll_alerts(arr, state, {})
+    client.alerts = [alert("1", state="closing", updated=5)]
+    out = events.poll_alerts(arr, state, {})
+    assert [e["purefb_alert"]["transition"] for e in out] == ["closing"]
+    assert out[0]["purefb_alert"]["state"] == "closing"
+    # still closing on the next poll: nothing; closed: the closed transition
+    assert events.poll_alerts(arr, state, {}) == []
+    client.alerts = [alert("1", state="closed", updated=9, duration=4000)]
+    out = events.poll_alerts(arr, state, {})
+    assert [e["purefb_alert"]["transition"] for e in out] == ["closed"]
+    assert out[0]["purefb_alert"]["resolved_after_s"] == 4
 
 
 def test_alert_updated_timestamp_alone_is_not_a_transition(events):
