@@ -1,0 +1,117 @@
+{
+  "schema_version": "2.0.0",
+  "name": "FlashBlade - replication resume with approval",
+  "description": "A purefb_replica_link event forwarded by the replication rulebook: a bucket replica link that is paused. Pausing is a human act, so a human approves resuming it; nothing is resumed without that approval, the link's target and credential are untouched, and every outcome is written to the alert log.",
+  "triggers": [
+    {
+      "id": "fb_replication_event",
+      "type": "eda_trigger",
+      "parameters": {
+        "webhook_path": "fb_replication",
+        "authorized_service_account_ids": ["REPLACE_AT_SYNC"],
+        "input_schema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "required": ["event"],
+          "properties": {
+            "event": {
+              "type": "object",
+              "required": ["schema", "event_type", "array", "maintenance_active", "observed_at", "data"],
+              "properties": {
+                "schema": {"type": "string", "const": "flashblade-eda/1"},
+                "event_type": {"type": "string", "const": "purefb_replica_link"},
+                "array": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+                "maintenance_active": {"type": "boolean"},
+                "observed_at": {"type": "string"},
+                "data": {"type": "object"}
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "notify_paused",
+      "type": "aap_job_template",
+      "name": "Notify: replica link paused, awaiting approval",
+      "parameters": {
+        "job_template_name": "FlashBlade - notify",
+        "organization_name": "FlashBlade",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "warning",
+          "subject": "Replica link ${trigger.event.data.local} -> ${trigger.event.data.remote}:${trigger.event.data.remote_object} on ${trigger.event.array} is paused; a resume awaits approval",
+          "detail": "${trigger.event.data.kind} link, direction ${trigger.event.data.direction}, status ${trigger.event.data.status}, recovery point ${trigger.event.data.recovery_point_age_s} s old. Approve or reject in the orchestrator within one hour.",
+          "target_array": "${trigger.event.array}"
+        }
+      }
+    },
+    {
+      "id": "approve_resume",
+      "type": "approval",
+      "name": "Approve resuming the replica link",
+      "parameters": {
+        "approver_groups": ["admins", "approvers"],
+        "decision_window": 3600,
+        "prompt": "Bucket replica link ${trigger.event.data.local} -> ${trigger.event.data.remote}:${trigger.event.data.remote_object} on ${trigger.event.array} is paused (status ${trigger.event.data.status}, recovery point ${trigger.event.data.recovery_point_age_s} s old). Pausing is a human act: approve to resume the link, which clears paused on the link itself and changes nothing else (its target and credential stay as they are). Rejecting leaves the link paused."
+      }
+    },
+    {
+      "id": "replication_resume",
+      "type": "aap_job_template",
+      "name": "Resume the replica link",
+      "parameters": {
+        "job_template_name": "FlashBlade - replication resume",
+        "organization_name": "FlashBlade",
+        "credential_id": "REPLACE_AT_SYNC",
+        "credential_names": ["FlashBlade - ${trigger.event.array}"],
+        "extra_vars": {
+          "target_array": "${trigger.event.array}",
+          "bucket": "${trigger.event.data.local}",
+          "reason": "approved: link to ${trigger.event.data.remote}:${trigger.event.data.remote_object} paused, status ${trigger.event.data.status}, recovery point ${trigger.event.data.recovery_point_age_s} s old"
+        }
+      }
+    },
+    {
+      "id": "notify_resumed",
+      "type": "aap_job_template",
+      "name": "Notify: replica link resumed",
+      "parameters": {
+        "job_template_name": "FlashBlade - notify",
+        "organization_name": "FlashBlade",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "${trigger.event.array}: replica link ${trigger.event.data.local} -> ${trigger.event.data.remote}:${trigger.event.data.remote_object} resumed after approval",
+          "detail": "Resumed: ${replication_resume.artifacts.resumed}; the replication record in the alert log carries the link's status before and the outcome. Job: ${replication_resume.job_url}",
+          "target_array": "${trigger.event.array}"
+        }
+      }
+    },
+    {
+      "id": "notify_rejected",
+      "type": "aap_job_template",
+      "name": "Notify: resume rejected",
+      "parameters": {
+        "job_template_name": "FlashBlade - notify",
+        "organization_name": "FlashBlade",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "warning",
+          "subject": "Resume of replica link ${trigger.event.data.local} on ${trigger.event.array} rejected or expired; the link stays paused",
+          "detail": "Link to ${trigger.event.data.remote}:${trigger.event.data.remote_object}, status ${trigger.event.data.status}, recovery point ${trigger.event.data.recovery_point_age_s} s old at the event. The replication rulebook raises the event again once an hour while the link stays paused.",
+          "target_array": "${trigger.event.array}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {"from": "fb_replication_event", "to": "notify_paused"},
+    {"from": "notify_paused", "to": "approve_resume"},
+    {"from": "approve_resume", "to": "replication_resume", "from_port": "approved"},
+    {"from": "replication_resume", "to": "notify_resumed"},
+    {"from": "approve_resume", "to": "notify_rejected", "from_port": "rejected"}
+  ]
+}

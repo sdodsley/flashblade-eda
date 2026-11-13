@@ -1,0 +1,43 @@
+# Every AAP job template this project launches from outside a rulebook: the
+# definitions in this directory and the platform rulebooks
+# (extensions/eda/rulebooks/platform/, run_job_template actions), one name
+# per line. `make lint-ao` passes this file to tools/ao_lint.py as
+# --allowed-templates, so a definition that names a template not listed here
+# fails the build, and tests/unit/test_ao_lint.py checks that the definitions
+# and the platform rulebooks name only listed templates and that every
+# listed template is named by one of them. The templates live in the
+# organization named in each node (FlashBlade, the organization aap/seed.yml
+# creates); README.md describes the variables each one takes. A template
+# that only a webhook or tick ruleset launches (capacity approvals, the git
+# push, containment approvals, maintenance windows, housekeeping) is not
+# here unless a definition launches it: the platform has no activation for
+# those rulesets.
+FlashBlade - notify
+FlashBlade - capacity request
+FlashBlade - capacity reclaim
+FlashBlade - orchestrator post
+FlashBlade - grow file system
+FlashBlade - replication resume
+FlashBlade - DR drill
+FlashBlade - identify LED
+FlashBlade - QoS cap
+FlashBlade - QoS lift
+FlashBlade - quarantine client
+FlashBlade - tarpit
+FlashBlade - alert runbook
+FlashBlade - flag alert
+FlashBlade - reconcile
+FlashBlade - remediate DNS
+FlashBlade - remediate NTP
+FlashBlade - client diagnose
+FlashBlade - session check
+FlashBlade - telemetry check
+FlashBlade - user quota
+FlashBlade - canary
+FlashBlade - landing
+FlashBlade - lock on arrival
+FlashBlade - S3 approval
+FlashBlade - S3 anomaly
+FlashBlade - auditor guard
+FlashBlade - posture revert
+FlashBlade - renew certificate

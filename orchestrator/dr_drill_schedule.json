@@ -1,0 +1,76 @@
+{
+  "schema_version": "2.0.0",
+  "name": "FlashBlade - nightly DR drill",
+  "description": "Every night at 03:00 run the DR drill job template (on each replication peer, promote the replica of the file system, read it, demote it again) and raise an incident when any drill failed; otherwise log a one-line summary. A schedule missed while the orchestrator was down is skipped, not caught up.",
+  "triggers": [
+    {
+      "id": "nightly",
+      "type": "scheduled_trigger",
+      "parameters": {
+        "schedule_type": "cron",
+        "cron": "0 3 * * *",
+        "timezone": "UTC",
+        "missed_schedule_policy": "skip"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "dr_drill",
+      "type": "aap_job_template",
+      "name": "Run the DR drills",
+      "parameters": {
+        "job_template_name": "FlashBlade - DR drill",
+        "organization_name": "FlashBlade",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "dr_drill_force": true
+        }
+      }
+    },
+    {
+      "id": "drills_failed",
+      "type": "condition",
+      "name": "Did any drill fail?",
+      "parameters": {
+        "condition": "${dr_drill.artifacts.failed_count} > 0"
+      }
+    },
+    {
+      "id": "notify_incident",
+      "type": "aap_job_template",
+      "name": "Notify: a DR plan has stopped working",
+      "parameters": {
+        "job_template_name": "FlashBlade - notify",
+        "organization_name": "FlashBlade",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "critical",
+          "subject": "DR drill: ${dr_drill.artifacts.failed_count} drill(s) failed",
+          "detail": "A peer had no replica link for the file system, the replica was not a demoted copy, or the promotion or the demotion did not complete in time. Each drill's dr_drill record in the alert log names the peer, the file system and the error. AAP job: ${dr_drill.job_url}"
+        }
+      }
+    },
+    {
+      "id": "notify_summary",
+      "type": "aap_job_template",
+      "name": "Notify: all drills passed",
+      "parameters": {
+        "job_template_name": "FlashBlade - notify",
+        "organization_name": "FlashBlade",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "DR drill: every configured drill promoted, read and demoted its replica on the peer",
+          "detail": "AAP job: ${dr_drill.job_url}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {"from": "nightly", "to": "dr_drill"},
+    {"from": "dr_drill", "to": "drills_failed"},
+    {"from": "drills_failed", "to": "notify_incident", "from_port": "true"},
+    {"from": "drills_failed", "to": "notify_summary", "from_port": "false"}
+  ]
+}

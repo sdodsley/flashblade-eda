@@ -1,0 +1,132 @@
+{
+  "schema_version": "2.0.0",
+  "name": "FlashBlade - QoS cap (day 2)",
+  "description": "An operator asks for an operations-per-second cap on a file system or a bucket. The request is logged, a human approves it, a QoS policy eda-cap-<object> is created when needed and assigned to the object, and the outcome is logged with the AAP job link. The client rulebook lifts the cap once the object has been normal for its configured number of polls. A rejection is logged too and changes nothing.",
+  "triggers": [
+    {
+      "id": "qos_cap_request",
+      "type": "manual_trigger",
+      "parameters": {
+        "input_schema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "required": ["array", "object_kind", "object_name", "cap_ops_per_sec"],
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "type": "string",
+              "title": "Array",
+              "description": "Inventory name of the array",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "maxLength": 80
+            },
+            "object_kind": {
+              "type": "string",
+              "title": "Object kind",
+              "description": "What the name below is: a file system or a bucket",
+              "enum": ["file_system", "bucket"]
+            },
+            "object_name": {
+              "type": "string",
+              "title": "Object name",
+              "description": "File system or bucket name as the array lists it",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$",
+              "maxLength": 128
+            },
+            "cap_ops_per_sec": {
+              "type": "integer",
+              "title": "Cap (operations per second)",
+              "description": "max_total_ops_per_sec of the eda-cap-<object> policy: a whole number of at least 1; the array refuses a value below its own minimum",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "notify_requested",
+      "type": "aap_job_template",
+      "name": "Notify: QoS cap requested",
+      "parameters": {
+        "job_template_name": "FlashBlade - notify",
+        "organization_name": "FlashBlade",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "Cap ${trigger.object_kind} ${trigger.object_name} on ${trigger.array} at ${trigger.cap_ops_per_sec} ops/s: awaiting approval",
+          "detail": "Requested through the orchestrator. Approve or reject within 24 hours.",
+          "target_array": "${trigger.array}"
+        }
+      }
+    },
+    {
+      "id": "approve_cap",
+      "type": "approval",
+      "name": "Approve the QoS cap",
+      "parameters": {
+        "approver_groups": ["admins", "approvers"],
+        "decision_window": 86400,
+        "prompt": "Cap ${trigger.object_kind} ${trigger.object_name} on ${trigger.array} at ${trigger.cap_ops_per_sec} operations per second. A QoS policy eda-cap-${trigger.object_name} is created when it does not exist and assigned to the object; an object that already carries a policy of its own is left alone and recorded. The client rulebook lifts the cap once the object has been normal for qos_lift_normal_polls polls, and FlashBlade - QoS lift removes it by hand."
+      }
+    },
+    {
+      "id": "qos_cap",
+      "type": "aap_job_template",
+      "name": "Apply the QoS cap",
+      "parameters": {
+        "job_template_name": "FlashBlade - QoS cap",
+        "organization_name": "FlashBlade",
+        "credential_id": "REPLACE_AT_SYNC",
+        "credential_names": ["FlashBlade - ${trigger.array}"],
+        "extra_vars": {
+          "target_array": "${trigger.array}",
+          "object_kind": "${trigger.object_kind}",
+          "object_name": "${trigger.object_name}",
+          "cap_ops_per_sec": "${trigger.cap_ops_per_sec}",
+          "reason": "requested through the orchestrator (FlashBlade - QoS cap (day 2))"
+        }
+      }
+    },
+    {
+      "id": "notify_capped",
+      "type": "aap_job_template",
+      "name": "Notify: QoS cap applied",
+      "parameters": {
+        "job_template_name": "FlashBlade - notify",
+        "organization_name": "FlashBlade",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "warning",
+          "subject": "Capped ${trigger.object_kind} ${trigger.object_name} on ${trigger.array} at ${trigger.cap_ops_per_sec} ops/s",
+          "detail": "QoS policy ${qos_cap.artifacts.policy}, capped: ${qos_cap.artifacts.capped}. The object carries the eda-cap- policy until the client rulebook lifts it or FlashBlade - QoS lift is launched. AAP job: ${qos_cap.job_url}",
+          "target_array": "${trigger.array}"
+        }
+      }
+    },
+    {
+      "id": "notify_rejected",
+      "type": "aap_job_template",
+      "name": "Notify: QoS cap rejected",
+      "parameters": {
+        "job_template_name": "FlashBlade - notify",
+        "organization_name": "FlashBlade",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "QoS cap of ${trigger.object_kind} ${trigger.object_name} on ${trigger.array} at ${trigger.cap_ops_per_sec} ops/s rejected or expired; nothing changed",
+          "detail": "The approval was rejected or timed out after 24 hours. Raise a new request if the cap is still wanted.",
+          "target_array": "${trigger.array}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {"from": "qos_cap_request", "to": "notify_requested"},
+    {"from": "notify_requested", "to": "approve_cap"},
+    {"from": "approve_cap", "to": "qos_cap", "from_port": "approved"},
+    {"from": "qos_cap", "to": "notify_capped"},
+    {"from": "approve_cap", "to": "notify_rejected", "from_port": "rejected"}
+  ]
+}

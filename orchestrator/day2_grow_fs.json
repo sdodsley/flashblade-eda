@@ -1,0 +1,125 @@
+{
+  "schema_version": "2.0.0",
+  "name": "FlashBlade - grow file system (day 2)",
+  "description": "An operator asks for a file system's provisioned size to be grown. The request is logged, a human approves it, the file system is grown with one PATCH of its provisioned size and the outcome is logged with the AAP job link. A rejection is logged too and changes nothing.",
+  "triggers": [
+    {
+      "id": "grow_request",
+      "type": "manual_trigger",
+      "parameters": {
+        "input_schema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "required": ["array", "file_system", "new_size"],
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "type": "string",
+              "title": "Array",
+              "description": "Inventory name of the array",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "maxLength": 80
+            },
+            "file_system": {
+              "type": "string",
+              "title": "File system",
+              "description": "File system name as the array lists it",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$",
+              "maxLength": 128
+            },
+            "new_size": {
+              "type": "string",
+              "title": "New provisioned size",
+              "description": "A whole number with at most one unit letter K, M, G, T or P (1024-based), or plain bytes, for example 500G or 2T; 1.5T and 2TB are refused; a file system only grows through this workflow",
+              "pattern": "^[0-9]+[KMGTP]?$",
+              "maxLength": 16
+            }
+          }
+        }
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "notify_requested",
+      "type": "aap_job_template",
+      "name": "Notify: growth requested",
+      "parameters": {
+        "job_template_name": "FlashBlade - notify",
+        "organization_name": "FlashBlade",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "Grow ${trigger.file_system} on ${trigger.array} to ${trigger.new_size}: awaiting approval",
+          "detail": "Requested through the orchestrator. Approve or reject within 24 hours.",
+          "target_array": "${trigger.array}"
+        }
+      }
+    },
+    {
+      "id": "approve_grow",
+      "type": "approval",
+      "name": "Approve the growth",
+      "parameters": {
+        "approver_groups": ["admins", "approvers"],
+        "decision_window": 86400,
+        "prompt": "Grow file system ${trigger.file_system} on ${trigger.array} to ${trigger.new_size}. The size grown from is re-read from the array, a size that would not grow it is refused, a name matching fs_grow_exclude is left alone and recorded, and a provisioned size never shrinks through this workflow."
+      }
+    },
+    {
+      "id": "grow_fs",
+      "type": "aap_job_template",
+      "name": "Grow the file system",
+      "parameters": {
+        "job_template_name": "FlashBlade - grow file system",
+        "organization_name": "FlashBlade",
+        "credential_id": "REPLACE_AT_SYNC",
+        "credential_names": ["FlashBlade - ${trigger.array}"],
+        "extra_vars": {
+          "target_array": "${trigger.array}",
+          "file_system": "${trigger.file_system}",
+          "new_size": "${trigger.new_size}"
+        }
+      }
+    },
+    {
+      "id": "notify_grown",
+      "type": "aap_job_template",
+      "name": "Notify: file system grown",
+      "parameters": {
+        "job_template_name": "FlashBlade - notify",
+        "organization_name": "FlashBlade",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "Grew ${grow_fs.artifacts.file_system} on ${trigger.array} to ${trigger.new_size}",
+          "detail": "${grow_fs.artifacts.old_size} -> ${grow_fs.artifacts.new_size} bytes: ${grow_fs.artifacts.outcome}. AAP job: ${grow_fs.job_url}",
+          "target_array": "${trigger.array}"
+        }
+      }
+    },
+    {
+      "id": "notify_rejected",
+      "type": "aap_job_template",
+      "name": "Notify: growth rejected",
+      "parameters": {
+        "job_template_name": "FlashBlade - notify",
+        "organization_name": "FlashBlade",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "Growth of ${trigger.file_system} on ${trigger.array} to ${trigger.new_size} rejected or expired; nothing changed",
+          "detail": "The approval was rejected or timed out after 24 hours. Raise a new request if the growth is still wanted.",
+          "target_array": "${trigger.array}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {"from": "grow_request", "to": "notify_requested"},
+    {"from": "notify_requested", "to": "approve_grow"},
+    {"from": "approve_grow", "to": "grow_fs", "from_port": "approved"},
+    {"from": "grow_fs", "to": "notify_grown"},
+    {"from": "approve_grow", "to": "notify_rejected", "from_port": "rejected"}
+  ]
+}

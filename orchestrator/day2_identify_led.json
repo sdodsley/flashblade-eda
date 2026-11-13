@@ -1,0 +1,110 @@
+{
+  "schema_version": "2.0.0",
+  "name": "FlashBlade - identify LED (day 2)",
+  "description": "An operator asks for the identify LED on a hardware component to be lit or cleared, for example before a field engineer swaps a blade or a flash module. A human approves it, the LED is set through the FlashBlade collection and the outcome is logged with the AAP job link. A component without an identify LED is reported, not retried; a rejection is logged and changes nothing.",
+  "triggers": [
+    {
+      "id": "led_request",
+      "type": "manual_trigger",
+      "parameters": {
+        "input_schema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "required": ["array", "component", "led_state"],
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "type": "string",
+              "title": "Array",
+              "description": "Inventory name of the array",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "maxLength": 80
+            },
+            "component": {
+              "type": "string",
+              "title": "Component",
+              "description": "Hardware component name as the array lists it under /hardware, for example CH1.FB1, CH1.FM1 or CH1.FB1.ETH1",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "maxLength": 64
+            },
+            "led_state": {
+              "type": "string",
+              "title": "Identify LED",
+              "description": "on lights the identify LED, off clears it",
+              "enum": ["on", "off"],
+              "default": "on"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "approve_led",
+      "type": "approval",
+      "name": "Approve setting the identify LED",
+      "parameters": {
+        "approver_groups": ["admins", "approvers"],
+        "decision_window": 86400,
+        "prompt": "Set the identify LED ${trigger.led_state} on ${trigger.component} of ${trigger.array}. The LED is a visual marker for whoever stands at the chassis; nothing else on the array changes, and a component without an identify LED is reported, not retried."
+      }
+    },
+    {
+      "id": "identify_led",
+      "type": "aap_job_template",
+      "name": "Set the identify LED",
+      "parameters": {
+        "job_template_name": "FlashBlade - identify LED",
+        "organization_name": "FlashBlade",
+        "credential_id": "REPLACE_AT_SYNC",
+        "credential_names": ["FlashBlade - ${trigger.array}"],
+        "extra_vars": {
+          "target_array": "${trigger.array}",
+          "component": "${trigger.component}",
+          "led_state": "${trigger.led_state}",
+          "component_details": "identify LED ${trigger.led_state} requested through the orchestrator (FlashBlade - identify LED (day 2))",
+          "severity": "info"
+        }
+      }
+    },
+    {
+      "id": "notify_led",
+      "type": "aap_job_template",
+      "name": "Notify: identify LED set",
+      "parameters": {
+        "job_template_name": "FlashBlade - notify",
+        "organization_name": "FlashBlade",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "Identify LED ${identify_led.artifacts.led_state} on ${trigger.array} ${identify_led.artifacts.component}",
+          "detail": "Requested through the orchestrator; the hardware record in the alert log says whether the LED changed and names a component without an identify LED. AAP job: ${identify_led.job_url}",
+          "target_array": "${trigger.array}"
+        }
+      }
+    },
+    {
+      "id": "notify_rejected",
+      "type": "aap_job_template",
+      "name": "Notify: identify LED rejected",
+      "parameters": {
+        "job_template_name": "FlashBlade - notify",
+        "organization_name": "FlashBlade",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "Identify LED ${trigger.led_state} on ${trigger.array} ${trigger.component} rejected or expired; nothing changed",
+          "detail": "The approval was rejected or timed out after 24 hours. Raise a new request if the LED is still wanted.",
+          "target_array": "${trigger.array}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {"from": "led_request", "to": "approve_led"},
+    {"from": "approve_led", "to": "identify_led", "from_port": "approved"},
+    {"from": "identify_led", "to": "notify_led"},
+    {"from": "approve_led", "to": "notify_rejected", "from_port": "rejected"}
+  ]
+}

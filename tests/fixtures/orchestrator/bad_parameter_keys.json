@@ -1,0 +1,38 @@
+{
+  "schema_version": "2.0.0",
+  "name": "fixture",
+  "description": "an aap_job_template node with a parameter the orchestrator's node schema does not have (credentials instead of credential_names)",
+  "triggers": [
+    {
+      "id": "start",
+      "type": "manual_trigger",
+      "parameters": {}
+    }
+  ],
+  "nodes": [
+    {
+      "id": "notify",
+      "type": "aap_job_template",
+      "name": "Notify",
+      "parameters": {
+        "job_template_name": "FlashBlade - notify",
+        "organization_name": "Default",
+        "credential_id": "REPLACE_AT_SYNC",
+        "extra_vars": {
+          "severity": "info",
+          "subject": "fixture",
+          "target_array": "a"
+        },
+        "credentials": [
+          "FlashBlade - a"
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "start",
+      "to": "notify"
+    }
+  ]
+}
