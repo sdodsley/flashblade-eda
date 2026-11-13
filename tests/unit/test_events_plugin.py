@@ -4,9 +4,9 @@
 the alert transition diff and its unfiltered fallback, the audit and session
 cursors, the health issue sets and the LAG check with the LLDP cache, the
 capacity history, the file system quota events, the per-client and
-per-object share streaks, the config fields, the posture findings, the SDK
-client construction and the asyncio driver, all driven by a fake SDK
-client."""
+per-object share streaks, the config fields, the posture findings, the
+replication connections and links with their streaks, the SDK client
+construction and the asyncio driver, all driven by a fake SDK client."""
 
 import asyncio
 import contextlib
@@ -217,6 +217,11 @@ class FakeClient:
         self.access_keys = data.get("access_keys", [])
         self.certificates = data.get("certificates", [])
         self.share_policies = data.get("share_policies", [])
+        # replication: empty by default for the same reason
+        self.connections = data.get("connections", [])
+        self.targets = data.get("targets", [])
+        self.fs_links = data.get("fs_links", [])
+        self.bucket_links = data.get("bucket_links", [])
 
     # --- alerts / audits / sessions --------------------------------------
     def get_alerts(self, **kw):
@@ -389,6 +394,20 @@ class FakeClient:
     def get_smb_share_policies(self, **kw):
         return FakeResponse(self.share_policies)
 
+    # --- replication -----------------------------------------------------
+    def get_array_connections(self, **kw):
+        self.calls.append(("get_array_connections", kw))
+        return FakeResponse(self.connections)
+
+    def get_targets(self, **kw):
+        return FakeResponse(self.targets)
+
+    def get_file_system_replica_links(self, **kw):
+        return FakeResponse(self.fs_links)
+
+    def get_bucket_replica_links(self, **kw):
+        return FakeResponse(self.bucket_links)
+
 
 class FakeArray:
     def __init__(self, client, name="fb-a"):
@@ -525,6 +544,16 @@ def test_documentation_block_covers_every_argument(events):
     assert doc["options"]["posture_exclude_file_systems"]["default"] == [
         "share-*-manila"
     ]
+    assert doc["options"]["replication_lag_warn_s"]["default"] == 900
+    assert doc["options"]["replication_ok_statuses"]["default"] == list(
+        events.REPLICATION_OK_STATUSES
+    )
+    assert doc["options"]["replication_escalate_polls"]["default"] == 5
+    # and nothing is documented that the code never reads; the per-signal
+    # intervals are read through an f-string, so they are allowed for
+    intervals = {f"{signal}_interval" for signal in events.SIGNALS}
+    unused = options - read - intervals
+    assert unused == set(), f"documented but unread: {sorted(unused)}"
     assert yaml.safe_load(events.EXAMPLES)[0]["sources"][0][
         "sdodsley.flashblade_eda.purefb_events"
     ]
@@ -628,16 +657,19 @@ def test_main_rejects_a_malformed_arrays_string_without_echoing_it(
     assert "s3cret" not in str(exc.value) and "s3cret" not in caplog.text
 
 
-def test_main_rejects_the_reserved_signal_with_a_clear_error(events):
-    # posture shipped with the object side; replication is the one still to come
-    assert "posture" in events.SIGNALS
-    assert events.RESERVED_SIGNALS == ("replication",)
+def test_main_refuses_an_unknown_signal_and_reserves_none(events):
+    # posture shipped with the object side and replication with the third
+    # part: nothing is reserved any more, but the path stays for the next
+    # signal, and an unknown name is refused with the plain message
+    assert "posture" in events.SIGNALS and "replication" in events.SIGNALS
+    assert events.RESERVED_SIGNALS == ()
     arrays = [{"name": "a", "fb_url": "192.0.2.1", "api_token": "t"}]
-    with pytest.raises(ValueError, match="not supported") as exc:
+    with pytest.raises(ValueError, match="unknown signals") as exc:
         asyncio.run(
-            events.main(_NoQueue(), {"arrays": arrays, "signals": "alerts,replication"})
+            events.main(_NoQueue(), {"arrays": arrays, "signals": "alerts,mirroring"})
         )
-    assert "replication" in str(exc.value)
+    assert "mirroring" in str(exc.value)
+    assert "later release" not in str(exc.value)
     for supported in events.SIGNALS:
         assert supported in str(exc.value)
 
@@ -1715,6 +1747,51 @@ def test_normal_polls_count_from_the_cap(events):
     assert state["telemetry"]["fb-a"]["file_system_capped_last_poll"] == ["v"]
 
 
+def test_tarpitted_file_system_is_flagged_and_always_reported(events):
+    # the containment playbook assigns the one policy eda-tarpit; it is not
+    # an eda-cap-* policy, so eda_capped stays false and eda_tarpit says so
+    client = FakeClient(
+        fs_perf=[perf_row("busy", 500, 500), perf_row("slow", 0, 0)],
+        file_systems=[fs("busy", 1), fs("slow", 1)],
+        bucket_perf=[perf_row("drip", 1, 1)],
+        buckets=[bucket("drip", 1, qos="eda-tarpit")],
+    )
+    arr = FakeArray(client)
+    state = {}
+
+    def poll(top):
+        out = events._performance_events(
+            arr, state, {"top_file_systems": top, "baseline": False}
+        )
+        rows = {
+            e["purefb_fs_performance"]["file_system"]: e["purefb_fs_performance"]
+            for e in out
+            if "purefb_fs_performance" in e
+        }
+        return rows, out
+
+    rows, out = poll(2)
+    assert rows["slow"]["eda_tarpit"] is False and rows["slow"]["eda_capped"] is False
+    assert rows["slow"]["normal_polls"] == 1
+    (drip,) = [
+        e["purefb_bucket_performance"] for e in out if "purefb_bucket_performance" in e
+    ]
+    assert drip["eda_tarpit"] is True and drip["eda_capped"] is False
+    assert drip["qos_policy"] == "eda-tarpit"
+    # tarpitted: flagged, not capped, the normal count starts again, and it
+    # is reported outside the top N so the lift rule keeps seeing it
+    client.file_systems = [fs("busy", 1), fs("slow", 1, qos="eda-tarpit")]
+    rows, _ = poll(1)
+    assert set(rows) == {"busy", "slow"}
+    assert rows["slow"]["eda_tarpit"] is True and rows["slow"]["eda_capped"] is False
+    assert rows["slow"]["qos_policy"] == "eda-tarpit"
+    assert rows["slow"]["normal_polls"] == 0
+    assert rows["busy"]["eda_tarpit"] is False
+    rows, _ = poll(1)
+    assert rows["slow"]["normal_polls"] == 1
+    assert state["telemetry"]["fb-a"]["file_system_capped_last_poll"] == ["slow"]
+
+
 def test_bucket_performance_events(events):
     client = FakeClient(
         bucket_perf=[perf_row("logs", 900, 900), perf_row("archive", 100, 100)],
@@ -2165,6 +2242,451 @@ def test_posture_on_an_array_without_the_endpoints_reports_empty_lists(events):
         events.poll_posture(FakeArray(client), {}, {})
 
 
+# --- replication -----------------------------------------------------------
+def connection(remote, status="connected", **x):
+    return {
+        "id": "c-" + remote,
+        "remote": {"name": remote, "id": "r-" + remote},
+        "status": status,
+        "type": "async-replication",
+        "version": x.get("version", "4.5.6"),
+        "management_address": x.get("management_address", "10.0.1.1"),
+        "replication_addresses": x.get("replication_addresses", ["10.0.1.7"]),
+        "encrypted": x.get("encrypted", False),
+        "throttle": x.get(
+            "throttle", {"default_limit": None, "window_limit": None, "window": None}
+        ),
+    }
+
+
+def target(name, status="connected", **x):
+    return {
+        "name": name,
+        "address": x.get("address", "s3.example"),
+        "status": status,
+        "status_details": x.get("status_details"),
+    }
+
+
+def fs_link(local, status="replicating", lag=1_000, **x):
+    return {
+        "id": "l-" + local,
+        "direction": x.get("direction", "outbound"),
+        "lag": lag,
+        "status": status,
+        "status_details": x.get("status_details"),
+        "link_type": "file-system",
+        "local_file_system": {"name": local},
+        "remote": {"name": x.get("remote", "fb-b")},
+        "remote_file_system": {"name": x.get("remote_object", local)},
+        "policies": [{"name": p} for p in x.get("policies", ["hourly"])],
+        "recovery_point": x.get("recovery_point", NOW_MS - 60_000),
+    }
+
+
+def bucket_link(local, status="replicating", lag=2_000, paused=False, **x):
+    return {
+        "id": "b-" + local,
+        "direction": x.get("direction", "outbound"),
+        "lag": lag,
+        "status": status,
+        "status_details": x.get("status_details"),
+        "paused": paused,
+        "object_backlog": x.get("backlog", {"bytes_count": 0}),
+        "local_bucket": {"name": local},
+        "remote": {"name": x.get("remote", "fb-b")},
+        "remote_bucket": {"name": x.get("remote_object", local)},
+        "remote_credentials": {"name": "fb-b/eda"},
+        "recovery_point": x.get("recovery_point", NOW_MS - 120_000),
+        "cascading_enabled": False,
+    }
+
+
+def replication(events, client, state=None, args=None):
+    """The summary event, and whatever follows it."""
+    out = events.poll_replication(
+        FakeArray(client), {} if state is None else state, args or {}
+    )
+    return out[0]["purefb_replication"], out[1:]
+
+
+def link_events(out):
+    return {
+        e["purefb_replica_link"]["local"]: e["purefb_replica_link"]
+        for e in out
+        if "purefb_replica_link" in e
+    }
+
+
+def connection_events(out):
+    return [e["purefb_array_connection"] for e in out if "purefb_array_connection" in e]
+
+
+def test_replication_summary_fields(events):
+    client = FakeClient(
+        connections=[
+            connection("fb-b"),
+            connection(
+                "fb-c",
+                status="connecting",
+                management_address=None,
+                replication_addresses=[],
+                throttle={"default_limit": 100_000_000, "window_limit": None},
+            ),
+        ],
+        targets=[
+            target("cloud"),
+            target("dark", status="not_connected", status_details="unreachable"),
+        ],
+        fs_links=[
+            fs_link("eda-dr-demo", lag=5_000),
+            fs_link(
+                "home",
+                status="unhealthy",
+                lag=2_000_000,
+                status_details="target unreachable",
+                policies=[],
+            ),
+        ],
+        bucket_links=[
+            bucket_link(
+                "eda-log",
+                status="paused",
+                paused=True,
+                lag=900_001,
+                backlog={
+                    "bytes_count": 4096,
+                    "delete_ops_count": 1,
+                    "other_ops_count": 2,
+                    "put_ops_count": 3,
+                },
+            ),
+            bucket_link("eda-data", direction="inbound", lag=None, recovery_point=None),
+        ],
+        windows=[{"name": "array", "created": NOW_MS, "expires": NOW_MS + HOUR_MS}],
+    )
+    row, rest = replication(events, client)
+    assert row["array"] == "fb-a" and row["maintenance_active"] is True
+    assert row["purity_version"] == "4.6.4"
+    assert row["connections"] == [
+        {
+            "remote": "fb-b",
+            "status": "connected",
+            "type": "async-replication",
+            "version": "4.5.6",
+            "replication_addresses": ["10.0.1.7"],
+            "management_address": "10.0.1.1",
+            "encrypted": False,
+            "throttled": False,
+        },
+        {
+            "remote": "fb-c",
+            "status": "connecting",
+            "type": "async-replication",
+            "version": "4.5.6",
+            "replication_addresses": [],
+            "management_address": None,
+            "encrypted": False,
+            "throttled": True,
+        },
+    ]
+    assert row["connection_count"] == 2 and row["connections_down"] == ["fb-c"]
+    assert row["targets"] == [
+        {
+            "name": "cloud",
+            "address": "s3.example",
+            "status": "connected",
+            "status_details": None,
+        },
+        {
+            "name": "dark",
+            "address": "s3.example",
+            "status": "not_connected",
+            "status_details": "unreachable",
+        },
+    ]
+    assert row["targets_down"] == ["dark"]
+    # the recovery point ages are measured at the poll, so they are checked
+    # apart from the rest of each row
+    ages = [link.pop("recovery_point_age_s") for link in row["fs_links"]]
+    assert ages == [pytest.approx(60, abs=5), pytest.approx(60, abs=5)]
+    assert row["fs_links"] == [
+        {
+            "local_file_system": "eda-dr-demo",
+            "remote": "fb-b",
+            "remote_file_system": "eda-dr-demo",
+            "direction": "outbound",
+            "status": "replicating",
+            "status_details": None,
+            "lag_ms": 5_000,
+            "recovery_point": NOW_MS - 60_000,
+            "policies": ["hourly"],
+        },
+        {
+            "local_file_system": "home",
+            "remote": "fb-b",
+            "remote_file_system": "home",
+            "direction": "outbound",
+            "status": "unhealthy",
+            "status_details": "target unreachable",
+            "lag_ms": 2_000_000,
+            "recovery_point": NOW_MS - 60_000,
+            "policies": [],
+        },
+    ]
+    ages = [link.pop("recovery_point_age_s") for link in row["bucket_links"]]
+    assert ages == [pytest.approx(120, abs=5), None]
+    assert row["bucket_links"] == [
+        {
+            "local_bucket": "eda-log",
+            "remote": "fb-b",
+            "remote_bucket": "eda-log",
+            "direction": "outbound",
+            "status": "paused",
+            "status_details": None,
+            "paused": True,
+            "lag_ms": 900_001,
+            "recovery_point": NOW_MS - 120_000,
+            "backlog_bytes": 4096,
+            "backlog_ops": 6,
+        },
+        {
+            "local_bucket": "eda-data",
+            "remote": "fb-b",
+            "remote_bucket": "eda-data",
+            "direction": "inbound",
+            "status": "replicating",
+            "status_details": None,
+            "paused": False,
+            "lag_ms": None,
+            "recovery_point": None,
+            "backlog_bytes": 0,
+            "backlog_ops": 0,
+        },
+    ]
+    assert row["fs_link_count"] == 2 and row["bucket_link_count"] == 2
+    assert row["links_unhealthy"] == ["home"]
+    assert row["links_paused"] == ["eda-log"]
+    assert row["links_lagging"] == ["home", "eda-log"]
+    assert row["max_lag_ms"] == 2_000_000
+    # fb-c, dark, home and eda-log: a link counts once however many flags
+    assert row["issue_count"] == 4
+    # the summary leads; then the connections (first poll) and the two
+    # links worth a rule, in the order the array listed them
+    assert [next(iter(e)) for e in rest] == [
+        "purefb_array_connection",
+        "purefb_array_connection",
+        "purefb_replica_link",
+        "purefb_replica_link",
+    ]
+    links = link_events(rest)
+    assert links["eda-log"].pop("recovery_point_age_s") == pytest.approx(120, abs=5)
+    assert links["eda-log"] == {
+        "array": "fb-a",
+        "maintenance_active": True,
+        "kind": "bucket",
+        "local": "eda-log",
+        "remote": "fb-b",
+        "remote_object": "eda-log",
+        "direction": "outbound",
+        "status": "paused",
+        "status_details": None,
+        "paused": True,
+        "lag_ms": 900_001,
+        "lag_s": 900.0,
+        "lagging": True,
+        "unhealthy": False,  # paused speaks for it
+        "recovered": False,
+        "consecutive_issue_polls": 1,
+        "escalate": False,
+    }
+    home = links["home"]
+    assert home["kind"] == "file_system" and home["unhealthy"] is True
+    assert home["paused"] is False and home["lagging"] is True
+    assert home["lag_s"] == 2000.0 and home["status_details"] == "target unreachable"
+    assert home["consecutive_issue_polls"] == 1 and home["escalate"] is False
+    assert home["recovered"] is False
+
+
+def test_replica_link_streak_escalates_and_recovers_once(events):
+    client = FakeClient(fs_links=[fs_link("eda-dr-demo"), fs_link("home")])
+    arr = FakeArray(client)
+    state = {}
+    args = {"replication_lag_warn_s": 600, "replication_escalate_polls": 3}
+    # links in step: nothing per link
+    assert link_events(events.poll_replication(arr, state, args)) == {}
+    # home falls behind: an event every poll, the streak grows, escalate at 3
+    client.fs_links = [fs_link("eda-dr-demo"), fs_link("home", lag=700_000)]
+    streaks = []
+    for _ in range(3):
+        (home,) = link_events(events.poll_replication(arr, state, args)).values()
+        assert home["local"] == "home" and home["lagging"] is True
+        streaks.append((home["consecutive_issue_polls"], home["escalate"]))
+    assert streaks == [(1, False), (2, False), (3, True)]
+    # back in step: one recovered event, then silence
+    client.fs_links = [fs_link("eda-dr-demo"), fs_link("home")]
+    (home,) = link_events(events.poll_replication(arr, state, args)).values()
+    assert home["recovered"] is True and home["lagging"] is False
+    assert home["unhealthy"] is False and home["paused"] is False
+    assert home["consecutive_issue_polls"] == 0 and home["escalate"] is False
+    assert link_events(events.poll_replication(arr, state, args)) == {}
+    # a new issue starts the count again; a reported link that is deleted
+    # is forgotten without a recovery event
+    client.fs_links = [fs_link("home", status="unhealthy")]
+    (home,) = link_events(events.poll_replication(arr, state, args)).values()
+    assert home["unhealthy"] is True and home["consecutive_issue_polls"] == 1
+    client.fs_links = []
+    assert link_events(events.poll_replication(arr, state, args)) == {}
+    assert state["replication"]["fb-a"]["issue_polls"] == {}
+    assert state["replication"]["fb-a"]["reported"] == set()
+
+
+def test_replication_thresholds_and_statuses_are_arguments(events):
+    client = FakeClient(
+        fs_links=[
+            fs_link("quiet", status="idle", lag=0),
+            fs_link("odd", status="syncing", lag=0),
+        ],
+        bucket_links=[
+            bucket_link("eda-log", status="paused", paused=True, lag=950_000)
+        ],
+    )
+    row, rest = replication(events, client)
+    assert row["links_unhealthy"] == ["odd"]
+    assert row["links_paused"] == ["eda-log"]
+    assert row["links_lagging"] == ["eda-log"]
+    assert row["issue_count"] == 2
+    assert set(link_events(rest)) == {"odd", "eda-log"}
+    # the statuses take a comma-separated string, the lag a tighter bound
+    row, rest = replication(
+        events,
+        client,
+        args={
+            "replication_ok_statuses": "replicating, idle, syncing",
+            "replication_lag_warn_s": 0,
+        },
+    )
+    assert row["links_unhealthy"] == [] and row["links_lagging"] == ["eda-log"]
+    assert row["issue_count"] == 1
+    assert set(link_events(rest)) == {"eda-log"}
+    # a bucket link carries the pause as a flag, whatever its status says
+    client.fs_links = []
+    client.bucket_links = [
+        bucket_link("eda-log", status="replicating", paused=True, lag=0)
+    ]
+    row, rest = replication(events, client)
+    assert row["links_paused"] == ["eda-log"] and row["links_unhealthy"] == []
+    assert link_events(rest)["eda-log"]["paused"] is True
+    # a file system link parked with status paused counts as paused too
+    client.bucket_links = []
+    client.fs_links = [fs_link("home", status="paused", lag=0)]
+    row, rest = replication(events, client)
+    assert row["links_paused"] == ["home"] and row["links_unhealthy"] == []
+    assert link_events(rest)["home"]["paused"] is True
+    assert link_events(rest)["home"]["unhealthy"] is False
+
+
+def test_array_connection_events_on_the_first_poll_and_on_change(events):
+    client = FakeClient(
+        connections=[connection("fb-b", status="connecting", management_address=None)]
+    )
+    arr = FakeArray(client)
+    state = {}
+    (first,) = connection_events(events.poll_replication(arr, state, {}))
+    # no previous_status key on the first poll: a rulebook condition would
+    # treat a null as defined
+    assert first == {
+        "array": "fb-a",
+        "maintenance_active": False,
+        "remote": "fb-b",
+        "status": "connecting",
+        "type": "async-replication",
+        "version": "4.5.6",
+        "replication_addresses": ["10.0.1.7"],
+        "connected": False,
+    }
+    # unchanged: nothing
+    assert connection_events(events.poll_replication(arr, state, {})) == []
+    # the connection comes up, and a second one appears
+    client.connections = [connection("fb-b"), connection("fb-c", status="connecting")]
+    out = connection_events(events.poll_replication(arr, state, {}))
+    assert [
+        (c["remote"], c["status"], c.get("previous_status"), c["connected"])
+        for c in out
+    ] == [
+        ("fb-b", "connected", "connecting", True),
+        ("fb-c", "connecting", None, False),
+    ]
+    # the change carries the previous status, the new connection has no key
+    assert "previous_status" not in out[1]
+    # the summary keeps every connection and names the ones down
+    row, rest = replication(events, client, state)
+    assert row["connection_count"] == 2 and row["connections_down"] == ["fb-c"]
+    assert connection_events(rest) == []
+    # a connection that vanishes is forgotten
+    client.connections = [connection("fb-b")]
+    assert connection_events(events.poll_replication(arr, state, {})) == []
+    assert state["replication"]["fb-a"]["connections"] == {"fb-b": "connected"}
+
+
+def test_replication_on_an_array_without_the_endpoints_reports_empty_lists(events):
+    reads = (
+        "get_array_connections",
+        "get_targets",
+        "get_file_system_replica_links",
+        "get_bucket_replica_links",
+    )
+
+    def absent(self):
+        raise AttributeError("absent at this REST version")
+
+    OldClient = type("OldClient", (FakeClient,), {m: property(absent) for m in reads})
+    client = OldClient(
+        connections=[connection("fb-b")],
+        targets=[target("dark", status="not_connected")],
+        fs_links=[fs_link("home", status="unhealthy")],
+        bucket_links=[bucket_link("eda-log", paused=True)],
+        windows=[{"name": "array", "created": NOW_MS, "expires": NOW_MS + HOUR_MS}],
+    )
+    out = events.poll_replication(FakeArray(client), {}, {})
+    assert [next(iter(e)) for e in out] == ["purefb_replication"]
+    row = out[0]["purefb_replication"]
+    assert row["array"] == "fb-a" and row["maintenance_active"] is True
+    for key in (
+        "connections",
+        "connections_down",
+        "targets",
+        "targets_down",
+        "fs_links",
+        "bucket_links",
+        "links_unhealthy",
+        "links_paused",
+        "links_lagging",
+    ):
+        assert row[key] == []
+    for key in (
+        "connection_count",
+        "fs_link_count",
+        "bucket_link_count",
+        "max_lag_ms",
+        "issue_count",
+    ):
+        assert row[key] == 0
+    # a read the array rejects is an empty list too, and the poll completes
+    client = FakeClient(
+        targets=[target("dark", status="not_connected")],
+        bucket_links=[bucket_link("eda-log", paused=True)],
+    )
+    client.get_bucket_replica_links = lambda **kw: FakeError("busy", 503)
+    row, rest = replication(events, client)
+    assert row["bucket_links"] == [] and row["targets_down"] == ["dark"]
+    assert row["issue_count"] == 1 and rest == []
+    # an unreachable array is a poll error, not an array with nothing to say
+    client.get_arrays = lambda **kw: FakeError("down", 500)
+    with pytest.raises(RuntimeError, match="arrays: down"):
+        events.poll_replication(FakeArray(client), {}, {})
+
+
 # --- the asyncio driver ----------------------------------------------------
 class LockedArray(FakeArray):
     def __init__(self, client, name):
@@ -2299,6 +2821,7 @@ def test_signal_loop_runs_every_poller(events):
         "health": "purefb_health",
         "config": "purefb_config",
         "posture": "purefb_posture",
+        "replication": "purefb_replication",
     }
     for signal, kind in expected.items():
         if kind is None:
@@ -2325,4 +2848,32 @@ def test_signal_loop_runs_posture_on_its_own_interval(events):
     row = got[0]["purefb_posture"]
     assert row["array"] == "fb-a" and row["public_count"] == 1
     assert row["old_key_count"] == 1 and row["issue_count"] == 3  # + uncovered
+    assert arr.resets == 0
+
+
+def test_signal_loop_runs_replication_on_its_own_interval(events):
+    client = FakeClient(
+        connections=[connection("fb-b", status="connecting")],
+        bucket_links=[bucket_link("eda-log", status="paused", paused=True)],
+    )
+    arr = LockedArray(client, "fb-a")
+    got = _run_loop(
+        events,
+        "replication",
+        [arr],
+        {"replication_interval": 1},
+        lambda got: len(got) >= 5,
+    )
+    # first cycle: the summary, the connection (first poll) and the paused
+    # link; second cycle: the summary and the link again, the unchanged
+    # connection not
+    assert [next(iter(e)) for e in got[:5]] == [
+        "purefb_replication",
+        "purefb_array_connection",
+        "purefb_replica_link",
+        "purefb_replication",
+        "purefb_replica_link",
+    ]
+    assert got[1]["purefb_array_connection"]["connected"] is False
+    assert got[4]["purefb_replica_link"]["consecutive_issue_polls"] == 2
     assert arr.resets == 0

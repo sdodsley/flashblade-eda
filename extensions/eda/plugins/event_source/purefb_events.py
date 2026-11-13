@@ -11,8 +11,8 @@ Written against Purity//FB 4.6.4 (REST 2.21) with py-pure-client 1.98.0.
 Every call it makes exists from REST 2.16 except the per-protocol client
 performance (2.21) and the posture signal's audit policy reads (2.20), and
 the calls an older array lacks (maintenance windows, SAML identity
-providers, Active Directory, the posture reads) are skipped rather than
-failing the signal.
+providers, Active Directory, the posture and replication reads) are
+skipped rather than failing the signal.
 
 Arguments
 ---------
@@ -28,8 +28,7 @@ arrays            list of arrays (required). Each entry:
                   never echoed into an error or a log.
 signals           list or comma-separated string, default: all of
                   alerts | audits | sessions | health | telemetry | config |
-                  posture. replication is reserved for a later release and
-                  is rejected with an error that says so.
+                  posture | replication
 interval          default seconds between polls (default 60)
 <signal>_interval per-signal override, e.g. audits_interval: 15
 verify_ssl        verify the array certificate (default false)
@@ -81,8 +80,9 @@ top_clients       telemetry: how many clients to fetch per protocol per
                   poll, busiest writers first (default 10)
 top_file_systems  telemetry: how many file systems to fetch per poll,
                   busiest writers first (default 10). File systems whose QoS
-                  policy is named eda-cap-* are always reported, whatever
-                  their rank, so the lift rule keeps seeing them.
+                  policy is named eda-cap-* or eda-tarpit are always
+                  reported, whatever their rank, so the lift rules keep
+                  seeing them.
 top_buckets       telemetry: the same for buckets (default 10)
 top_growers       telemetry: how many fastest-growing file systems and
                   buckets to report on the capacity event (default 5)
@@ -109,11 +109,24 @@ coverage_exclude  posture: bucket name globs that may stay without an
 posture_exclude_file_systems
                   posture: file system name globs whose legacy NFS rules are
                   not checked (default: share-*-manila)
+replication_lag_warn_s
+                  replication: a replica link whose lag is above this many
+                  seconds is lagging (default 900)
+replication_ok_statuses
+                  replication: link statuses that are not issues (default:
+                  replicating, idle, connected, healthy). A paused link is
+                  reported as paused, not unhealthy, so one rule speaks for
+                  it.
+replication_escalate_polls
+                  replication: consecutive polls a link has had an issue
+                  after which purefb_replica_link carries escalate: true
+                  (default 5)
 
 Events (one dict per event, exactly one top-level key, always with `array`;
-alert, audit, session, health, hardware, lag, config and posture events also
-carry `maintenance_active`, true while the array has an open maintenance
-window and false on an array without the endpoint, REST before 2.16)
+alert, audit, session, health, hardware, lag, config, posture and
+replication events also carry `maintenance_active`, true while the array
+has an open maintenance window and false on an array without the endpoint,
+REST before 2.16)
 -------------------------------------------------------------------------
 purefb_alert            transition: initial|opened|updated|closing|closed
                         (closing: the array parked a resolved alert before
@@ -198,7 +211,9 @@ purefb_client_performance
 purefb_fs_performance   file_system, the same performance fields,
                         ops_share_pct, qos_policy, eda_capped (the QoS policy
                         is named eda-cap-*, set by the QoS playbook),
-                        high_share_polls, normal_polls
+                        eda_tarpit (the QoS policy is eda-tarpit, set by the
+                        containment playbook), high_share_polls,
+                        normal_polls
 purefb_bucket_performance
                         bucket, the same shape as purefb_fs_performance
 purefb_config           purity_version, ntp_servers_csv, time_zone,
@@ -241,6 +256,46 @@ purefb_posture          one per poll, the whole posture read afresh (the
                         control), smb_everyone_full_control_count,
                         issue_count (the six counts added up),
                         maintenance_active
+purefb_replication      one per poll, the replication state read afresh:
+                        purity_version, connections[{remote,status,type,
+                        version,replication_addresses,management_address,
+                        encrypted,throttled}] (throttled: a standing or
+                        windowed bandwidth limit is set), connection_count,
+                        connections_down (remotes whose status is not
+                        connected), targets[{name,address,status,
+                        status_details}] (S3 targets), targets_down (status
+                        not connected), fs_links[{local_file_system,remote,
+                        remote_file_system,direction,status,status_details,
+                        lag_ms,recovery_point,recovery_point_age_s,
+                        policies}], bucket_links[{local_bucket,remote,
+                        remote_bucket,direction,status,status_details,
+                        paused,lag_ms,recovery_point,recovery_point_age_s,
+                        backlog_bytes,backlog_ops}], fs_link_count,
+                        bucket_link_count, links_unhealthy (local names of
+                        the links whose status is not in
+                        replication_ok_statuses and that are not paused),
+                        links_paused, links_lagging (lag above
+                        replication_lag_warn_s), max_lag_ms (0 without a
+                        lag), issue_count (connections and targets down
+                        plus the links with any issue, each link once),
+                        maintenance_active
+purefb_replica_link     one per link that is unhealthy, paused or lagging,
+                        every poll while it is, and once more when it is
+                        whole again: kind (file_system|bucket), local,
+                        remote, remote_object, direction, status,
+                        status_details, paused, lag_ms, lag_s, lagging,
+                        recovery_point_age_s, unhealthy, recovered (true on
+                        the poll a reported link has no issue any more),
+                        consecutive_issue_polls (0 on recovery), escalate
+                        (the streak has reached replication_escalate_polls);
+                        a link that is deleted is forgotten without a
+                        recovery event
+purefb_array_connection one per connection on the first poll and whenever
+                        its status changes (a new connection counts):
+                        remote, status, previous_status (absent on the first
+                        poll and for a new connection), type, version,
+                        replication_addresses, connected (status is
+                        connected)
 purefb_poll_error       signal, error, consecutive (failed polls in a row on
                         that array and signal; 0 for a poll that succeeded
                         but dropped records), escalate (one per failed poll;
@@ -257,7 +312,8 @@ description:
     events (C(purefb_alert), C(purefb_audit), C(purefb_session),
     C(purefb_health), C(purefb_hardware), C(purefb_lag), C(purefb_capacity),
     C(purefb_fs_quota), C(purefb_client_performance), C(purefb_config),
-    C(purefb_posture) and others). Thresholds and policy live in the
+    C(purefb_posture), C(purefb_replication) and others). Thresholds and
+    policy live in the
     rulebook. One instance runs several signals, each on its own interval.
     The module docstring lists every event and its fields.
 options:
@@ -273,13 +329,11 @@ options:
     elements: dict
     required: true
   signals:
-    description:
-      - Signals to run (list or comma-separated string). C(replication) is
-        reserved for a later release and is rejected.
+    description: Signals to run (list or comma-separated string).
     type: list
     elements: str
-    choices: [alerts, audits, sessions, health, telemetry, config, posture]
-    default: [alerts, audits, sessions, health, telemetry, config, posture]
+    choices: [alerts, audits, sessions, health, telemetry, config, posture, replication]
+    default: [alerts, audits, sessions, health, telemetry, config, posture, replication]
   interval:
     description: Default seconds between polls.
     type: int
@@ -304,6 +358,9 @@ options:
     type: int
   posture_interval:
     description: Poll interval for the posture signal; overrides I(interval).
+    type: int
+  replication_interval:
+    description: Poll interval for the replication signal; overrides I(interval).
     type: int
   verify_ssl:
     description: Verify the array certificate.
@@ -372,11 +429,11 @@ options:
     type: int
     default: 10
   top_file_systems:
-    description: File systems fetched per poll, busiest writers first (capped ones are always reported).
+    description: File systems fetched per poll, busiest writers first (capped and tarpitted ones are always reported).
     type: int
     default: 10
   top_buckets:
-    description: Buckets fetched per poll, busiest writers first (capped ones are always reported).
+    description: Buckets fetched per poll, busiest writers first (capped and tarpitted ones are always reported).
     type: int
     default: 10
   top_growers:
@@ -421,6 +478,19 @@ options:
     type: list
     elements: str
     default: ["share-*-manila"]
+  replication_lag_warn_s:
+    description: A replica link whose lag is above this many seconds is lagging.
+    type: int
+    default: 900
+  replication_ok_statuses:
+    description: Replica link statuses that are not issues; a paused link is reported as paused, not unhealthy.
+    type: list
+    elements: str
+    default: [replicating, idle, connected, healthy]
+  replication_escalate_polls:
+    description: Consecutive polls a link has had an issue after which purefb_replica_link carries escalate true.
+    type: int
+    default: 5
 """
 
 EXAMPLES = r"""
@@ -462,9 +532,19 @@ except ImportError:  # ansible-rulebook ships PyYAML; a bare interpreter may not
 
 logger = logging.getLogger(__name__)
 
-SIGNALS = ("alerts", "audits", "sessions", "health", "telemetry", "config", "posture")
-# a signal a later release adds: named so the error says "later", not "unknown"
-RESERVED_SIGNALS = ("replication",)
+SIGNALS = (
+    "alerts",
+    "audits",
+    "sessions",
+    "health",
+    "telemetry",
+    "config",
+    "posture",
+    "replication",
+)
+# signals a later release adds, named so the error says "later", not
+# "unknown"; none at present, the check stays for the next one
+RESERVED_SIGNALS = ()
 DAY_MS = 86_400_000
 HALF_HOUR_MS = 1_800_000
 CONNECT_TIMEOUT = 10  # seconds to open the connection; the read timeout is an argument
@@ -478,6 +558,8 @@ USER_AGENT = "flashblade-eda/purefb_events"
 EDA_CAP_PREFIX = (
     "eda-cap-"  # QoS policies the QoS playbook creates; FlashBlade has no tags
 )
+EDA_TARPIT_POLICY = "eda-tarpit"  # the one QoS policy the containment playbook assigns
+REPLICATION_OK_STATUSES = ("replicating", "idle", "connected", "healthy")
 
 PERF_FIELDS = (
     "usec_per_read_op",
@@ -1544,21 +1626,24 @@ def _object_performance_events(
     kind, event_name, fn, top, objects, perf, st, threshold, seen, arr
 ):
     """Top-N busiest objects (file systems or buckets) plus every object
-    whose QoS policy is named eda-cap-*: the policy name is the array-held
-    state the lift rule reads back, so a capped object is reported whatever
-    its rank. The lift's "normal for M polls" counts from the cap."""
+    whose QoS policy is named eda-cap-* or eda-tarpit: the policy name is
+    the array-held state the lift rules read back, so a capped or tarpitted
+    object is reported whatever its rank. The lift's "normal for M polls"
+    counts from the cap."""
     merged = {}
     for v in _items(fn(limit=top, sort=["writes_per_sec-"]), f"{kind}/performance"):
         merged[v.get("name")] = v
     policies = {o.get("name"): _name(o.get("qos_policy")) for o in objects}
     capped = {n for n, p in policies.items() if p and str(p).startswith(EDA_CAP_PREFIX)}
+    tarpitted = {n for n, p in policies.items() if p == EDA_TARPIT_POLICY}
+    managed = capped | tarpitted
     for v in _by_name_performance(
-        fn, sorted(n for n in capped if n not in merged), f"{kind}/performance"
+        fn, sorted(n for n in managed if n not in merged), f"{kind}/performance"
     ):
         merged[v.get("name")] = v
-    was_capped = st.get(f"{kind}_capped_last_poll")  # None on the first poll
-    newly_capped = set() if was_capped is None else capped - set(was_capped)
-    st[f"{kind}_capped_last_poll"] = sorted(capped)
+    was_managed = st.get(f"{kind}_capped_last_poll")  # None on the first poll
+    newly_managed = set() if was_managed is None else managed - set(was_managed)
+    st[f"{kind}_capped_last_poll"] = sorted(managed)
     array_ops = _ops(perf)
     events = []
     for name, v in merged.items():
@@ -1566,7 +1651,7 @@ def _object_performance_events(
         seen.add(key)
         share = _pct(_ops(v), array_ops)
         high, normal = _share_streaks(
-            st, key, share, threshold, reset_normal=name in newly_capped
+            st, key, share, threshold, reset_normal=name in newly_managed
         )
         events.append(
             {
@@ -1577,6 +1662,7 @@ def _object_performance_events(
                     "ops_share_pct": share,
                     "qos_policy": policies.get(name),
                     "eda_capped": name in capped,
+                    "eda_tarpit": name in tarpitted,
                     "high_share_polls": high,
                     "normal_polls": normal,
                 }
@@ -2024,6 +2110,248 @@ def poll_posture(arr, state, args):
     ]
 
 
+# --------------------------------------------------------------------------
+# replication: array connections, S3 targets and replica links
+# --------------------------------------------------------------------------
+def _connection_row(conn):
+    throttle = conn.get("throttle") or {}
+    return {
+        "remote": _name(conn.get("remote")) or conn.get("id"),
+        "status": conn.get("status") or "unknown",
+        "type": conn.get("type"),
+        "version": conn.get("version"),
+        "replication_addresses": list(conn.get("replication_addresses") or []),
+        "management_address": conn.get("management_address"),
+        "encrypted": conn.get("encrypted"),
+        # a bandwidth limit, standing or in a window: lag on a throttled
+        # connection may be the operator's own doing
+        "throttled": bool(
+            throttle.get("default_limit") or throttle.get("window_limit")
+        ),
+    }
+
+
+def _link_row(kind, link, now):
+    """A file system or bucket replica link in one shape. The array carries
+    `paused` on bucket links; a status of paused counts too, whichever kind
+    reports it."""
+    if kind == "file_system":
+        local = _name(link.get("local_file_system"))
+        remote_object = _name(link.get("remote_file_system"))
+    else:
+        local = _name(link.get("local_bucket"))
+        remote_object = _name(link.get("remote_bucket"))
+    status = link.get("status") or "unknown"
+    rp = link.get("recovery_point")
+    backlog = link.get("object_backlog") or {}
+    return {
+        "kind": kind,
+        "local": local,
+        "remote": _name(link.get("remote")),
+        "remote_object": remote_object,
+        "direction": link.get("direction"),
+        "status": status,
+        "status_details": link.get("status_details"),
+        "paused": bool(link.get("paused")) or status == "paused",
+        "lag_ms": link.get("lag"),
+        "recovery_point": rp,
+        "recovery_point_age_s": round((now - rp) / 1000) if rp else None,
+        "policies": [_name(p) for p in (link.get("policies") or [])],
+        "backlog_bytes": backlog.get("bytes_count") or 0,
+        "backlog_ops": sum(
+            backlog.get(k) or 0
+            for k in ("put_ops_count", "delete_ops_count", "other_ops_count")
+        ),
+    }
+
+
+def _link_key(row):
+    """The streak key names a link by its two ends: readable in a log and
+    stable across the ids the array assigns."""
+    return f"{row['kind']}:{row['local']}->{row['remote']}/{row['remote_object']}"
+
+
+def _link_summary(row):
+    """The link as the summary event lists it: a file system link carries
+    its policies, a bucket link its pause flag and backlog."""
+    common = {
+        "remote": row["remote"],
+        "direction": row["direction"],
+        "status": row["status"],
+        "status_details": row["status_details"],
+        "lag_ms": row["lag_ms"],
+        "recovery_point": row["recovery_point"],
+        "recovery_point_age_s": row["recovery_point_age_s"],
+    }
+    if row["kind"] == "file_system":
+        return {
+            "local_file_system": row["local"],
+            "remote_file_system": row["remote_object"],
+            "policies": row["policies"],
+            **common,
+        }
+    return {
+        "local_bucket": row["local"],
+        "remote_bucket": row["remote_object"],
+        "paused": row["paused"],
+        "backlog_bytes": row["backlog_bytes"],
+        "backlog_ops": row["backlog_ops"],
+        **common,
+    }
+
+
+def poll_replication(arr, state, args):
+    """Array connections, S3 targets and replica links, read whole every
+    poll: a per-link streak so a rule can tell a blip from a link that has
+    been behind for an hour, and a per-connection diff so a rule fires on
+    the change of state rather than every poll. Every read but the array
+    row is optional, so an array without an endpoint reports empty lists;
+    the array row makes an unreachable array a poll error rather than an
+    array with nothing replicating."""
+    c = arr.client
+    st = state.setdefault("replication", {}).setdefault(
+        arr.name, {"connections": None, "issue_polls": {}, "reported": set()}
+    )
+    now = _now_ms()
+    warn_ms = float(args.get("replication_lag_warn_s", 900)) * 1000
+    ok = set(_as_list(args.get("replication_ok_statuses")) or REPLICATION_OK_STATUSES)
+    escalate_after = int(args.get("replication_escalate_polls", 5))
+    a = _first(_items(c.get_arrays(), "arrays"))
+    maintenance_active = bool(_maintenance(arr, state))
+
+    connections = [
+        _connection_row(x)
+        for x in _optional_items(c, "get_array_connections", "array connections")
+    ]
+    targets = [
+        {
+            "name": t.get("name"),
+            "address": t.get("address"),
+            "status": t.get("status") or "unknown",
+            "status_details": t.get("status_details"),
+        }
+        for t in _optional_items(c, "get_targets", "targets")
+    ]
+    links = [
+        _link_row("file_system", x, now)
+        for x in _optional_items(
+            c, "get_file_system_replica_links", "file system replica links"
+        )
+    ] + [
+        _link_row("bucket", x, now)
+        for x in _optional_items(c, "get_bucket_replica_links", "bucket replica links")
+    ]
+    for row in links:
+        # a paused link is reported as paused, not unhealthy, so one rule
+        # speaks for it; its lag stays a fact of its own
+        row["unhealthy"] = row["status"] not in ok and not row["paused"]
+        lag = row["lag_ms"]
+        row["lagging"] = isinstance(lag, (int, float)) and lag > warn_ms
+        row["issue"] = row["unhealthy"] or row["paused"] or row["lagging"]
+    fs_rows = [r for r in links if r["kind"] == "file_system"]
+    bucket_rows = [r for r in links if r["kind"] == "bucket"]
+    connections_down = [r["remote"] for r in connections if r["status"] != "connected"]
+    targets_down = [t["name"] for t in targets if t["status"] != "connected"]
+    lags = [r["lag_ms"] for r in links if isinstance(r["lag_ms"], (int, float))]
+    events = [
+        {
+            "purefb_replication": {
+                "array": arr.name,
+                "maintenance_active": maintenance_active,
+                "purity_version": a.get("version"),
+                "connections": connections,
+                "connection_count": len(connections),
+                "connections_down": connections_down,
+                "targets": targets,
+                "targets_down": targets_down,
+                "fs_links": [_link_summary(r) for r in fs_rows],
+                "bucket_links": [_link_summary(r) for r in bucket_rows],
+                "fs_link_count": len(fs_rows),
+                "bucket_link_count": len(bucket_rows),
+                "links_unhealthy": [r["local"] for r in links if r["unhealthy"]],
+                "links_paused": [r["local"] for r in links if r["paused"]],
+                "links_lagging": [r["local"] for r in links if r["lagging"]],
+                "max_lag_ms": max(lags, default=0),
+                # a link counts once however many of its flags are set
+                "issue_count": len(connections_down)
+                + len(targets_down)
+                + sum(1 for r in links if r["issue"]),
+            }
+        }
+    ]
+
+    # a connection event on the change only: every connection on the first
+    # poll, then the ones whose status moved (a new connection counts)
+    previous = st["connections"]
+    for row in connections:
+        was = None if previous is None else previous.get(row["remote"])
+        if previous is not None and was == row["status"]:
+            continue
+        change = {
+            "array": arr.name,
+            "maintenance_active": maintenance_active,
+            "remote": row["remote"],
+            "status": row["status"],
+            "type": row["type"],
+            "version": row["version"],
+            "replication_addresses": row["replication_addresses"],
+            "connected": row["status"] == "connected",
+        }
+        # the key is left out rather than null when there is no previous
+        # status: a rulebook condition treats a null-valued key as defined
+        if was is not None:
+            change["previous_status"] = was
+        events.append({"purefb_array_connection": change})
+    st["connections"] = {row["remote"]: row["status"] for row in connections}
+
+    # a link event every poll while the link has an issue, carrying the
+    # streak, and once more when a reported link is whole again; a link
+    # that is gone is forgotten without a recovery event
+    issue_polls, reported = st["issue_polls"], st["reported"]
+    seen = set()
+    for row in links:
+        key = _link_key(row)
+        seen.add(key)
+        issue_polls[key] = issue_polls.get(key, 0) + 1 if row["issue"] else 0
+        recovered = not row["issue"] and key in reported
+        if row["issue"]:
+            reported.add(key)
+        else:
+            reported.discard(key)
+        if not (row["issue"] or recovered):
+            continue
+        events.append(
+            {
+                "purefb_replica_link": {
+                    "array": arr.name,
+                    "maintenance_active": maintenance_active,
+                    "kind": row["kind"],
+                    "local": row["local"],
+                    "remote": row["remote"],
+                    "remote_object": row["remote_object"],
+                    "direction": row["direction"],
+                    "status": row["status"],
+                    "status_details": row["status_details"],
+                    "paused": row["paused"],
+                    "lag_ms": row["lag_ms"],
+                    "lag_s": round((row["lag_ms"] or 0) / 1000, 1),
+                    "lagging": row["lagging"],
+                    "recovery_point_age_s": row["recovery_point_age_s"],
+                    "unhealthy": row["unhealthy"],
+                    "recovered": recovered,
+                    "consecutive_issue_polls": issue_polls[key],
+                    "escalate": bool(
+                        row["issue"] and issue_polls[key] >= escalate_after
+                    ),
+                }
+            }
+        )
+    for key in [k for k in issue_polls if k not in seen]:
+        issue_polls.pop(key, None)
+        reported.discard(key)
+    return events
+
+
 # telemetry is the only signal that needs every array's result before it can
 # emit: the capacity event lists the other polled arrays, least used first.
 def _capacity_events(rows):
@@ -2048,6 +2376,7 @@ POLLERS = {
     "health": poll_health,
     "config": poll_config,
     "posture": poll_posture,
+    "replication": poll_replication,
 }
 
 
