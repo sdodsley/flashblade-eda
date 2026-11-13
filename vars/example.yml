@@ -208,6 +208,7 @@ orchestrator_url: https://orchestrator.example.com
 # (the service account must be bound to each trigger, or the post gets 403).
 orchestrator_paths:
   capacity: fb_capacity
+  replication: fb_replication   # paused bucket replica link -> approval, then resume
 orchestrator_validate_certs: true  # the orchestrator normally carries a real certificate
 # When a capacity handoff fails (orchestrator down, token refused), raise the
 # local request anyway so the approvals webhook can answer it. Off by default:
@@ -325,6 +326,10 @@ object_store:
     log_bucket: eda-log
     state_bucket: eda-state
 object_audit_interval: 60         # seconds between listings; records arrive one rotation (5 min on the lab) after the request anyway
+# Directory of the per-array cursor files (<array>.json: the newest log key
+# read). The copy in the state bucket restores a lost or moved cursor. The
+# decision environment creates /var/lib/flashblade-eda/object_audit for it.
+object_audit_cursor_dir: ~/.flashblade-eda/object_audit
 # Canary objects: a read of anything under these prefixes by a key not in
 # canary_readers is a tripwire. With canary_auto_disable_key true the key is
 # disabled on the array (playbooks/canary.yml); otherwise a critical notice.

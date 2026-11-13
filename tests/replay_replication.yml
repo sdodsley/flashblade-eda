@@ -58,7 +58,8 @@
         event.purefb_replica_link.paused is defined and
         event.purefb_replica_link.paused == true and
         event.purefb_replica_link.kind == "bucket" and
-        vars.replication_auto_resume == true
+        vars.replication_auto_resume == true and
+        vars.orchestrator_enabled == false
       throttle:
         once_within: 1 hour
         group_by_attributes:
@@ -79,7 +80,8 @@
     - name: Replica link paused - notify
       condition: >-
         event.purefb_replica_link.paused is defined and
-        event.purefb_replica_link.paused == true
+        event.purefb_replica_link.paused == true and
+        (event.purefb_replica_link.kind != "bucket" or vars.orchestrator_enabled == false)
       throttle:
         once_within: 1 hour
         group_by_attributes:

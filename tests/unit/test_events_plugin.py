@@ -27,6 +27,14 @@ DAY_MS = 86_400_000
 GBIT = 1_000_000_000
 
 
+@pytest.fixture(autouse=True)
+def _frozen_clock(events, monkeypatch):
+    """Pin the plugin's clock at NOW_MS: the rows below are built relative to
+    it at import, and the ages the tests check must not depend on how long
+    the rest of the suite took to run before this module."""
+    monkeypatch.setattr(events, "_now_ms", lambda: NOW_MS)
+
+
 class FakeResponse:
     """What py-pure-client returns: .items of model objects with to_dict()."""
 

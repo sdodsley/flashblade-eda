@@ -135,12 +135,17 @@
             target_array: "{{ event.purefb_array_connection.array }}"
             alert_log: "{{ alert_log }}"
 
+    # With orchestrator_enabled true (vars) a paused bucket link is handed to
+    # the automation orchestrator instead (the rule below): an approval there
+    # gates the resume. The switch is a literal in the conditions because
+    # rulebook conditions take no filters or defaults.
     - name: Replica link paused - resume
       condition: >-
         event.purefb_replica_link.paused is defined and
         event.purefb_replica_link.paused == true and
         event.purefb_replica_link.kind == "bucket" and
-        vars.replication_auto_resume == true
+        vars.replication_auto_resume == true and
+        vars.orchestrator_enabled == false
       throttle:
         once_within: 1 hour
         group_by_attributes:
@@ -158,12 +163,39 @@
             fb_api_version: "{{ fb_api_version }}"
             alert_log: "{{ alert_log }}"
 
+    # Same trigger and throttle as the resume rule; the whole event travels so
+    # the workflow sees every field (local bucket, remote, status, recovery
+    # point). The workflow's own notify replaces the local one.
+    - name: Replica link paused - hand the event to the orchestrator
+      condition: >-
+        event.purefb_replica_link.paused is defined and
+        event.purefb_replica_link.paused == true and
+        event.purefb_replica_link.kind == "bucket" and
+        vars.orchestrator_enabled == true
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_replica_link.array
+          - event.purefb_replica_link.local
+      action:
+        run_playbook:
+          name: playbooks/orchestrator_post.yml
+          extra_vars:
+            orchestrator_url: "{{ orchestrator_url }}"
+            orchestrator_webhook_path: "{{ orchestrator_paths.replication }}"
+            orchestrator_validate_certs: "{{ orchestrator_validate_certs }}"
+            event: "{{ event }}"
+            array: "{{ event.purefb_replica_link.array }}"
+            alert_log: "{{ alert_log }}"
+
     # file system links have no pause flag to clear from here; a paused one
-    # is a human's doing and is notified whatever the switch says
+    # is a human's doing and is notified whatever the switches say. A paused
+    # bucket link is notified here unless the orchestrator route has it.
     - name: Replica link paused - notify
       condition: >-
         event.purefb_replica_link.paused is defined and
-        event.purefb_replica_link.paused == true
+        event.purefb_replica_link.paused == true and
+        (event.purefb_replica_link.kind != "bucket" or vars.orchestrator_enabled == false)
       throttle:
         once_within: 1 hour
         group_by_attributes:

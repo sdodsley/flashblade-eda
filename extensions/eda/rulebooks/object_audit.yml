@@ -70,6 +70,7 @@
         log_bucket_quota_warn_pct: "{{ log_bucket_quota_warn_pct }}"
         stale_rotations: "{{ stale_rotations }}"
         coverage_exclude: "{{ coverage_exclude }}"
+        cursor_dir: "{{ object_audit_cursor_dir }}"
 
   rules:
     # A poll that fails once is a blip; one that keeps failing is an array
