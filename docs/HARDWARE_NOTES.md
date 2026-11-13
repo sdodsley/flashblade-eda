@@ -804,6 +804,17 @@ seed, the two images and the activations are written around;
   ansible-rulebook timed out") a few times before it runs; the seed
   enables them ten seconds apart and the on-failure restart policy carries
   the rest.
+- The activations listing (`GET /api/eda/v1/activations/`) is the EDA
+  controller's slowest call: with twenty activations and their monitors
+  busy, its worker exceeds the gunicorn timeout and the gateway answers
+  500 or 503, while a single activation's detail still answers. The seed
+  asks for pages of 50 and retries the call; `tools/activation_audit.py`
+  pages by 50 and waits ten seconds between its eight attempts; a hand
+  check reads one activation at a time.
+- A restarted activation whose websocket handshake the gateway answers
+  502 (the EDA websocket service busy with other starts) fails at once
+  and, past its restart limit, stays failed: restart it again until it
+  reports running, one activation at a time.
 - `ansible.eda.rulebook_activation` cannot modify an activation; the
   enabled flag is the one thing a seed can still set, so the seed enforces
   it on every run and a site keeps it true once the activations run. An

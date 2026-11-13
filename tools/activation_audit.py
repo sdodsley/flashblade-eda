@@ -194,7 +194,7 @@ class Client:
             self.context.check_hostname = False
             self.context.verify_mode = ssl.CERT_NONE
 
-    def request(self, method, path, body=None, retries=5):
+    def request(self, method, path, body=None, retries=8):
         data = json.dumps(body).encode() if body is not None else None
         request = urllib.request.Request(
             self.base + path,
@@ -214,7 +214,7 @@ class Client:
                     status = response.status
             except urllib.error.HTTPError as exc:
                 if exc.code in (500, 502, 503, 504) and attempt + 1 < retries:
-                    time.sleep(3)
+                    time.sleep(10)
                     continue
                 try:
                     detail = exc.read()[:300].decode(errors="replace")
@@ -310,7 +310,7 @@ def recreate(client, detail, extra_var_text, say, wait_seconds=360):
     while time.monotonic() < deadline:
         time.sleep(5)
         try:
-            listed = client.list_all("/api/eda/v1/activations/?page_size=200")
+            listed = client.list_all("/api/eda/v1/activations/?page_size=50")
         except AuditError as exc:
             list_error = exc
             say(f"could not read the activations list ({exc}); trying again")
@@ -350,7 +350,7 @@ def recreate(client, detail, extra_var_text, say, wait_seconds=360):
         try:
             same_name = [
                 a
-                for a in client.list_all("/api/eda/v1/activations/?page_size=200")
+                for a in client.list_all("/api/eda/v1/activations/?page_size=50")
                 if a.get("name") == name and a.get("id") != old_id
             ]
             if same_name:
@@ -501,7 +501,7 @@ def main(argv=None):
     try:
         activations = [
             a
-            for a in client.list_all("/api/eda/v1/activations/?page_size=200")
+            for a in client.list_all("/api/eda/v1/activations/?page_size=50")
             if str(a.get("name", "")).startswith(PREFIX)
         ]
         if not activations:

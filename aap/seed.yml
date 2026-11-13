@@ -942,14 +942,21 @@
     # ansible.eda.rulebook_activation cannot update an activation and, in
     # 2.13, creates it enabled whatever `enabled` says; so existing ones are
     # skipped and the enabled flag is enforced through the API afterwards.
+    # The listing is the controller's slowest call: under load its worker
+    # times out and the gateway answers 5xx, so the call asks for small
+    # pages and is retried until it answers 200.
     - name: Activations that already exist
       ansible.builtin.uri:
-        url: "{{ aap_hostname }}/api/eda/v1/activations/?page_size=200&name__startswith=FlashBlade%20rulebook%20-"
+        url: "{{ aap_hostname }}/api/eda/v1/activations/?page_size=50&name__startswith=FlashBlade%20rulebook%20-"
         headers:
           Authorization: "Bearer {{ aap_token }}"
         validate_certs: "{{ aap_validate_certs }}"
         return_content: true
+        status_code: [200, 500, 502, 503, 504]
       register: existing_activations
+      until: existing_activations.status == 200
+      retries: 8
+      delay: 10
       no_log: true
 
     # The EDA controller names a rulebook by its path relative to the
@@ -973,12 +980,16 @@
 
     - name: Activations as they stand
       ansible.builtin.uri:
-        url: "{{ aap_hostname }}/api/eda/v1/activations/?page_size=200&name__startswith=FlashBlade%20rulebook%20-"
+        url: "{{ aap_hostname }}/api/eda/v1/activations/?page_size=50&name__startswith=FlashBlade%20rulebook%20-"
         headers:
           Authorization: "Bearer {{ aap_token }}"
         validate_certs: "{{ aap_validate_certs }}"
         return_content: true
+        status_code: [200, 500, 502, 503, 504]
       register: all_activations
+      until: all_activations.status == 200
+      retries: 8
+      delay: 10
       no_log: true
 
     - name: Enforce the enabled flag on every FlashBlade activation
