@@ -727,7 +727,111 @@ eradication config and certificates, as part 3 reads and writes them.
   so `housekeeping.yml` runs its playbooks on every tick and the
   playbooks decide by the date: `showback.yml` skips when today's ledger
   object exists, `dr_drill.yml` runs only at `dr_drill_hour` and keeps a
-  marker object per day and file system.
+  marker object per day and file system. On the platform `housekeeping.yml`
+  has no activation; three controller schedules launch the selftest, the
+  showback and the DR drill templates instead.
+
+## Containerized platform
+
+Facts about the containerized Ansible Automation Platform 2.7 topology the
+seed, the two images and the activations are written around;
+[aap/README.md](../aap/README.md) has the longer form.
+
+- The controller's task container keeps a container image store of its
+  own, and the EDA activation workers start activations through the host
+  user's podman service, whose storage the installer configures
+  separately; neither is the host user's command-line store. An image that
+  exists only there (`localhost/flashblade-eda-ee` built on the same
+  machine) fails at job or activation start with "pinging container
+  registry localhost", because a `localhost/` name the store lacks is
+  pulled from a registry called localhost. Either push both images to a
+  registry the platform can pull from (the private automation hub counts)
+  or load each into the store that needs it: the execution environment
+  with `podman save localhost/flashblade-eda-ee:latest | podman exec -i
+  automation-controller-task podman load`, the decision environment with
+  `podman save localhost/flashblade-eda-de:latest | podman --remote load`
+  (the socket the activation workers use).
+- A decision environment created through the API defaults to the pull
+  policy `always`; an activation on a locally loaded image then fails to
+  start with "x509: certificate is valid for <platform host>, not
+  localhost", the worker's pull of `localhost/...` meeting the gateway's
+  certificate. `aap_eda_de_pull_policy` is `missing` by default and `never`
+  for an image loaded as above, so that the worker never asks a registry
+  for the `localhost/` name; `aap_ee_pull: missing` does the same for the
+  execution environment.
+- A job's execution environment reaches a service on the platform host
+  only as `host.containers.internal`; the host's own address and loopback
+  point back at the container. The orchestrator credential's
+  `orchestrator_url` carries that name when the orchestrator runs on the
+  platform host (with `orchestrator_validate_certs: false` while it
+  carries a self-signed certificate), and the seed leaves
+  `orchestrator_url` out of an activation's extra vars when that
+  credential is attached, so the credential's value is the one the post
+  uses.
+- `run_job_template` needs a controller to talk to: every activation
+  carries the `Platform user - flashblade-eda` credential (the built-in
+  `Red Hat Ansible Automation Platform` type, host
+  `<gateway>/api/controller/`), whose user needs the execute role on the
+  templates of `aap_organization` and nothing more. The action holds the
+  ruleset until the job ends, so three events three seconds apart become
+  three jobs about a minute apart.
+- One credential per type. The controller refuses a second credential of
+  a type a template already carries, and the EDA controller refuses two
+  credentials on one activation whose injectors name the same variable.
+  Every `FlashBlade - <array>` credential injects `fb_url`, `api_token`
+  and `credential_array`, which is why one `FlashBlade fleet` credential
+  carries every array (`purefb_fleet_json` on the controller,
+  `purefb_arrays` on the EDA side, the JSON list the source plugins
+  accept) and the per-array credentials serve launches that pin an array.
+  The `FlashBlade object store` type's `FB_OBJ_*` names belong to that
+  type alone, so its credential sits beside the fleet, platform-user and
+  orchestrator credentials; a second object-store array is a second
+  `FlashBlade object store - <array>` credential, a second object-audit
+  activation and a credential chosen at launch for the S3 templates,
+  never two such credentials on one template or activation.
+  `tools/activation_audit.py` leaves the injected keys (`purefb_arrays`,
+  `config_arrays`) out of its comparison for the same reason.
+- Activations run with host networking: a listener inside an activation
+  (the syslog and Alertmanager sources) listens on the host's port, so the
+  arrays' syslog servers and Alertmanager address the platform host
+  itself, the host firewall admits `syslog_port` over TCP and UDP and
+  `alertmanager_port` over TCP, and a sibling project's activations on the
+  same host take ports of their own. The webhook rulesets have no platform
+  variant, so those two are the only ports the FlashBlade activations
+  bind; the example vars keep the standalone ports.
+- An activation created while several others are still starting can fail
+  its readiness check ("Activation is unresponsive. Readiness check for
+  ansible-rulebook timed out") a few times before it runs; the seed
+  enables them ten seconds apart and the on-failure restart policy carries
+  the rest.
+- `ansible.eda.rulebook_activation` cannot modify an activation; the
+  enabled flag is the one thing a seed can still set, so the seed enforces
+  it on every run and a site keeps it true once the activations run. An
+  activation keeps the rulebook and the extra vars it was created with,
+  and a project is synced when it is created, not on later seed runs: a
+  changed playbook reaches a job template after a project sync, a changed
+  rule or a new vars key reaches an activation after it is recreated
+  (`tools/activation_audit.py --recreate`). After an activation is deleted
+  the EDA controller keeps its name for a while after the id has left the
+  list, and a create with the same name inside that window answers 400
+  "activation with this name already exists"; the gateway also answers an
+  occasional 5xx to a create or a delete the controller has in fact
+  carried out, so the tool looks the name up after every failed create,
+  judges a delete by the id leaving the list and retries the list itself.
+  The controller hands `extra_var` back re-serialised with sorted keys and
+  without the credential-injected vars, so the tool compares parsed vars,
+  never the text.
+- The jobs' paths are the execution environment's: `aap_job_extra_vars`
+  puts `alert_log`, `request_dir` and `baseline_dir` under `/tmp`, which
+  lives and dies with the job's container, so on the platform the job
+  output, the Slack post and the orchestrator's execution record are the
+  record, and a request file written by one job is not seen by the next
+  (the reclaim rebuilds its request from the artifacts for that reason).
+- A rootless container's non-root user cannot read a 600-mode file
+  bind-mounted from the host (the host user maps to the container's root,
+  not to the image's user); a podman secret is mounted readable under
+  `/run/secrets`, which is how the approval bot gets its tokens
+  (`slack/README.md`).
 
 ## Ansible templating
 
@@ -779,7 +883,7 @@ eradication config and certificates, as part 3 reads and writes them.
   the fault itself is replayed from `tests/fixtures/` (a blade, a LAG).
 - A hot array: last-week baselines are idle, so the client and QoS rules
   fire on lowered thresholds under a fio load from the client VM, which
-  is also the platform host.
+  also hosts the OTLP receiver.
 - Replication end to end beyond one link: the array connection to the
   4.5.6 peer came up once created without replication addresses
   ("Replication" above) and carries the `eda-dr-link` file system link;

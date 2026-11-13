@@ -11,7 +11,7 @@
 # collection content. `make collection` builds the
 # tarball into build/ and installs it under ./collections, which env.sh puts
 # first on ANSIBLE_COLLECTIONS_PATH. Everything else in the tree (tests,
-# docs, the Prometheus material under prometheus/, the rule generator under
+# docs, the Prometheus material under prometheus/, the developer tools under
 # tools/, local tooling) is development material and stays out of the
 # artifact through build_ignore.
 namespace: sdodsley

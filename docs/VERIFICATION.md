@@ -22,8 +22,12 @@ ansible-rulebook 1.3.x, ansible-core 2.17,
 py-pure-client 1.98.0, everpure.flashblade 1.29.0, ansible.eda 2.13.0,
 boto3 1.26 or newer for part 2, Prometheus 3.x with the OTLP receiver and
 Alertmanager for the telemetry test of part 3. An NFS client VM provides
-the load, the quota writes, the S3 traffic and the NLM lock. This is a
-prototype; it is not a supported product.
+the load, the quota writes, the S3 traffic and the NLM lock. Part 4 adds a
+containerized Ansible Automation Platform 2.7 on a host of its own (podman;
+the controller, its execution environment and the EDA activation workers),
+the automation orchestrator beside it and a Slack workspace; the client
+VM's Alertmanager and the arrays' syslog servers point at the activations
+on the platform host. This is a prototype; it is not a supported product.
 
 ## How the tests run
 
@@ -115,6 +119,33 @@ legal hold, showback, selftest, the replication signal) runs live.
 | 8 | `purefb_legal_hold` against `fb-a`: `name eda-ir-drill`, a description, `file_system eda-dr-demo`, `paths ["/"]`, `recursive true`; the same again; `entities_state absent`; `state absent` | `POST /legal-holds` creates the hold and `post_legal_holds_held_entities` the entity; `GET /legal-holds/held-entities` lists `{legal_hold eda-ir-drill, file_system eda-dr-demo, path /}` and the module returns `hold` with `held_entities`; the second run changes nothing; `entities_state absent` sends `DELETE /legal-holds/held-entities?names=eda-ir-drill&file_system_names=eda-dr-demo&paths=/` and the entity is gone (the answer shape is recorded in HARDWARE_NOTES.md); `state absent` deletes the hold; check mode reports without writing | passed 2026-11-13 (hold `eda-ir-demo`, paths `["/"]`, recursive): the first run created the hold and held the path (CHANGED), the second changed nothing, `state absent` released the entity and deleted the hold (CHANGED); three facts came out of it and are in the module: a held entity is released with `PATCH /legal-holds/held-entities ... released=true` (DELETE is 405), a directory needs `recursive=true` on the release too, and a hold applied or released moments ago stays "in use" for several seconds, so the delete is retried; `entities_state absent` alone was not run on the array |
 | 9 | `housekeeping.yml` with `housekeeping_interval` lowered to a few minutes, `selftest_checks` the five defaults, `prometheus_url` empty, `showback_bucket eda-state` | on the first tick `selftest.yml` records kind `selftest` at info with per-check results: `rest` (GET `/arrays`) ok, `s3` (a get of `cursors/object_audit/fb-a.json` in `eda-state`, ok on 200 or 404) ok, `audit` (the `eda-audit` policy enabled with members and filters) ok, `telemetry` ok while the test-1 target exists or skipped with `telemetry_endpoint` empty, `prometheus` skipped; `showback.yml` writes `showback/<yyyy-mm-dd>/fb-a.json` to `eda-state` with `date`, `array`, `file_systems`, `buckets`, `accounts` and `totals`, records kind `showback` at info and `set_stats` `date`, `object_key`, `file_systems`, `buckets`; on the second tick showback skips because the object exists and selftest runs again; `dr_drill.yml` runs and does nothing outside `dr_drill_hour`; a check made to fail (a wrong `telemetry_target_name`) turns the selftest record critical with `failed` naming it | passed 2026-11-13 (both playbooks run by hand, not from the tick): `showback.yml` wrote `showback/2026-11-13/fb-a.json` to `eda-state` (3 file systems, 3 buckets, 1 account) and left it alone on the second run; `selftest.yml` recorded rest, s3 and audit ok and telemetry and prometheus failed (target disabled, no receiver) at critical, the intended verdict; its first run asked REST 2.16 for the 2.20 audit endpoints, fixed |
 
+## Lab exit tests for part 4
+
+Run against a containerized Ansible Automation Platform 2.7 with the
+automation orchestrator beside it, from a clone of this repository on the
+platform host: the two images built there and loaded into the stores the
+platform uses, `aap/seed.yml` run with the site vars (`FBEDA_VARS` for the
+activations, `-e @vars/local-<site>.yml` for the seed), then the objects
+exercised through the platform and the orchestrator; the S3 traffic, the
+human changes and the Alertmanager posts come from the client VM as in
+parts 1 to 3. The sibling project's objects on the same platform are left
+alone. Every test restores what it changes: the disabled key is re-enabled,
+the NTP servers put back, the telemetry target re-enabled, the file system
+shrunk back.
+
+| # | Test | Expected | Status |
+| --- | --- | --- | --- |
+| 1 | `make check` on a clean checkout, with `lint-ao` and the platform unit tests | black, pyflakes and yamllint pass over the plugins, the modules, `tools/`, `slack/` and the tests; `tools/ao_lint.py` passes every definition against `orchestrator/job_templates.txt`; the unit tests pass (the count is recorded here); the playbook syntax check passes | pending |
+| 2 | `aap/seed.yml` against an empty `FlashBlade` organization with the site vars and the credentials in the environment; then the same run again | every object of the seed exists: the organization, the five credential types, the credentials (`FlashBlade - <array>` per array, `FlashBlade fleet - FlashBlade`, `FlashBlade object store - <array>`, `Orchestrator service account - flashblade-eda`, `Slack webhook - flashblade-eda`, `Platform user - flashblade-eda`, `Source control - flashblade-eda`), the inventory `FlashBlades` with localhost and one host per array, the project `FlashBlade EDA` on both sides, `FlashBlade EDA EE` and `FlashBlade EDA DE`, the 35 job templates with their site keys and credentials, the workflow `FlashBlade - capacity reclaim (controller tier)`, the three schedules, the notification template `Slack - flashblade-eda` and fifteen activations; the second run changes nothing but the EDA credentials, which the platform does not read back | pending |
+| 3 | `FlashBlade - flag alert` (or `FlashBlade - selftest`) launched by hand against one array | the job runs green in `FlashBlade EDA EE`: py-pure-client and this collection's `purefb_*` modules import, `tasks/resolve_array.yml` picks the array from the fleet credential and the record is written | pending |
+| 4 | `aap_eda_activations_enabled: true` and the seed run again; then `tools/activation_audit.py` against the platform | fifteen activations `FlashBlade rulebook - <name>` running from `FlashBlade EDA DE` (pull policy `never` on the loaded image), enabled ten seconds apart; the audit reports every one `ok` and exits 0 | pending |
+| 5 | the polling path on the platform: an NTP server added on `fb-a` by hand (`config_drift.yml`), or an alert that opens (`alerts.yml`) | the config-drift activation launches `FlashBlade - remediate NTP` through the fleet credential and the baseline servers are back on the array, or the alerts activation launches `FlashBlade - flag alert` and the alert reads `flagged`; whichever ran is recorded here with the job | pending |
+| 6 | object audit on the platform: a boto3 `GetObject` of the canary with the `eda-app` key from the client VM | within one rotation plus the poll interval the object-audit activation, with `FlashBlade object store - fb-a` injecting the `FB_OBJ_*` variables, launches `FlashBlade - canary`; the key reads back `enabled false` (re-enabled afterwards) and the cursor copy in `eda-state` moves | pending |
+| 7 | the Alertmanager path: the client VM's Alertmanager pointed at `/alerts` on the platform host's `alertmanager_port`; the telemetry target disabled for longer than the silence window, then re-enabled | `FlashBladeTelemetrySilent` reaches the alertmanager activation and launches `FlashBlade - telemetry check`, whose record carries verdict `pipeline`; the resolved alert launches `FlashBlade - notify` at info | pending |
+| 8 | the syslog path: a syslog server on `fb-a` with the URI `tcp://<platform host>:<syslog_port>` and the management service; a human audit line (a command on the CLI) | the array holds a TCP connection to the syslog activation, the `purity.audit` line is parsed into fields and the human-action rule launches `FlashBlade - notify` with the user, the array and the command | pending |
+| 9 | `FlashBlade - capacity reclaim (controller tier)` launched by hand | the request job publishes its artifacts, the workflow pauses at the approval node, the approval is given from the Slack card (the bot) or in the platform's UI, the reclaim node rebuilds the request from the artifacts and records each refusal or that nothing is pending, and the notify node runs | pending |
+| 10 | the orchestrator: the capacity route (a fixture event posted through `FlashBlade - orchestrator post`, or the capacity activation with `orchestrator_enabled` true and `capacity_risk_pct` lowered for one poll); `day2_grow_fs` started from the API against `eda-demo-quota`; `dr_drill_schedule.json` published | the capacity execution runs the request, pauses at its approval and on approval runs `FlashBlade - capacity reclaim` to completion; the grow definition notifies, pauses at its approval, grows the file system through `FlashBlade - grow file system` and notifies with `old_size`, `new_size` and the job link; publishing the drill definition creates its schedule | pending |
+
 ## Replayed only
 
 Exercised from fixtures under `tests/fixtures/`, not induced on the array:
@@ -194,3 +225,15 @@ event takes the same path as a live one.
   telemetry (the lab is idle, so `baseline_known` is false and the rules
   are replayed); `FlashBladeCapacityHigh` and the other hand-written
   Prometheus rules firing on real series.
+- Of part 4, what its tests do not reach: this repository's own bot
+  instance (`slack/approval_bot.py` with its `flashblade_eda_` action
+  prefix; on a platform that also runs the sibling, the sibling's bot,
+  pointed at both systems, carries the cards, because one Slack app has
+  one bot); a second object-store array and its second object-audit
+  activation; the Source Control credential's removal once the repository
+  is public (the seed creates none when the token variable is unset and
+  never deletes one); the three controller schedules and the
+  orchestrator's drill schedule firing on their own; the three other day-2
+  definitions (`day2_identify_led`, `day2_qos_cap`,
+  `day2_quarantine_client`) and `replication_paused_approval.json` from
+  a live paused link, linted and unit-tested only.

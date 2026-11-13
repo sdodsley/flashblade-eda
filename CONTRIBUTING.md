@@ -11,14 +11,19 @@ https://github.com/Everpure-Ansible/FlashBlade-Collection, not here.
 ```
 python3 -m venv venv && . venv/bin/activate
 make deps      # Python requirements and the two collections
-make check     # black, pyflakes, yamllint, unit tests, playbook syntax
+make check     # black, pyflakes, yamllint, ao_lint, unit tests, playbook syntax
 ```
 
 `make check` is what CI runs; black and pyflakes cover the plugins, the
-modules and the tests. The unit tests need no array: the plugins are
-exercised with a fake SDK client and a fake boto3 client (`boto3` is
-stubbed when it is not installed), the modules with a fake AnsibleModule
-and client, and the rulebook tests validate every rulebook against
+modules, `tools/`, `slack/` and the tests, and `make lint-ao` runs
+`tools/ao_lint.py` over `orchestrator/*.json` against
+`orchestrator/job_templates.txt`. The unit tests need no array: the
+plugins are exercised with a fake SDK client and a fake boto3 client
+(`boto3` is stubbed when it is not installed), the modules with a fake
+AnsibleModule and client, the platform rulebook generator against the
+committed files, the activation audit, the orchestrator sync tool and the
+Slack bot against in-process fakes, the handoff playbook against
+`tests/mock_orchestrator.py`, and the rulebook tests validate every rulebook against
 ansible-rulebook's own schema, check that every lowercase variable a
 rulebook references is documented in `vars/example.yml` (uppercase names
 such as `APPROVAL_TOKEN` are environment variables passed with
@@ -84,8 +89,33 @@ throttles included.
   `inventory/local*.yml`, `baseline/*.yml` (except `example.yml`) and
   `*.env` are gitignored for that; no host names, addresses or
   home-directory paths from a lab belong anywhere in the tree.
+- The platform rulebooks are generated, never edited. After a change to a
+  rulebook under `extensions/eda/rulebooks/`, run
+  `python tools/platform_rulebooks.py` and commit
+  `extensions/eda/rulebooks/platform/`; the unit test fails when the
+  committed files differ from the generator's output. A playbook a rule
+  runs for the first time needs its job template name (`FlashBlade -
+  <playbook words>`) in the generator's table and in `aap/seed.yml`, and
+  in `orchestrator/job_templates.txt` when a platform rulebook or a
+  definition launches it; a webhook-only or tick-only ruleset has no
+  platform variant.
+- An orchestrator definition follows the contract in
+  [docs/ORCHESTRATOR.md](docs/ORCHESTRATOR.md): `schema_version` 2.0.0,
+  unwrapped trigger bodies (`${trigger.event...}`), `credential_names`
+  rather than ids, the approver groups `admins` and `approvers`,
+  `REPLACE_AT_SYNC` for the per-environment ids, every node passing only
+  event, form or earlier-node data (site-specific keys stay on the job
+  templates), and every `${node.artifacts.key}` it reads published by that
+  template's playbook with `set_stats` (`ARTIFACT_KEYS` in
+  `tests/unit/test_playbook_artifacts.py`). Every rule of `tools/ao_lint.py`
+  has a bad fixture under `tests/fixtures/orchestrator/`; `make lint-ao`
+  runs before a push.
+- `tools/` and `slack/` run on Python 3.9 (a platform host's system
+  Python): no `match` statements, no `X | Y` type hints, and `tools/` uses
+  the standard library and PyYAML only.
 - Changes that touch an array should be validated against one; say in the
   pull request what ran and what the array did.
 - Every `.py`, `.yml` and `.sh` file starts (after the shebang or the
   `---`, if any) with `# Copyright 2026 Everpure, Inc.` and
-  `# SPDX-License-Identifier: Apache-2.0`.
+  `# SPDX-License-Identifier: Apache-2.0`; a JSON file (`aap/files/`,
+  `orchestrator/`, the fixtures) carries no header.

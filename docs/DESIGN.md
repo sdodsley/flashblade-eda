@@ -66,8 +66,8 @@ lab change; "blocked" is not possible there.
 
 The only file system on the lab array is a Manila share on legacy NFS
 rules with no export policy, and the NFS client VM also hosts the
-automation platform. Every export-policy, quarantine and lock demo uses a
-throwaway file system; nothing isolates the VM.
+Prometheus OTLP receiver. Every export-policy, quarantine and lock demo
+uses a throwaway file system; nothing isolates the VM.
 
 ## 3. Transports
 
@@ -467,9 +467,10 @@ no method for (clearing a policy from an object, removing a held entity).
 | --- | --- | --- | --- |
 | PR 1 | 4.6.4 lab | scaffold; `purefb_events` with alerts, audits, sessions, health, telemetry and config; `purefb_syslog` management path; alerts, change_control, config_drift, health, capacity, quota_user, client, maintenance, sessions, syslog; notify, approvals and the orchestrator post reused | the seven tests in [VERIFICATION.md](VERIFICATION.md): a scratch 1 GiB file system filled to 860 MiB raises 1101 and `purefb_fs_quota` and is grown; a uid quota raises 1106; a GUI `purepolicy` change arrives with `user_interface GUI`; the LED on `CH1.FB1` with the LLDP line; fio in `purefb_client_performance`; a 1 h window flips `maintenance_active` |
 | PR 2 | 4.6.4 | built and lab-verified (part 2, five tests passed 2026-11-12): `purefb_object_audit`; the `posture` signal; the three audit modules under `plugins/modules/`; the two `eda` buckets; `object_audit.yml` (canary, honey, landing, lock_on_arrival, the S3 approval inbox, storms, the auditor guard) and `posture.yml` | the five tests in [VERIFICATION.md](VERIFICATION.md): one boto3 GET disables the key within one 5-minute rotation; an approval PutObject runs a proposed grow; a policy member removed as a human re-attaches and pages; the log bucket at 80 % pages (and the quota is raised when a ceiling is set); the cursor survives a restart |
-| PR 3 | 4.6.4 and the 4.5.6 peer | built and lab-verified (part 3, 2026-11-13: all nine tests passed, the telemetry test against a live OTLP receiver and the drill against the peer): the telemetry, maintenance, QoS, session and lock, legal hold, alert flag and eradication modules; the `replication` signal; OTLP into a Prometheus OTLP receiver, `prometheus/flashblade.rules.yml` generated from the policy listing by `tools/telemetry_rules.py`, the Alertmanager rulebook; `contain.yml` (quarantine, tarpit, the lock-release webhook), `replication.yml`, `housekeeping.yml` (selftest, showback, DR drills), the certificate renewal in `posture.yml` | the nine tests in [VERIFICATION.md](VERIFICATION.md): a telemetry target created, attached to the twelve policies and tested by the array (the silence rule on a real receiver pending: none could be started on the lab network this session); `eda-tarpit` at 100 ops/s throttles dd on the client VM, then lifted; the client VM read-only on `eda-demo-quota`, then released; the lag fixture escalates through `replay_replication.yml` and the live signal reports the real connection state; promote and demote `eda-dr-demo` on the peer (waits for the array connection to leave `connecting`); a window opened and closed by `purefb_maintenance`; an NLM lock from `flock` listed and released by `purefb_fs_session`; a legal hold placed and removed on `eda-dr-demo`; showback and selftest run by the housekeeping rulebook |
-| 4 | 4.8.x | NFS file audit, honeyfiles, inbox, storm windows, 128 KB frames; adaptive telemetry; tag-driven lifecycle | a honeyfile read from the NFS client snapshots the file system and kills the session within seconds |
-| 5 | 4.10.a | `ansible.eda.kafka` behind the shared CloudTrail event filter; the bucket tail stays as the record | canary latency under 5 s; `eventId` dedupe while both sources run |
+| PR 3 | 4.6.4 and the 4.5.6 peer | built and lab-verified (part 3, 2026-11-13: all nine tests passed, the telemetry test against a live OTLP receiver and the drill against the peer): the telemetry, maintenance, QoS, session and lock, legal hold, alert flag and eradication modules; the `replication` signal; OTLP into a Prometheus OTLP receiver, `prometheus/flashblade.rules.yml` generated from the policy listing by `tools/telemetry_rules.py`, the Alertmanager rulebook; `contain.yml` (quarantine, tarpit, the lock-release webhook), `replication.yml`, `housekeeping.yml` (selftest, showback, DR drills), the certificate renewal in `posture.yml` | the nine tests in [VERIFICATION.md](VERIFICATION.md): a telemetry target created, attached to the twelve policies and tested by the array, the silence rule firing against a live receiver; `eda-tarpit` at 100 ops/s throttles dd on the client VM, then lifted; the client VM read-only on `eda-demo-quota`, then released; the lag fixture escalates through `replay_replication.yml` and the live signal reports the real connection state; promote and demote `eda-dr-demo` on the peer (waits for the array connection to leave `connecting`); a window opened and closed by `purefb_maintenance`; an NLM lock from `flock` listed and released by `purefb_fs_session`; a legal hold placed and removed on `eda-dr-demo`; showback and selftest run by the housekeeping rulebook |
+| PR 4 | any; a containerized Ansible Automation Platform 2.7 with the automation orchestrator beside it | built and unit-tested (part 4, the platform port of the sibling): `aap/seed.yml` with the `FlashBlade API`, `FlashBlade fleet` and `FlashBlade object store` credential types, 35 job templates, the controller-tier capacity workflow and three schedules in place of the housekeeping tick; the execution environment and the decision environment; the fifteen platform rulebooks under `extensions/eda/rulebooks/platform/` from `tools/platform_rulebooks.py`; `tools/activation_audit.py`; the seven orchestrator definitions (`fb_capacity`, `fb_replication`, four day-2 forms, the scheduled drill) with `tools/ao_lint.py` and `tools/ao_sync.py`; the Slack approval bot | the ten tests in [VERIFICATION.md](VERIFICATION.md): `make check` with `lint-ao`; the seed from an empty organization, run twice; a job in the execution environment; fifteen activations from the decision environment; a config drift remediated through the fleet credential; a canary read disabling a key from the object-audit activation; the silence alert through the alertmanager activation; a human audit line through the syslog activation; the controller-tier workflow through its approval; the capacity route, a day-2 grow and the drill schedule on the orchestrator |
+| later | 4.8.x | NFS file audit, honeyfiles, inbox, storm windows, 128 KB frames; adaptive telemetry; tag-driven lifecycle | a honeyfile read from the NFS client snapshots the file system and kills the session within seconds |
+| later | 4.10.a | `ansible.eda.kafka` behind the shared CloudTrail event filter; the bucket tail stays as the record | canary latency under 5 s; `eventId` dedupe while both sources run |
 
 Making the riskiest demos safe: the canary key disable defaults to notify,
 with a 5-minute rotation, the plugin's reader key in a separate account
@@ -478,6 +479,36 @@ runs on the Manila share (a scratch `eda-demo-quota` file system with its
 own export policy, capped at 2 GiB); the OTLP silence rule is written
 against series names read from Prometheus the day before, with a fixture
 replay as fallback.
+
+### Deployment
+
+`decision-environment/` holds a Containerfile and an ansible-builder v3
+definition, both on `quay.io/ansible/ansible-rulebook:v1.3.2`, that produce
+the same tree: the collection `sdodsley.flashblade_eda` built from the
+checkout and installed with its dependencies, py-pure-client 1.98 or newer
+(the FB_2_30 client the telemetry and object-audit code assume), boto3,
+and the rulebooks and playbooks as plain files under `/opt/flashblade-eda`.
+Standalone, one container runs one rulebook with the vars and inventory
+mounted and the credentials in its environment, and the webhook rulesets
+listen on their ports. On Ansible Automation Platform the same image is
+the decision environment: activations resolve the sources from the
+collection in the image and run the generated variants under
+`extensions/eda/rulebooks/platform/`, where `run_playbook` becomes
+`run_job_template` against the templates `aap/seed.yml` creates in the
+execution environment `aap/Containerfile.ee` builds, the webhook rulesets
+are left out (approvals arrive through the controller-tier workflow, the
+orchestrator and the S3 inbox) and the housekeeping tick gives way to
+three controller schedules (the DR drill, the showback, the selftest). Every
+activation carries one array's `FlashBlade object store` credential (the
+object-audit source reads it), whose injectors are fixed environment
+variable names, so there is one object-audit activation per array. The orchestrator takes the approvals a
+rulebook hands it (`orchestrator_enabled`: the capacity reclaim and the
+paused replica link) and offers the day-2 forms (grow a file system,
+identify LED, QoS cap, quarantine a client) and a scheduled drill of its
+own; the Slack approval bot runs as one more container beside the
+listeners, opens an outbound Socket Mode websocket and needs no inbound
+port (`aap/README.md`, [ORCHESTRATOR.md](ORCHESTRATOR.md),
+`slack/README.md`, [PACKAGING.md](PACKAGING.md)).
 
 ## 9. Risks and what not to build
 
@@ -491,7 +522,7 @@ replay as fallback.
   environment must pin py-pure-client 1.98 or newer.
 - The lab is shared: Manila owns the only file system, the eradication
   delay and the maintenance window are array-wide, the client VM hosts the
-  platform, and the 4.5.6 peer has no LLDP, CSR or object audit. The array
+  OTLP receiver, and the 4.5.6 peer has no LLDP, CSR or object audit. The array
   connection to the peer created in part 3 has stayed `connecting` (the
   replication VIPs differ in MTU, 9000 against 1500, and MTU is a subnet
   property on 2.21), so the replica link and the DR drill wait on it; the
