@@ -8,6 +8,9 @@
 # prometheus/flashblade.rules.yml (generated from the array's policy
 # listing by tools/telemetry_rules.py) raises alerts, Alertmanager posts
 # them here through the stock ansible.eda.alertmanager source, and the same
+# playbooks run. telemetry_array_names (vars) maps the name an array gives
+# itself in telemetry (device_name) to its inventory name when they differ;
+# an array not in the map is addressed by the label as it is.
 # playbooks run. Every rule in that file sets a fixed array_name label (the
 # device_name resource attribute Prometheus promotes), because a rulebook
 # condition cannot index a label by a variable name.
@@ -64,7 +67,7 @@
         run_playbook:
           name: playbooks/telemetry_check.yml
           extra_vars:
-            target_array: "{{ event.alert.labels.array_name }}"
+            target_array: "{{ telemetry_array_names[event.alert.labels.array_name | default('')] | default(event.alert.labels.array_name | default('')) }}"
             alert: "{{ event.alert.labels.alertname }}"
             policy: "{{ event.alert.labels.policy | default('') }}"
             started_at: "{{ event.alert.startsAt | default('') }}"
@@ -110,7 +113,7 @@
             severity: "{{ event.alert.labels.severity | default('critical') }}"
             subject: "FlashBladeHealthNotOk: {{ event.alert.annotations.summary | default('') }}"
             detail: "labels={{ event.alert.labels }} since {{ event.alert.startsAt | default('') }}"
-            target_array: "{{ event.alert.labels.array_name | default('') }}"
+            target_array: "{{ telemetry_array_names[event.alert.labels.array_name | default('')] | default(event.alert.labels.array_name | default('')) }}"
             alert_log: "{{ alert_log }}"
 
     - name: Capacity threshold - approval request
@@ -125,7 +128,7 @@
         run_playbook:
           name: playbooks/capacity_request.yml
           extra_vars:
-            at_risk_array: "{{ event.alert.labels.array_name }}"
+            at_risk_array: "{{ telemetry_array_names[event.alert.labels.array_name | default('')] | default(event.alert.labels.array_name | default('')) }}"
             # the rules file puts the bare percentage in annotations.value;
             # summary is the sentence for humans
             used_pct: "{{ event.alert.annotations.value | default('') }}"
@@ -152,7 +155,7 @@
             severity: "{{ event.alert.labels.severity | default('warning') }}"
             subject: "{{ event.alert.labels.alertname }}: {{ event.alert.annotations.summary | default('') }}"
             detail: "value={{ event.alert.annotations.value | default('') }} labels={{ event.alert.labels }}"
-            target_array: "{{ event.alert.labels.array_name | default('') }}"
+            target_array: "{{ telemetry_array_names[event.alert.labels.array_name | default('')] | default(event.alert.labels.array_name | default('')) }}"
             alert_log: "{{ alert_log }}"
 
     - name: Any other firing FlashBlade alert - notify
@@ -172,7 +175,7 @@
             severity: "{{ event.alert.labels.severity | default('warning') }}"
             subject: "{{ event.alert.labels.alertname }}: {{ event.alert.annotations.summary | default('') }}"
             detail: "domain={{ event.alert.labels.domain | default('') }} labels={{ event.alert.labels }}"
-            target_array: "{{ event.alert.labels.array_name | default('') }}"
+            target_array: "{{ telemetry_array_names[event.alert.labels.array_name | default('')] | default(event.alert.labels.array_name | default('')) }}"
             alert_log: "{{ alert_log }}"
 
     - name: Resolved - log
@@ -186,5 +189,5 @@
               resolved: {{ event.alert.labels.alertname | default('') }}
               on {{ event.alert.labels.array_name | default('') }}
             detail: "{{ event.alert.annotations.summary | default('') }}"
-            target_array: "{{ event.alert.labels.array_name | default('') }}"
+            target_array: "{{ telemetry_array_names[event.alert.labels.array_name | default('')] | default(event.alert.labels.array_name | default('')) }}"
             alert_log: "{{ alert_log }}"

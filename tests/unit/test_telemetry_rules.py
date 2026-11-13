@@ -51,6 +51,7 @@ ALERTS = {
     "FlashBladeLatencyHigh",
     "FlashBladeConnectorErrors",
     "FlashBladeReplicationStalled",
+    "FlashBladeCriticalAlertOpen",
 }
 TOKEN = "not-a-real-token-0123456789abcdef"
 
@@ -106,7 +107,10 @@ def test_output_is_yaml_with_the_expected_alerts(rendered):
     rules = _rules(rendered)
     assert {r["alert"] for r in rules} == ALERTS
     silence = [r for r in rules if r["alert"] == "FlashBladeTelemetrySilent"]
-    assert [r["labels"]["policy"] for r in silence] == POLICIES
+    # the per-client policies push nothing on an idle array, so no silence rule
+    assert [r["labels"]["policy"] for r in silence] == [
+        p for p in POLICIES if "client" not in p
+    ]
     for rule in rules:
         assert set(rule["labels"]) >= {"severity", "domain", "array_name"}, rule
         assert rule["labels"]["array_name"] == "{{ $labels.device_name }}"
@@ -149,7 +153,8 @@ def test_several_arrays_give_one_silence_rule_each(gen, items):
         gen.policies_from_rules(items), ["fb-b", "fb-a"], 10, "device_name"
     )
     silence = [r for r in _rules(text) if r["alert"] == "FlashBladeTelemetrySilent"]
-    assert len(silence) == 24
+    # ten policies (the two per-client ones get no rule) for two arrays
+    assert len(silence) == 20
     # sorted arrays inside each policy, so the output does not depend on the
     # order the names were given in
     assert silence[0]["expr"].endswith('{device_name="fb-a"}[20m])')

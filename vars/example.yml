@@ -255,7 +255,7 @@ alertmanager_port: 5002
 # (prometheus/README.md). playbooks/telemetry_setup.yml creates the target
 # and attaches it to the metric policies listed; telemetry_endpoint empty
 # leaves the telemetry checks inactive (selftest skips them). The endpoint
-# has no scheme: "<host>:<port>[/<path>]", e.g. prom.example.com:9090/api/v1/otlp;
+# has no scheme: "<host>:<port>[/<path>]", e.g. prom.example.com:9090/api/v1/otlp/v1/metrics;
 # the array opens a connection at creation and refuses an endpoint nothing
 # listens on. telemetry_source is the array network interface the push
 # leaves from (a data VIP name; the management interface is refused).
@@ -280,6 +280,9 @@ telemetry_policies:                 # the array's 12 built-in telemetry-metrics 
 # first metric has been absent for twice its resolution or this many
 # minutes, whichever is larger (tools/telemetry_rules.py --silence-minutes).
 telemetry_silence_minutes: 10
+# The name an array gives itself in telemetry (the device_name label) when it
+# differs from its inventory host name: device name -> inventory name.
+telemetry_array_names: {}
 # The resource attribute Prometheus promotes as the array's name label; the
 # rules file copies it into a fixed array_name label the alertmanager
 # rulebook reads (tools/telemetry_rules.py --array-label).

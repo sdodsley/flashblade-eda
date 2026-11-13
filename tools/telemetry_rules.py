@@ -141,13 +141,16 @@ HEADER = """\
 # site. FlashBladeCapacityHigh puts the bare percentage in annotations.value
 # for the rulebook; summary is the sentence for humans.
 #
-# verify: the metric names are the listing's dotted names with underscores
-# (storage.device.iops -> storage_device_iops), which the
-# UnderscoreEscapingWithSuffixes strategy produces for a metric without a
-# unit. verify: @LABEL@ is taken to be the resource attribute that names the
-# array (promoted to a label by promote_all_resource_attributes). The
-# attributes of the space and health series are unverified until a receiver
-# sees them; the rules that use them say so.
+# Verified against a Prometheus 3.16 OTLP receiver on 2026-11-13: the metric
+# names are the listing's dotted names with underscores (storage.device.iops
+# -> storage_device_iops, the UnderscoreEscapingWithSuffixes strategy, no
+# unit suffix); @LABEL@ is the resource attribute that names the array,
+# promoted to a label by promote_all_resource_attributes (device_id comes
+# with it); the space series carry space_type (capacity, total_physical,
+# total_provisioned, available_provisioned, unique, virtual, snapshots,
+# shared, destroyed, destroyed_virtual) and storage_type (all, file, object);
+# the performance series carry op, proto, resource_type and storage_type; the
+# health series one per component with component_name and component_type.
 groups:
   - name: flashblade-telemetry-silence
     rules:
@@ -173,25 +176,37 @@ HANDWRITTEN = """\
     rules:
       # --- health ---------------------------------------------------------------
       - alert: FlashBladeHealthNotOk
-        # verify: storage.device.health is taken to be a gauge with 1 = healthy
-        expr: storage_device_health != 1
+        # the gauge is the component status as an integer; the receiver saw 5
+        # for every healthy component on Purity//FB 4.6.4 and the enum is not
+        # published, so any other value alerts (verify: on a fault)
+        expr: storage_device_health != 5
         for: 5m
         labels:
           severity: critical
           domain: health
           array_name: "{{ $labels.@LABEL@ }}"
         annotations:
-          summary: "{{ $labels.@LABEL@ }} reports health {{ $value }}"
+          summary: "{{ $labels.@LABEL@ }} {{ $labels.component_name }} ({{ $labels.component_type }}) reports health {{ $value }}"
+
+      - alert: FlashBladeCriticalAlertOpen
+        # one series per open alert on the array, valued with the alert code and
+        # labelled with its severity, summary, component and knowledge base link
+        expr: storage_device_alerts{severity="critical"}
+        labels:
+          severity: critical
+          domain: alerts
+          array_name: "{{ $labels.@LABEL@ }}"
+        annotations:
+          summary: "{{ $labels.@LABEL@ }} alert {{ $value }}: {{ $labels.summary }}"
+          value: "{{ $value }}"
 
       # --- capacity -------------------------------------------------------------
       - alert: FlashBladeCapacityHigh
-        # verify: the space series' attributes are unverified; the rule assumes a
-        # space_type label whose values follow the REST /arrays/space fields
-        # (total_physical used, capacity usable). Adjust it from the series the
-        # receiver shows.
+        # the array-wide series (storage_type all): total_physical used against
+        # capacity, the same two fields as REST /arrays/space
         expr: |
-          100 * storage_device_space_bytes{space_type="total_physical"}
-            / ignoring (space_type) storage_device_space_bytes{space_type="capacity"} > 85
+          100 * storage_device_space_bytes{space_type="total_physical", storage_type="all"}
+            / ignoring (space_type) storage_device_space_bytes{space_type="capacity", storage_type="all"} > 85
         for: 15m
         labels:
           severity: warning
@@ -203,23 +218,26 @@ HANDWRITTEN = """\
 
       # --- performance ----------------------------------------------------------
       - alert: FlashBladeLatencyHigh
-        # 20 ms sustained for 10 minutes on the array-wide latency; a dimension
-        # label, if the series carries one, arrives on the alert
-        expr: storage_device_latency_us > 20000
+        # 20 ms sustained for 10 minutes on the array-wide series (all protocols,
+        # all resources), one alert per op (read, write, other)
+        expr: storage_device_latency_us{proto="all", resource_type="all", storage_type="all"} > 20000
         for: 10m
         labels:
           severity: warning
           domain: performance
           array_name: "{{ $labels.@LABEL@ }}"
         annotations:
-          summary: "{{ $labels.@LABEL@ }} latency is {{ $value | printf \\"%.0f\\" }} us"
+          summary: "{{ $labels.@LABEL@ }} {{ $labels.op }} latency is {{ $value | printf \\"%.0f\\" }} us"
 
       # --- network --------------------------------------------------------------
       - alert: FlashBladeConnectorErrors
         # err_ps is already a per-second rate (a gauge), so the 5 minute average
         # rather than rate(), which expects a counter; the connector's own
-        # attributes arrive as labels on the alert
-        expr: avg_over_time(storage_device_connector_err_ps[5m]) > 0
+        # attributes arrive as labels on the alert. The lab's ports report a
+        # steady "other" count (16/s on busy uplinks) that is not a fault, so
+        # only the named error kinds (crc, frame, ...) count
+        expr: avg_over_time(storage_device_connector_err_ps{err!~"total|other"}[5m]) > 0
+        for: 10m
         labels:
           severity: warning
           domain: health
@@ -264,6 +282,10 @@ def render(policies, array_names, silence_minutes, array_label):
     ]
     rules = []
     for name, policy in policies.items():
+        # the per-client policies push nothing while no client is active, so
+        # their absence is not silence; they get no rule
+        if "client" in name:
+            continue
         metric = policy["metrics"][0]
         window = silence_window_minutes(policy["resolution_ms"], silence_minutes)
         for array in arrays:

@@ -338,6 +338,29 @@ FB_2_21 client has no telemetry methods, so `purefb_telemetry_target`,
 `purefb_telemetry_policy`, `telemetry_check.yml` and
 `tools/telemetry_rules.py` speak REST.
 
+- Verified against a live receiver on 2026-11-13: the array POSTs to the
+  endpoint path exactly as given, so a Prometheus 3.x OTLP receiver needs
+  `<host>:9090/api/v1/otlp/v1/metrics` (`/api/v1/otlp` alone answers 404 and
+  nothing is stored); the first 60 s policies showed up within two minutes.
+  `GET /telemetry-targets/test` answered 400 with no body even while the
+  pushes were landing, so a 400 there does not mean the path is broken;
+  `telemetry_check.yml` therefore weighs the receiver's own answer too. The
+  resource attributes arrive as labels `device_name` and `device_id`; the
+  series carry `storage_type` (all, file, object), `space_type` (capacity,
+  total_physical, total_provisioned, available_provisioned, unique, virtual,
+  snapshots, shared, destroyed, destroyed_virtual), `op`, `proto`,
+  `resource_type`, `entity_name`, `err` and `transfer`. Two things the
+  live stream showed about rules: the per-client policies
+  (`device_client_perf_metrics`, `bucket_client_perf_metrics`) push
+  nothing while no client is active, so an `absent_over_time` on them
+  fires on an idle array and the generator gives them no silence rule; and
+  `storage_device_connector_err_ps` reports a steady `other` and `total`
+  count on the lab's uplinks (16/s on CH1.FM1.ETH1 and ETH4) that is not a
+  fault, so the connector rule counts only the named error kinds. The
+  array names itself in telemetry (`device_name` slc6-s200-n2-a19-33), not
+  by its inventory name, so `alertmanager.yml` maps the label through
+  `telemetry_array_names`; without the map a playbook addressed to the
+  device name finds no host and runs against nothing.
 - Targets: `GET /telemetry-targets` (none on the lab before part 3).
   `POST /telemetry-targets?names=<n>` body `{"endpoint":
   "<host>:<port>[/<path>]", "transport": "otlp-http-protobuf" |
@@ -396,13 +419,17 @@ FB_2_21 client has no telemetry methods, so `purefb_telemetry_target`,
   UnderscoreEscapingWithSuffixes`) a dotted name becomes underscores,
   `storage_device_iops`, and the resource attributes (the device name
   among them) become labels when `otlp.promote_all_resource_attributes`
-  is true. The attribute names are not verified: no receiver could be run
-  on the lab network yet, so the generator's `--array-label` defaults to
-  `device_name`, every generated rule copies it into a fixed `array_name`
-  label (a rulebook condition cannot index a label by a variable name,
-  so `alertmanager.yml` reads `event.alert.labels.array_name`), and
-  `verify:` comments in the rule file mark the health and space
-  expressions whose shape is assumed.
+  is true. Confirmed on a Prometheus 3.16 receiver on 2026-11-13: the array
+  name arrives as `device_name` (with `device_id`), which is the generator's
+  default `--array-label`; every generated rule copies it into a fixed
+  `array_name` label (a rulebook condition cannot index a label by a
+  variable name, so `alertmanager.yml` reads `event.alert.labels.array_name`).
+  `storage_device_health` is one gauge per component (`component_name`,
+  `component_type`) reading 5 for every healthy component; the enum is not
+  published, so the rule alerts on any other value. `storage_device_alerts`
+  is one series per open alert valued with its code and labelled with
+  severity, summary, component and knowledge base link; `storage_device_info`
+  carries `device_os`, `device_type` and `device_vers`.
 - Alertmanager payload (`ansible.eda.alertmanager` with `data_alerts_path
   alerts`, `data_host_path ""`, `data_path_separator "."`): one event per
   alert, `event.alert.status` firing or resolved,
@@ -423,10 +450,22 @@ The lab pair: `fb-a`, the FlashBlade//S200 on Purity//FB 4.6.4 (REST
   ca_certificate_group}`; `status` reads `connecting` from creation and
   `connected` once up; the peer shows the same `id` with
   `management_address` null and `replication_addresses` `[]` while
-  connecting. The lab connection has stayed `connecting`: `fb-a`'s
-  replication VIP sits on a subnet with MTU 9000 and `fb-b`'s on 1500,
-  and `PATCH /network-interfaces mtu` is "Invalid body parameter" on 2.21
-  because MTU is a subnet property. The `replication` signal reports it in
+  connecting. A connection created with `replication_addresses` (the
+  module's `target_repl`, the CLI's `--replication-address`) between two
+  arrays with no NAT between them stayed `connecting` for hours on the lab
+  with "Internal error." on the object path, in both directions, although
+  the replication VIPs ping each other at 9000 bytes and the peer's expired
+  certificate had been replaced; created again with the management address
+  and the connection key alone it was `partially_connected` in 15 s and
+  `connected` in a minute (knowledge base KB0034025 describes exactly
+  this). A replica link appeared `idle` on both sides within 15 s of the
+  POST and the peer's copy reads `promotion_status demoted, writable
+  false`; a promote (`PATCH /file-systems requested_promotion_state
+  promoted`) completes within a minute, and the demote on the 4.5.6 peer
+  needs `discard_non_snapshotted_data=true` ("Demoting a file system
+  will restore the file system from the latest snapshot because creating
+  an undo snapshot is not supported"), which is what `dr_drill_discard`
+  switches on. The `replication` signal reports a connecting one in
   `connections_down` and as `purefb_array_connection` with `connected
   false`; `throttled` is true when `default_limit` or `window_limit` is
   set.
@@ -741,18 +780,21 @@ eradication config and certificates, as part 3 reads and writes them.
 - A hot array: last-week baselines are idle, so the client and QoS rules
   fire on lowered thresholds under a fio load from the client VM, which
   is also the platform host.
-- Replication end to end: the array connection to the 4.5.6 peer exists
-  since part 3 but has stayed `connecting` (the replication VIPs differ
-  in MTU; "Replication" above), so no replica link could be created, the
-  live signal only reports the connection, and the DR drill waits; the
-  peer has no LLDP, CSR or object audit.
-- A Prometheus OTLP receiver on the lab network: the rulebook host is
-  behind NAT and the receiver VM could not be started in this session, so
-  the telemetry modules and `telemetry_setup.yml` are to be exercised
-  against a TCP port that answers (the array accepts the target), the
-  Alertmanager rulebook and `telemetry_check.yml` are driven by the
-  replay fixtures, and the live silence test, the test endpoint's success
-  shape and the promoted attribute names wait for the receiver.
+- Replication end to end beyond one link: the array connection to the
+  4.5.6 peer came up once created without replication addresses
+  ("Replication" above) and carries the `eda-dr-link` file system link;
+  a file system that has ever had a legal hold applied cannot be linked
+  ("File system with legal holds applied does not support replication",
+  which is why the drill uses a second scratch file system); bucket links
+  and a lagging or paused link are replayed only; the peer has no LLDP,
+  CSR or object audit.
+- The OTLP path beyond one receiver: a Prometheus 3.16 receiver ran as
+  plain processes on the client VM and the rulebook host reached its
+  Alertmanager over an ssh reverse tunnel ("Telemetry" above has what it
+  showed); a TLS receiver (`otlp-http-protobuf` with a CA certificate
+  group), a Datadog or Dynatrace target, and a success body from
+  `GET /telemetry-targets/test` (it answered 400 even while pushes landed)
+  were not seen.
 - Object-audit latency below one rotation: 5 minutes is the floor the
   array accepts for `log_rotate`, and a disabled key is seen by its next
   request, not by the one that tripped the canary.

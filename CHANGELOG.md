@@ -7,9 +7,9 @@ FlashBlade, a prototype and the sibling of flasharray-eda. Written against
 Purity//FB 4.6.4 (REST 2.21) on a FlashBlade//S200 with py-pure-client
 1.98.0 and everpure.flashblade 1.29.0; part 1 (REST pull and management
 syslog) and part 2 (the object side) have both passed their lab exit
-tests; part 3 (telemetry, containment and replication) has passed seven
-of its nine lab exit tests and the telemetry one in part; the DR drill and
-the live OTLP path wait on the lab. The tests are listed in
+tests; part 3 (telemetry, containment and replication) has passed all
+nine of its lab exit tests, the telemetry one against a live Prometheus
+OTLP receiver and the DR drill against the 4.5.6 peer. The tests are listed in
 [docs/VERIFICATION.md](docs/VERIFICATION.md), the array facts in
 [docs/HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md) and the design in
 [docs/DESIGN.md](docs/DESIGN.md).

@@ -21,28 +21,19 @@
 # site. FlashBladeCapacityHigh puts the bare percentage in annotations.value
 # for the rulebook; summary is the sentence for humans.
 #
-# verify: the metric names are the listing's dotted names with underscores
-# (storage.device.iops -> storage_device_iops), which the
-# UnderscoreEscapingWithSuffixes strategy produces for a metric without a
-# unit. verify: device_name is taken to be the resource attribute that names the
-# array (promoted to a label by promote_all_resource_attributes). The
-# attributes of the space and health series are unverified until a receiver
-# sees them; the rules that use them say so.
+# Verified against a Prometheus 3.16 OTLP receiver on 2026-11-13: the metric
+# names are the listing's dotted names with underscores (storage.device.iops
+# -> storage_device_iops, the UnderscoreEscapingWithSuffixes strategy, no
+# unit suffix); device_name is the resource attribute that names the array,
+# promoted to a label by promote_all_resource_attributes (device_id comes
+# with it); the space series carry space_type (capacity, total_physical,
+# total_provisioned, available_provisioned, unique, virtual, snapshots,
+# shared, destroyed, destroyed_virtual) and storage_type (all, file, object);
+# the performance series carry op, proto, resource_type and storage_type; the
+# health series one per component with component_name and component_type.
 groups:
   - name: flashblade-telemetry-silence
     rules:
-      - alert: FlashBladeTelemetrySilent
-        # bucket_client_perf_metrics: 2 metrics every 600 s, watched through storage.device.bucket.client.latency_us;
-        # the window is twice the resolution or the 10 minute floor
-        expr: absent_over_time(storage_device_bucket_client_latency_us{device_name="fb-a"}[20m])
-        labels:
-          severity: critical
-          domain: telemetry
-          policy: bucket_client_perf_metrics
-          array_name: "{{ $labels.device_name }}"
-        annotations:
-          summary: "{{ $labels.device_name }} has pushed nothing for policy bucket_client_perf_metrics (storage_device_bucket_client_latency_us) in 20 minutes: dead array, dead network, a disabled target or a receiver fault"
-
       - alert: FlashBladeTelemetrySilent
         # bucket_perf_metrics: 4 metrics every 600 s, watched through storage.device.bucket.bw_bpo;
         # the window is twice the resolution or the 10 minute floor
@@ -66,18 +57,6 @@ groups:
           array_name: "{{ $labels.device_name }}"
         annotations:
           summary: "{{ $labels.device_name }} has pushed nothing for policy bucket_space_metrics (storage_device_bucket_obj_count) in 20 minutes: dead array, dead network, a disabled target or a receiver fault"
-
-      - alert: FlashBladeTelemetrySilent
-        # device_client_perf_metrics: 4 metrics every 600 s, watched through storage.device.client.bw_bpo;
-        # the window is twice the resolution or the 10 minute floor
-        expr: absent_over_time(storage_device_client_bw_bpo{device_name="fb-a"}[20m])
-        labels:
-          severity: critical
-          domain: telemetry
-          policy: device_client_perf_metrics
-          array_name: "{{ $labels.device_name }}"
-        annotations:
-          summary: "{{ $labels.device_name }} has pushed nothing for policy device_client_perf_metrics (storage_device_client_bw_bpo) in 20 minutes: dead array, dead network, a disabled target or a receiver fault"
 
       - alert: FlashBladeTelemetrySilent
         # device_connector_metrics: 3 metrics every 60 s, watched through storage.device.connector.bw_bps;
@@ -179,25 +158,37 @@ groups:
     rules:
       # --- health ---------------------------------------------------------------
       - alert: FlashBladeHealthNotOk
-        # verify: storage.device.health is taken to be a gauge with 1 = healthy
-        expr: storage_device_health != 1
+        # the gauge is the component status as an integer; the receiver saw 5
+        # for every healthy component on Purity//FB 4.6.4 and the enum is not
+        # published, so any other value alerts (verify: on a fault)
+        expr: storage_device_health != 5
         for: 5m
         labels:
           severity: critical
           domain: health
           array_name: "{{ $labels.device_name }}"
         annotations:
-          summary: "{{ $labels.device_name }} reports health {{ $value }}"
+          summary: "{{ $labels.device_name }} {{ $labels.component_name }} ({{ $labels.component_type }}) reports health {{ $value }}"
+
+      - alert: FlashBladeCriticalAlertOpen
+        # one series per open alert on the array, valued with the alert code and
+        # labelled with its severity, summary, component and knowledge base link
+        expr: storage_device_alerts{severity="critical"}
+        labels:
+          severity: critical
+          domain: alerts
+          array_name: "{{ $labels.device_name }}"
+        annotations:
+          summary: "{{ $labels.device_name }} alert {{ $value }}: {{ $labels.summary }}"
+          value: "{{ $value }}"
 
       # --- capacity -------------------------------------------------------------
       - alert: FlashBladeCapacityHigh
-        # verify: the space series' attributes are unverified; the rule assumes a
-        # space_type label whose values follow the REST /arrays/space fields
-        # (total_physical used, capacity usable). Adjust it from the series the
-        # receiver shows.
+        # the array-wide series (storage_type all): total_physical used against
+        # capacity, the same two fields as REST /arrays/space
         expr: |
-          100 * storage_device_space_bytes{space_type="total_physical"}
-            / ignoring (space_type) storage_device_space_bytes{space_type="capacity"} > 85
+          100 * storage_device_space_bytes{space_type="total_physical", storage_type="all"}
+            / ignoring (space_type) storage_device_space_bytes{space_type="capacity", storage_type="all"} > 85
         for: 15m
         labels:
           severity: warning
@@ -209,23 +200,26 @@ groups:
 
       # --- performance ----------------------------------------------------------
       - alert: FlashBladeLatencyHigh
-        # 20 ms sustained for 10 minutes on the array-wide latency; a dimension
-        # label, if the series carries one, arrives on the alert
-        expr: storage_device_latency_us > 20000
+        # 20 ms sustained for 10 minutes on the array-wide series (all protocols,
+        # all resources), one alert per op (read, write, other)
+        expr: storage_device_latency_us{proto="all", resource_type="all", storage_type="all"} > 20000
         for: 10m
         labels:
           severity: warning
           domain: performance
           array_name: "{{ $labels.device_name }}"
         annotations:
-          summary: "{{ $labels.device_name }} latency is {{ $value | printf \"%.0f\" }} us"
+          summary: "{{ $labels.device_name }} {{ $labels.op }} latency is {{ $value | printf \"%.0f\" }} us"
 
       # --- network --------------------------------------------------------------
       - alert: FlashBladeConnectorErrors
         # err_ps is already a per-second rate (a gauge), so the 5 minute average
         # rather than rate(), which expects a counter; the connector's own
-        # attributes arrive as labels on the alert
-        expr: avg_over_time(storage_device_connector_err_ps[5m]) > 0
+        # attributes arrive as labels on the alert. The lab's ports report a
+        # steady "other" count (16/s on busy uplinks) that is not a fault, so
+        # only the named error kinds (crc, frame, ...) count
+        expr: avg_over_time(storage_device_connector_err_ps{err!~"total|other"}[5m]) > 0
+        for: 10m
         labels:
           severity: warning
           domain: health

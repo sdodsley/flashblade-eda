@@ -39,7 +39,7 @@
         run_playbook:
           name: playbooks/telemetry_check.yml
           extra_vars:
-            target_array: "{{ event.alert.labels.array_name }}"
+            target_array: "{{ telemetry_array_names[event.alert.labels.array_name | default('')] | default(event.alert.labels.array_name | default('')) }}"
             alert: "{{ event.alert.labels.alertname }}"
             policy: "{{ event.alert.labels.policy | default('') }}"
             started_at: "{{ event.alert.startsAt | default('') }}"
@@ -60,7 +60,7 @@
         run_playbook:
           name: playbooks/capacity_request.yml
           extra_vars:
-            at_risk_array: "{{ event.alert.labels.array_name }}"
+            at_risk_array: "{{ telemetry_array_names[event.alert.labels.array_name | default('')] | default(event.alert.labels.array_name | default('')) }}"
             # the rules file puts the bare percentage in annotations.value;
             # summary is the sentence for humans
             used_pct: "{{ event.alert.annotations.value | default('') }}"
@@ -82,5 +82,5 @@
               resolved: {{ event.alert.labels.alertname | default('') }}
               on {{ event.alert.labels.array_name | default('') }}
             detail: "{{ event.alert.annotations.summary | default('') }}"
-            target_array: "{{ event.alert.labels.array_name | default('') }}"
+            target_array: "{{ telemetry_array_names[event.alert.labels.array_name | default('')] | default(event.alert.labels.array_name | default('')) }}"
             alert_log: "{{ alert_log }}"

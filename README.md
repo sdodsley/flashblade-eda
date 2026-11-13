@@ -43,10 +43,9 @@ real connection state; a promote and demote on the peer; a maintenance
 window opened and closed by the module; an NLM lock listed and released; a
 legal hold placed and removed; showback and selftest run by the
 housekeeping rulebook) are listed in
-[docs/VERIFICATION.md](docs/VERIFICATION.md): seven passed on 2026-11-13,
-the telemetry one passed in part (target and policies on the array; the
-OTLP pipeline itself awaits a receiver) and the DR drill waits for the
-peer's expired certificate.
+[docs/VERIFICATION.md](docs/VERIFICATION.md) and all nine passed on
+2026-11-13, the telemetry one against a Prometheus OTLP receiver on the
+client VM and the drill against the 4.5.6 peer.
 That page lists every lab exit test and its state,
 [docs/DESIGN.md](docs/DESIGN.md) the design and the parts that come
 later, and [docs/HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md) the array and
@@ -337,7 +336,7 @@ with `tcp://<eda host>:5140` and the services it should carry.
 
 The push path needs no plugin of this repository. `purefb_telemetry_target`
 points the array's OTLP push at a Prometheus 3.x OTLP receiver (the
-endpoint is `<host>:9090/api/v1/otlp` without a scheme, the transport
+endpoint is `<host>:9090/api/v1/otlp/v1/metrics` without a scheme, the transport
 `otlp-http-protobuf-without-tls` for a plain receiver, the `source` one of
 the array's data VIPs) and `purefb_telemetry_policy` attaches the target
 to the twelve built-in metric policies; `telemetry_setup.yml` does both
@@ -346,14 +345,18 @@ and then runs the array's own delivery test (`GET
 `/telemetry-metrics-policies/rules` and writes
 `prometheus/flashblade.rules.yml`: one `FlashBladeTelemetrySilent` alert
 per policy on `absent_over_time` of the policy's first metric over twice
-its resolution or `telemetry_silence_minutes`, whichever is longer, plus
-`FlashBladeHealthNotOk`, `FlashBladeCapacityHigh`, `FlashBladeLatencyHigh`,
+its resolution or `telemetry_silence_minutes`, whichever is longer (the
+two per-client policies get none: they push nothing while no client is
+active), plus `FlashBladeHealthNotOk`, `FlashBladeCriticalAlertOpen`,
+`FlashBladeCapacityHigh`, `FlashBladeLatencyHigh`,
 `FlashBladeConnectorErrors` and `FlashBladeReplicationStalled`; every
 alert carries an `array_name` label copied from the `device_name`
 resource attribute Prometheus promotes, because a rulebook condition
-cannot index a label by a variable name. Alertmanager posts the alerts to
-`ansible.eda.alertmanager` and `alertmanager.yml` runs the same playbooks
-as the pull path. With push there is no `up == 0`: silence is the signal,
+cannot index a label by a variable name. An array names itself there
+(`slc6-s200-n2-a19-33`, not `fb-a`), so `telemetry_array_names` in the
+vars file maps the device name to the inventory name. Alertmanager posts
+the alerts to `ansible.eda.alertmanager` and `alertmanager.yml` runs the
+same playbooks as the pull path. With push there is no `up == 0`: silence is the signal,
 and `telemetry_check.yml` decides whether the array, the receiver or the
 path between them went quiet by asking all three.
 [prometheus/README.md](prometheus/README.md) has the receiver, Alertmanager
@@ -530,11 +533,9 @@ The reasoning is in [docs/DESIGN.md](docs/DESIGN.md).
   written to the state bucket and the DR drill that promotes and demotes
   a replica on the peer; the self-signed certificate renewal in
   `posture.yml`. The nine lab exit tests are listed in
-  [docs/VERIFICATION.md](docs/VERIFICATION.md); seven passed and one in
-  part on 2026-11-13: the OTLP receiver could not be started on the lab
-  network this session and the array connection to the peer has stayed
-  `connecting` (its global certificate has expired), so the live silence
-  rule and the DR drill are pending.
+  [docs/VERIFICATION.md](docs/VERIFICATION.md); all nine passed on
+  2026-11-13, the silence rule against a live receiver and the drill
+  against the peer.
 - **Next:** the Purity//FB 4.8 and 4.10 items below, then the platform
   port of the sibling project (the AAP seed and decision environment,
   the orchestrator workflows, the Slack approval bot).

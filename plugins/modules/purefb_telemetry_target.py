@@ -28,7 +28,7 @@ options:
   endpoint:
     description:
       - Where the receiver listens, as C(host:port) or C(host:port/path),
-        for example C(prom.example.net:9090/api/v1/otlp). The array takes no
+        for example C(prom.example.net:9090/api/v1/otlp/v1/metrics). The array takes no
         scheme; one given here is removed with a warning. Required when
         I(state) is C(present).
     type: str
@@ -84,7 +84,7 @@ EXAMPLES = r"""
 - name: Push metrics to a plain Prometheus OTLP receiver from a data VIP
   sdodsley.flashblade_eda.purefb_telemetry_target:
     name: eda-prom
-    endpoint: prom.example.net:9090/api/v1/otlp
+    endpoint: prom.example.net:9090/api/v1/otlp/v1/metrics
     transport: otlp-http-protobuf-without-tls
     source: 2200-datavip
     policies:
@@ -99,7 +99,7 @@ EXAMPLES = r"""
 - name: Stop pushing without deleting the target
   sdodsley.flashblade_eda.purefb_telemetry_target:
     name: eda-prom
-    endpoint: prom.example.net:9090/api/v1/otlp
+    endpoint: prom.example.net:9090/api/v1/otlp/v1/metrics
     transport: otlp-http-protobuf-without-tls
     source: 2200-datavip
     enabled: false
@@ -141,7 +141,7 @@ target:
       elements: str
   sample:
     name: eda-prom
-    endpoint: prom.example.net:9090/api/v1/otlp
+    endpoint: prom.example.net:9090/api/v1/otlp/v1/metrics
     transport: otlp-http-protobuf-without-tls
     source: 2200-datavip
     enabled: true

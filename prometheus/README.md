@@ -23,7 +23,7 @@ telemetry methods, so the two modules use REST:
 ```
 - sdodsley.flashblade_eda.purefb_telemetry_target:
     name: eda-prom
-    endpoint: prom.example.com:9090/api/v1/otlp       # host:port[/path], no scheme
+    endpoint: prom.example.com:9090/api/v1/otlp/v1/metrics       # host:port[/path], no scheme
     transport: otlp-http-protobuf-without-tls         # a plain receiver; otlp-http-protobuf needs a certificate the array trusts
     source: 2200-datavip                              # a network interface of the array; the management interface is refused
     policies: "{{ telemetry_policies }}"              # the twelve names in vars/example.yml
@@ -142,9 +142,13 @@ Alertmanager rather than widening the window.
 
 `absent_over_time` carries only the labels its selector pins, so every
 silence rule names its array in the selector and sets `array_name` from
-that; the rulebook passes `array_name` as `target_array`, so the inventory
-host must be named as the array names itself in the pushed `device_name`
-attribute. Lines marked `verify:` in the rule file rest on facts no
-receiver has confirmed yet (the exact translated names, the attribute that
-names the array, the attributes of the space and health series); check
-them against the first series the receiver shows and regenerate.
+that; the rulebook turns `array_name` into `target_array` through the
+`telemetry_array_names` map in the vars file (device name to inventory
+name; an array missing from the map is addressed by the label as it is),
+because an array names itself in telemetry (`slc6-s200-n2-a19-33` on the
+lab) and not by its inventory name (`fb-a`). The per-client policies get
+no silence rule: they push nothing while no client is active. The translated names, the `device_name` attribute and the
+space and performance labels were confirmed against a Prometheus 3.16
+receiver on 2026-11-13; the one `verify:` left is the health gauge's
+enum (5 for every healthy component on 4.6.4, so any other value
+alerts). Regenerate after a Purity upgrade and compare.
