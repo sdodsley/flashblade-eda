@@ -411,6 +411,28 @@ def _posts(store):
     return [c for c in store.calls if c == ("POST", "/api/eda/v1/activations/")]
 
 
+def test_recreate_does_not_wait_for_a_disabled_activation(
+    audit, store, files, capsys, monkeypatch
+):
+    """A disabled activation is recreated disabled and the tool moves on at
+    once: there is no start to wait for."""
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashBlade", False)
+    old = _activation(
+        8, "FlashBlade rulebook - capacity", dict(good, alerts_interval=30)
+    )
+    old["is_enabled"] = False
+    old["status"] = "stopped"
+    store.activations = [old]
+    code = _run_recreate(audit, store, files, monkeypatch)
+    out = capsys.readouterr()
+    assert "created FlashBlade rulebook - capacity as id 101" in out.out
+    assert store.created[0]["is_enabled"] is False
+    # no readiness polling of the new activation
+    assert ("GET", "/api/eda/v1/activations/101/") not in store.calls
+    assert "recreated as id 101" in out.out
+    assert code in (0, 1)
+
+
 def test_recreate_keeps_a_create_that_went_through_behind_a_gateway_error(
     audit, store, files, capsys, monkeypatch
 ):

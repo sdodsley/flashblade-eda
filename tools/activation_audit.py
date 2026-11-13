@@ -410,8 +410,11 @@ def recreate(client, detail, extra_var_text, say, wait_seconds=360):
         )
     new_id = created["id"]
     say(f"created {name} as id {new_id}")
-    deadline = time.monotonic() + wait_seconds
     state = created.get("status")
+    if not body["is_enabled"]:
+        # a disabled activation does not start; nothing to wait for
+        return new_id, state
+    deadline = time.monotonic() + wait_seconds
     while time.monotonic() < deadline:
         time.sleep(10)
         try:
