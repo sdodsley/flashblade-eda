@@ -427,8 +427,16 @@ is built and unit-tested. The tests are listed in
   and `orchestrator/README.md`.
 - Slack: `slack/approval_bot.py` (action prefix `flashblade_eda_`) posts
   pending orchestrator and controller approvals as cards and carries the
-  decision back with the Slack user's name; `slack/README.md` states the
-  one-bot-per-app rule for a site that runs the sibling too.
+  decision back with the Slack user's name; the card follows its approval
+  to the end (reminders in its thread at half and ninety percent of the
+  window, the final status read when it leaves the queue, an expired
+  orchestrator approval paged in the channel and recorded through
+  `NOTIFY_TEMPLATE`, default `FlashBlade - notify`), the posted cards are
+  kept under `STATE_DIR` across a restart, and `SLACK_ROUTES` and
+  `NOTIFY_ROUTES` send another project's cards (by workflow name prefix)
+  to its own channel and notify template, so one bot instance serves two
+  projects on one Slack app; `slack/README.md` states the one-bot-per-app
+  rule for a site that runs the sibling too.
 - The Makefile's `lint` covers `tools/` and `slack/`, `lint-ao` lints the
   definitions and `check` runs both; CI gains the `lint-ao` step; the unit
   tests gain `test_platform_rulebooks.py`, `test_activation_audit.py`,

@@ -11,6 +11,26 @@ incoming webhook and the platform's own Slack notification template
 (README.md, "Notifications"; aap/README.md); neither of those can take a
 decision.
 
+A card follows its approval to the end. While the approval waits, the bot
+reminds the channel in the card's thread at half and at ninety percent of
+the decision window (the second reminder mentions the approvers, or
+`SLACK_ESCALATE`, and is shown in the channel). When the approval leaves
+the queue the bot reads how it ended and rewrites the card: approved or
+rejected and by whom, whether from here or in a UI; cancelled; or expired.
+An expired orchestrator approval fails its execution with nothing done and
+nobody told (orchestrator/README.md), so the bot also posts a critical
+message in the channel, with the mentions, and launches the controller's
+notify template for a critical record in the alert log, the way every
+other critical finding is recorded; a timed-out controller approval sends
+its workflow down the failure edge, whose own notify node is the record,
+so it gets the channel message only. A read of the final status that fails
+is retried on the next polls, and an approval still unreadable once its
+window has passed is treated as expired rather than forgotten; one the
+system still reports pending (left out of a list page) keeps its card. The
+posted cards are kept in `STATE_DIR`, so a restart edits the cards it
+posted instead of posting them again and still closes them when their
+approvals end.
+
 ## The Slack app
 
 One app in the workspace, created at api.slack.com/apps:
@@ -34,11 +54,29 @@ bot per Slack app. A site that runs the flasharray-eda sibling beside this
 repository runs ONE bot, from either repository, pointed at both systems:
 the orchestrator and the platform carry both projects' approvals, so one
 `AO_URL` and one `AAP_HOST` reach them all, and two bots would post a card
-for every approval of both projects. That one bot's identities need the
+for every approval of both projects. That one instance serves both
+projects and keeps their cards apart: `SLACK_ROUTES` posts an approval
+whose workflow name or title starts with a prefix to that project's
+channel instead of `SLACK_CHANNEL`, its reminders and expiry message
+follow the card, and `NOTIFY_ROUTES` names the notify template that writes
+that project's expiry record. Run from this repository for both projects:
+
+    SLACK_CHANNEL='#flashblade-eda' \
+    SLACK_ROUTES='FlashArray=#flasharray-eda-test' \
+    NOTIFY_ROUTES='FlashArray=FlashArray - notify' \
+    python slack/approval_bot.py
+
+On a site that already runs the FlashArray bot, that instance is the one
+to run, pointed at both systems with the routes the other way round
+(`FlashBlade=<this project's channel>` and `FlashBlade=FlashBlade -
+notify`), and this copy stays off. Whichever runs, its identities need the
 rights on both sides: its orchestrator user in a group both projects'
 definitions name as approvers (`admins` and `approvers` in the definitions
 shipped here), and its controller token the Approve role on both
-organizations' workflows.
+organizations' workflows and execute on both notify templates, which for
+this organization means the Approve role on its controller workflow and
+execute on `FlashBlade - notify`. A second Slack app, with its own tokens
+and bot instance, is the other way to keep the projects apart.
 
 ## Identities
 
@@ -51,9 +89,11 @@ organizations' workflows.
   accounts. The decision is recorded as that identity with `via Slack by
   <user> (<id>)` in the decision notes.
 - **Controller:** a token (`AAP_TOKEN` or `AAP_TOKEN_FILE`) of a user with
-  the approve permission on the workflows. Controller approvals carry no
-  notes field; the platform's activity stream records the token's user,
-  the bot's log records the Slack user.
+  the approve permission on the workflows and, for the record of an
+  expired approval, the execute permission on `NOTIFY_TEMPLATE`
+  (`FlashBlade - notify`). Controller approvals carry no notes field; the
+  platform's activity stream records the token's user, the bot's log
+  records the Slack user.
 
 Who may click: `SLACK_APPROVERS`, a comma-separated list of Slack user
 ids. Empty means anyone in the channel, which is a lab setting; set it
@@ -79,21 +119,32 @@ rootless uid mapping):
 
     podman secret create ao-admin /path/to/ao-admin-password
     podman secret create aap-token /path/to/aap-token
+    mkdir -p ~/.config/slack/bot-state
     podman run -d --name eda-approval-bot --restart=unless-stopped --network host \
       --env-file ~/.config/slack/flashblade-eda.env \
       -e AO_URL=https://orchestrator.example.com -e AO_USERNAME=admin -e AO_PASSWORD_FILE=/run/secrets/ao-admin \
       -e AAP_HOST=https://aap.example.com -e AAP_TOKEN_FILE=/run/secrets/aap-token \
+      -e STATE_DIR=/state -v ~/.config/slack/bot-state:/state:Z,U \
       --secret ao-admin --secret aap-token \
       -v $PWD/slack/approval_bot.py:/app/approval_bot.py:ro,Z \
       registry.access.redhat.com/ubi9/python-312 \
       sh -c 'pip install -q slack_sdk && python /app/approval_bot.py'
 
 `POLL_SECONDS` (default 30) is how often the two approval queues are read.
-A card is posted once per approval; when the approval is decided in a UI
-or expires, the card loses its buttons on the next poll. The record of
-posted cards lives in the bot's memory, so a restart posts a fresh card
-for every approval still pending and the earlier card keeps its buttons
-(a click on either decides the same approval). Nothing secret is logged.
+A card is posted once per approval. The cards the bot posted are written
+to `cards.json` under `STATE_DIR` (`--state-dir` on the command line)
+after every change, so a restart picks them up (the `U` on the volume
+makes the directory writable by the image's non-root user under rootless
+podman, after which the host user reads it with `podman unshare cat`;
+without it every write fails and the bot says so once and runs on in
+memory): an approval still pending keeps its card, one that ended while
+the bot was down gets its card rewritten with the outcome on the first
+poll. Without a state directory the record lives in memory and a restart
+posts a fresh card for every approval still pending, while the earlier
+card keeps its buttons (a click on either decides the same approval). The
+decision window comes from the approval itself (`timeout_at` in the
+orchestrator, `approval_expiration` in the controller; a controller node
+with no timeout has no window and no reminders). Nothing secret is logged.
 
 A click on Approve decides the approval in the system that holds it: the
 orchestrator records it under the bot's identity with the Slack user in
@@ -102,16 +153,23 @@ as the bot's platform user and the workflow moves on to its next node. A
 second click on an approval already decided is refused by that system and
 reported back as an ephemeral message. The bot needs nothing wider than a
 user with the `project-user` role on the orchestrator project and a
-platform user with the Approve role on the workflows.
-`SLACK_CHANNEL` may be a name: Slack accepts it for the post and the bot
-keeps the channel id the post returns for the card's later updates.
+platform user with the Approve role on the workflows and execute on the
+notify template. `SLACK_CHANNEL` may be a name: Slack accepts it for the
+post and the bot keeps the channel id the post returns for the card's
+later updates; a routed channel the bot cannot post to (not yet invited)
+is logged and tried again on the next poll while the other cards go out.
 
 ## Variables
 
 | Variable | Meaning |
 | --- | --- |
 | `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_CHANNEL` | the app's tokens and the channel (name or id); each token also as `*_FILE` |
-| `SLACK_APPROVERS` | Slack user ids allowed to decide; empty = anyone in the channel |
+| `SLACK_APPROVERS` | Slack user ids allowed to decide; empty = anyone in the channel; also who the last reminder and the expiry message mention |
+| `SLACK_ESCALATE` | text put in front of the last reminder and the expiry message instead of the approver mentions, for example `<!subteam^S0123>` or `<!here>` |
+| `STATE_DIR` | directory for `cards.json`, the record of the posted cards; unset keeps it in memory |
+| `NOTIFY_TEMPLATE` | the controller template that writes the critical record of an expired orchestrator approval (default `FlashBlade - notify`; empty = no record) |
+| `SLACK_ROUTES` | `prefix=channel,prefix=channel`: an approval whose workflow name or title starts with a prefix is posted to that channel instead of `SLACK_CHANNEL`, and its reminders and expiry message follow it |
+| `NOTIFY_ROUTES` | `prefix=template`: the notify template for the expiry record of approvals matching the prefix (default `NOTIFY_TEMPLATE`) |
 | `AO_URL`, `AO_UI_URL`, `AO_VERIFY_CERTS` | orchestrator API base, the UI the card links to (default the API base), TLS verification (default true); unset `AO_URL` = not watched |
 | `AO_CLIENT_ID` + `AO_CLIENT_SECRET`, or `AO_USERNAME` + `AO_PASSWORD_FILE` | the orchestrator identity |
 | `AAP_HOST`, `AAP_TOKEN` or `AAP_TOKEN_FILE`, `AAP_VERIFY_CERTS` | the platform gateway and a controller token; unset `AAP_HOST` = not watched |
@@ -119,5 +177,8 @@ keeps the channel id the post returns for the card's later updates.
 | `POLL_SECONDS` | poll interval, default 30 |
 
 `tests/unit/test_approval_bot.py` drives the cards, the decision routing,
-the approver list and both systems' API calls with a fake HTTP function and
-a fake Slack client; `slack_sdk` is imported only by `main()`.
+the approver list, both systems' API calls and final-status reads, the
+reminders against a fake clock, the state file across a restart, the
+expiry page and record and the per-project routes, with a fake HTTP
+function and a fake Slack client; `slack_sdk` is imported only by
+`main()`.
