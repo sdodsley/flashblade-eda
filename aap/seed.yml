@@ -1,0 +1,1000 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Seed an Ansible Automation Platform 2.7 installation with the objects this
+# project needs. Everything is addressed by name, so the play is idempotent:
+# re-run it after editing the variables and only the differences are applied.
+#
+#   ansible-galaxy collection install -r aap/requirements.yml   # from Automation Hub
+#   cp aap/vars/example.yml vars/local-aap.yml                  # gitignored; edit
+#   export AAP_HOST=https://<gateway> AAP_TOKEN=<token>          # plus the FB_*_URL / FB_*_TOKEN pairs and the FB_*_S3_* keys
+#   ansible-playbook -i aap/inventory/example.yml aap/seed.yml -e @vars/local-aap.yml
+#
+# Created, in order: the organization; the "FlashBlade API", "FlashBlade
+# fleet", "FlashBlade object store", "Orchestrator service account" and
+# "Slack webhook" credential types; one credential per array, one fleet
+# credential carrying every array, one object store credential per entry of
+# aap_object_stores, one for the orchestrator service account when its
+# variables are set, one for the Slack webhook when its variable is set and
+# one source control credential when the repository token is set; the
+# "FlashBlades" inventory with one host per array plus localhost; the
+# project; the execution environment reference; one job template per
+# playbook, each with the fleet credential attached (the S3 templates also
+# carry the object store credential, notify the Slack webhook, the
+# orchestrator post the service account); the controller-tier capacity
+# workflow (request -> approval -> reclaim, notify on failure); three daily
+# schedules (DR drill, showback, selftest); and, on the Event-Driven Ansible
+# controller, a decision environment, a project, the same credential types
+# and credentials, a platform user credential and one activation per
+# platform rulebook (extensions/eda/rulebooks/platform/). Nothing here
+# reaches an array or the orchestrator; aap/README.md lists what the seed
+# cannot create. Secrets are read from the environment variables named in
+# the vars file and written nowhere by this play.
+- name: Seed Ansible Automation Platform for flashblade-eda
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - vars/example.yml
+  module_defaults:
+    group/ansible.platform.gateway:
+      aap_hostname: "{{ aap_hostname }}"
+      aap_token: "{{ aap_token }}"
+      aap_validate_certs: "{{ aap_validate_certs }}"
+      aap_request_timeout: "{{ aap_request_timeout }}"
+    # ansible.controller 4.8.0 (the build shipped with the 2.7 installer)
+    # declares aap_token but authenticates with HTTP basic auth only, so the
+    # controller objects need AAP_USERNAME and AAP_PASSWORD as well.
+    group/ansible.controller.controller:
+      aap_hostname: "{{ aap_hostname }}"
+      aap_username: "{{ aap_username | default(omit, true) }}"
+      aap_password: "{{ aap_password | default(omit, true) }}"
+      aap_token: "{{ aap_token }}"
+      aap_validate_certs: "{{ aap_validate_certs }}"
+      aap_request_timeout: "{{ aap_request_timeout }}"
+    group/ansible.eda.eda:
+      aap_hostname: "{{ aap_hostname }}"
+      aap_token: "{{ aap_token }}"
+      aap_validate_certs: "{{ aap_validate_certs }}"
+      aap_request_timeout: "{{ aap_request_timeout }}"
+  vars:
+    array_credential_prefix: "FlashBlade - "
+    fleet_credential_name: "FlashBlade fleet - {{ aap_organization }}"
+    object_store_credential_prefix: "FlashBlade object store - "
+    orchestrator_credential_name: "Orchestrator service account - flashblade-eda"
+    platform_credential_name: "Platform user - flashblade-eda"
+    slack_credential_name: "Slack webhook - flashblade-eda"
+    slack_notification_name: "Slack - flashblade-eda"
+    scm_credential_name: "Source control - flashblade-eda"
+    # the Slack webhook credential exists, and sits on the notify template,
+    # only when the webhook URL is set; the notification template only when
+    # the bot token and the channel are
+    slack_seeded: "{{ lookup('env', aap_slack_webhook_env) | length > 0 }}"
+    slack_bot_seeded: "{{ lookup('env', aap_slack_bot_token_env) | length > 0 and lookup('env', aap_slack_channel_env) | length > 0 }}"
+    # the orchestrator credential, its EDA twin and the template that posts
+    # to the orchestrator exist only when the service account's client id is
+    # set in the environment
+    orchestrator_seeded: "{{ lookup('env', aap_orchestrator_client_id_env) | length > 0 }}"
+    # the source control credential (both projects) only when the
+    # repository token is set
+    scm_seeded: "{{ lookup('env', aap_scm_token_env) | length > 0 }}"
+    # The object store credential injects environment variables with fixed
+    # names (FB_OBJ_*), so one activation or launch carries one of them: the
+    # first entry's. The other entries' credentials serve the credential
+    # prompt and an activation copy for a second array.
+    object_store_credentials: "{{ [object_store_credential_prefix ~ aap_object_stores[0].array] if aap_object_stores | length > 0 else [] }}"
+    s3_credentials: "{{ [fleet_credential_name] + object_store_credentials }}"
+    workflow_name: "FlashBlade - capacity reclaim (controller tier)"
+    # Keys picked out of the rendered rulebook vars (activation_site_vars,
+    # the site file laid over vars/example.yml) for the templates whose
+    # playbooks need them when a schedule or a person launches them; the
+    # platform rulebooks pass the rest with each run_job_template.
+    telemetry_keys:
+      - telemetry_target_name
+      - telemetry_endpoint
+      - telemetry_source
+      - telemetry_transport
+      - telemetry_policies
+      - telemetry_silence_minutes
+      - telemetry_array_names
+      - telemetry_array_label
+      - prometheus_url
+    contain_keys:
+      - contain_exclude_clients
+      - contain_exclude_file_systems
+      - tarpit_ops_per_sec
+    selftest_keys:
+      - object_store
+      - selftest_checks
+      - audit_baseline
+      - prometheus_url
+      - telemetry_target_name
+      - telemetry_endpoint
+      - telemetry_policies
+      - telemetry_array_names
+      - telemetry_silence_minutes
+    showback_keys:
+      - object_store
+      - showback_bucket
+      - showback_prefix
+      - showback_enabled
+    dr_drill_keys:
+      - object_store
+      - dr_drill_hour
+      - dr_drill_discard
+      - showback_prefix
+    s3_vars: "{{ activation_site_vars | dict2items | selectattr('key', 'in', ['object_store']) | items2dict }}"
+    telemetry_vars: "{{ activation_site_vars | dict2items | selectattr('key', 'in', telemetry_keys) | items2dict }}"
+    contain_vars: "{{ activation_site_vars | dict2items | selectattr('key', 'in', contain_keys) | items2dict }}"
+    selftest_vars: "{{ activation_site_vars | dict2items | selectattr('key', 'in', selftest_keys) | items2dict | combine({'target_array': all_arrays}) }}"
+    showback_vars: "{{ activation_site_vars | dict2items | selectattr('key', 'in', showback_keys) | items2dict | combine({'target_array': all_arrays}) }}"
+    dr_drill_vars: "{{ activation_site_vars | dict2items | selectattr('key', 'in', dr_drill_keys) | items2dict | combine({'dr_drills': aap_dr_drills}) }}"
+    # the fan-out playbooks (selftest, showback) take every array at once:
+    # target_array is a comma-joined host pattern, as the standalone
+    # housekeeping tick passes it
+    all_arrays: "{{ aap_arrays | map(attribute='name') | join(',') }}"
+    # Fixed names: orchestrator workflow definitions and the platform
+    # rulebooks' run_job_template actions refer to them, so a rename here is
+    # a rename everywhere. Every template carries the fleet credential, which
+    # injects every array's address and token as purefb_fleet_json;
+    # playbooks/tasks/resolve_array.yml picks the entry of the array a launch
+    # names and sets credential_array to it, so one template serves every
+    # array. A launch may still pass one array's "FlashBlade API" credential
+    # instead (credential_names on an orchestrator node); the playbooks then
+    # refuse to act on any other array. The S3-side templates (the object
+    # audit playbooks, the S3 inbox, the showback, the selftest and the
+    # playbooks that write requests to the log bucket) also carry the
+    # object store credential; the orchestrator poster takes the service
+    # account.
+    job_templates:
+      - name: "FlashBlade - alert runbook"
+        playbook: playbooks/alert_runbook.yml
+        description: "Route an opened alert through the alert-code runbook map: notify, ticket, or ticket plus per-code tasks"
+      - name: "FlashBlade - apply baseline"
+        playbook: playbooks/apply_baseline.yml
+        description: "Apply the git baseline of the array in the limit (localhost refreshes the checkout); artifacts ntp_changed, dns_changed, git_head"
+        # one launch applies one array's baseline; localhost stays in so the
+        # first play still refreshes the checkout
+        limit: "localhost,{{ aap_default_array }}"
+      - name: "FlashBlade - auditor guard"
+        playbook: playbooks/auditor_guard.yml
+        description: "Raise the audit log bucket's quota or reattach the audit baseline when the object audit stops flowing; artifacts mode, changed_objects, outcome"
+        credentials: "{{ s3_credentials }}"
+        extra_vars: "{{ s3_vars }}"
+      - name: "FlashBlade - canary"
+        playbook: playbooks/canary.yml
+        description: "Disable the access key that read a canary object; artifacts access_key_id, user, disabled"
+        credentials: "{{ s3_credentials }}"
+        extra_vars: "{{ s3_vars }}"
+      - name: "FlashBlade - capacity reclaim"
+        playbook: playbooks/capacity_reclaim.yml
+        description: "Eradicate the pending-eradication candidates of an approved request; artifacts request_id, eradicated, refused, result"
+      - name: "FlashBlade - capacity request"
+        playbook: playbooks/capacity_request.yml
+        description: "Raise a capacity approval request; artifacts request_id, candidate_count, candidates, at_risk_array"
+        credentials: "{{ s3_credentials }}"
+        extra_vars: "{{ s3_vars }}"
+      - name: "FlashBlade - client diagnose"
+        playbook: playbooks/client_diagnose.yml
+        description: "Run read-only diagnostics on the inventory host behind a noisy NFS or SMB client; artifacts client, client_host, commands_ran"
+      - name: "FlashBlade - DR drill"
+        playbook: playbooks/dr_drill.yml
+        description: "Promote, read and demote the replica of each drill in dr_drills on its peer, once a day; artifacts drills, failed_count"
+        credentials: "{{ s3_credentials }}"
+        extra_vars: "{{ dr_drill_vars }}"
+      - name: "FlashBlade - flag alert"
+        playbook: playbooks/flag_alert.yml
+        description: "Mark an alert flagged on the array once automation has routed it; artifacts alert_id, flagged"
+      - name: "FlashBlade - grow file system"
+        playbook: playbooks/grow_fs.yml
+        description: "Grow one hard-limited file system after re-reading its size, or write a request above the ceiling; artifacts file_system, old_size, new_size, outcome"
+        credentials: "{{ s3_credentials }}"
+        extra_vars: "{{ s3_vars }}"
+      - name: "FlashBlade - identify LED"
+        playbook: playbooks/identify_led.yml
+        description: "Light or clear a component's identify LED; artifacts component, led_state"
+      - name: "FlashBlade - landing"
+        playbook: playbooks/landing.yml
+        description: "Record a landing marker and run the ingest command for the dataset; artifacts dataset, key, command_ran, rc"
+        credentials: "{{ s3_credentials }}"
+        extra_vars: "{{ s3_vars }}"
+      - name: "FlashBlade - lock on arrival"
+        playbook: playbooks/lock_on_arrival.yml
+        description: "Put a legal hold on an object that arrived under an evidence prefix; artifacts bucket, key, held"
+        credentials: "{{ s3_credentials }}"
+        extra_vars: "{{ s3_vars }}"
+      - name: "FlashBlade - maintenance window"
+        playbook: playbooks/maintenance_window.yml
+        description: "Open, extend or close the array's maintenance window; artifacts array, action, status"
+      - name: "FlashBlade - notify"
+        playbook: playbooks/notify.yml
+        description: "Append a notify record to the alert log and post it to Slack when the webhook credential is attached; artifact record_kind"
+        credentials: "{{ [fleet_credential_name] + ([slack_credential_name] if slack_seeded | bool else []) }}"
+      - name: "FlashBlade - orchestrator post"
+        playbook: playbooks/orchestrator_post.yml
+        description: "Post one event envelope to the automation orchestrator's EDA webhook trigger"
+        credentials: ["{{ fleet_credential_name }}", "{{ orchestrator_credential_name }}"]
+        requires: orchestrator
+      - name: "FlashBlade - posture revert"
+        playbook: playbooks/posture_revert.yml
+        description: "Block public access on the buckets a posture poll found public; artifacts buckets, reverted"
+      - name: "FlashBlade - QoS cap"
+        playbook: playbooks/qos_cap.yml
+        description: "Apply a temporary QoS cap to a file system or bucket; artifacts object_kind, object_name, policy, capped"
+      - name: "FlashBlade - QoS lift"
+        playbook: playbooks/qos_lift.yml
+        description: "Lift a temporary QoS cap from a file system or bucket; artifacts object_kind, object_name, policy, lifted"
+      - name: "FlashBlade - quarantine client"
+        playbook: playbooks/quarantine_client.yml
+        description: "Make an NFS client read-only on the file systems exported to it, or release it; artifacts client, action, file_systems, changed_count"
+        extra_vars: "{{ contain_vars }}"
+      - name: "FlashBlade - reconcile"
+        playbook: playbooks/reconcile.yml
+        description: "Reapply NTP or DNS from the git baseline after an audited change; artifacts ntp_changed, dns_changed"
+      - name: "FlashBlade - release locks"
+        playbook: playbooks/release_locks.yml
+        description: "Remove a client's sessions and locks on approval; artifacts client, removed_sessions, removed_locks"
+        extra_vars: "{{ contain_vars }}"
+      - name: "FlashBlade - remediate DNS"
+        playbook: playbooks/remediate_dns.yml
+        description: "Reapply the baseline DNS domain and nameservers to one array after a drift poll"
+      - name: "FlashBlade - remediate NTP"
+        playbook: playbooks/remediate_ntp.yml
+        description: "Reapply the baseline NTP servers to one array after a drift poll"
+      - name: "FlashBlade - renew certificate"
+        playbook: playbooks/renew_certificate.yml
+        description: "Re-issue an expiring self-signed certificate with its current names; artifacts certificate, renewed, valid_to"
+      - name: "FlashBlade - replication resume"
+        playbook: playbooks/replication_resume.yml
+        description: "Resume a paused bucket replica link; artifacts bucket, resumed"
+      - name: "FlashBlade - S3 anomaly"
+        playbook: playbooks/s3_anomaly.yml
+        description: "Record an access-denied or error storm in the object audit log and disable its top key when allowed; artifacts access_key_id, anomaly_kind, disabled"
+        credentials: "{{ s3_credentials }}"
+        extra_vars: "{{ s3_vars }}"
+      - name: "FlashBlade - S3 approval"
+        playbook: playbooks/s3_approval.yml
+        description: "Act on an approval object written to the log bucket; artifacts request_id, action, outcome"
+        credentials: "{{ s3_credentials }}"
+        extra_vars: "{{ s3_vars }}"
+      - name: "FlashBlade - selftest"
+        playbook: playbooks/selftest.yml
+        description: "Check what the rulebooks depend on, per array: REST, the state bucket, the audit baseline, the telemetry target, the Prometheus receiver; artifacts checks, failed"
+        credentials: "{{ s3_credentials }}"
+        extra_vars: "{{ selftest_vars }}"
+      - name: "FlashBlade - session check"
+        playbook: playbooks/session_check.yml
+        description: "Check a management login against admin_cidrs and notify one from outside them"
+      - name: "FlashBlade - showback"
+        playbook: playbooks/showback.yml
+        description: "Write the daily showback ledger of each array to its state bucket; artifacts date, object_key, file_systems, buckets"
+        credentials: "{{ s3_credentials }}"
+        extra_vars: "{{ showback_vars }}"
+      - name: "FlashBlade - tarpit"
+        playbook: playbooks/tarpit.yml
+        description: "Tarpit a file system with the eda-tarpit QoS policy, or lift it; artifacts file_system, action, policy, changed"
+        extra_vars: "{{ contain_vars }}"
+      - name: "FlashBlade - telemetry check"
+        playbook: playbooks/telemetry_check.yml
+        description: "Decide where the telemetry pipeline went silent: array, receiver, pipeline or healthy; artifacts verdict, test_status, array_reachable, receiver_reachable"
+        extra_vars: "{{ telemetry_vars }}"
+      - name: "FlashBlade - telemetry setup"
+        playbook: playbooks/telemetry_setup.yml
+        description: "Create the OTLP telemetry target and attach it to the metric policies; artifacts target, policies_attached, test_ok"
+        extra_vars: "{{ telemetry_vars }}"
+      - name: "FlashBlade - user quota"
+        playbook: playbooks/user_quota.yml
+        description: "Record the principals at a user or group quota and raise them when allowed; artifacts file_system, principal_kind, principals, raised"
+    # Fixed-hour work the platform runs on its own, in place of the
+    # standalone housekeeping tick (the platform rulebooks leave that
+    # ruleset out). iCal rules from the vars: HH:MM in aap_schedule_timezone,
+    # daily; the DTSTART date only anchors the rule.
+    schedule_dtstart: "DTSTART;TZID={{ aap_schedule_timezone }}:20260101T"
+    schedules:
+      - name: "FlashBlade - DR drill (nightly)"
+        template: "FlashBlade - DR drill"
+        description: "Every day at {{ aap_schedules.dr_drill.time }} {{ aap_schedule_timezone }}: promote, read and demote the replica of each drill in aap_dr_drills on its peer; the playbook's hour gate stays on, so this hour and dr_drill_hour agree"
+        rrule: "{{ schedule_dtstart }}{{ aap_schedules.dr_drill.time | replace(':', '') }}00 RRULE:FREQ=DAILY;INTERVAL=1"
+        extra_data:
+          dr_drill_force: false
+        enabled: "{{ aap_schedules.dr_drill.enabled }}"
+      - name: "FlashBlade - showback (daily)"
+        template: "FlashBlade - showback"
+        description: "Every day at {{ aap_schedules.showback.time }} {{ aap_schedule_timezone }}: one showback ledger per array to its state bucket; a ledger that already exists for the day is left alone"
+        rrule: "{{ schedule_dtstart }}{{ aap_schedules.showback.time | replace(':', '') }}00 RRULE:FREQ=DAILY;INTERVAL=1"
+        enabled: "{{ aap_schedules.showback.enabled }}"
+      - name: "FlashBlade - selftest (daily)"
+        template: "FlashBlade - selftest"
+        description: "Every day at {{ aap_schedules.selftest.time }} {{ aap_schedule_timezone }}: every array checks what the rulebooks depend on; a failed check is a critical record"
+        rrule: "{{ schedule_dtstart }}{{ aap_schedules.selftest.time | replace(':', '') }}00 RRULE:FREQ=DAILY;INTERVAL=1"
+        enabled: "{{ aap_schedules.selftest.enabled }}"
+  tasks:
+    - name: Refuse to run without the platform address and token
+      ansible.builtin.assert:
+        that:
+          - aap_hostname | length > 0
+          - aap_token | length > 0
+        fail_msg: "set AAP_HOST and AAP_TOKEN (aap_hostname / aap_token) first"
+        quiet: true
+
+    - name: Refuse to run with an array's environment variables unset
+      ansible.builtin.assert:
+        that:
+          - lookup('env', item.fb_url_env) | length > 0
+          - lookup('env', item.api_token_env) | length > 0
+        fail_msg: "{{ item.fb_url_env }} and {{ item.api_token_env }} must be set for {{ item.name }}"
+        quiet: true
+      loop: "{{ aap_arrays }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Refuse to run with an object store's environment variables unset
+      ansible.builtin.assert:
+        that:
+          - lookup('env', item.fb_url_env) | length > 0
+          - lookup('env', item.api_token_env) | length > 0
+          - lookup('env', item.endpoint_env) | length > 0
+          - lookup('env', item.access_key_env) | length > 0
+          - lookup('env', item.secret_key_env) | length > 0
+          - lookup('env', item.state_access_key_env) | length > 0
+          - lookup('env', item.state_secret_key_env) | length > 0
+        fail_msg: >-
+          {{ item.fb_url_env }}, {{ item.api_token_env }}, {{ item.endpoint_env }}, {{ item.access_key_env }},
+          {{ item.secret_key_env }}, {{ item.state_access_key_env }} and {{ item.state_secret_key_env }}
+          must be set for the object store of {{ item.array }}
+        quiet: true
+      loop: "{{ aap_object_stores }}"
+      loop_control:
+        label: "{{ item.array }}"
+
+    # YAML reads an unquoted 03:00 as the number 180, so a schedule time
+    # must be a quoted HH:MM.
+    - name: Refuse a schedule time that is not a quoted HH:MM
+      ansible.builtin.assert:
+        that:
+          - item.value.time is string
+          - item.value.time | string is match('^([01][0-9]|2[0-3]):[0-5][0-9]$')
+        fail_msg: "aap_schedules.{{ item.key }}.time must be a quoted HH:MM (got {{ item.value.time }})"
+        quiet: true
+      loop: "{{ aap_schedules | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    # The fleet credential's one input is a JSON list of every array's name,
+    # address and token; the list is built here from the environment and is
+    # held in a no_log fact.
+    - name: Collect every array's address and token for the fleet credential
+      ansible.builtin.set_fact:
+        fleet_arrays: >-
+          {{ fleet_arrays | default([]) + [{'name': item.name,
+             'fb_url': lookup('env', item.fb_url_env),
+             'api_token': lookup('env', item.api_token_env)}] }}
+      loop: "{{ aap_arrays }}"
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+
+    # Rendered before the controller objects: the activations are created
+    # from this and the job templates take their per-template keys from it.
+    # An activation's extra vars are the rulebook vars file minus the keys
+    # its credentials inject: purefb_arrays comes from the fleet credential
+    # (config_arrays falls back to it in the rulebooks) and orchestrator_url
+    # from the orchestrator credential when that is attached (the controller
+    # refuses a key that both the extra vars and a credential define).
+    # aap_organization is added for the run_job_template actions. The vars
+    # file holds no secrets, so the fact is logged.
+    - name: Credentials and extra vars every activation carries
+      ansible.builtin.set_fact:
+        activation_credentials: >-
+          {{ [fleet_credential_name, platform_credential_name] + object_store_credentials
+             + ([orchestrator_credential_name] if orchestrator_seeded | bool else []) }}
+        activation_site_vars: >-
+          {{ (lookup('file', playbook_dir ~ '/../vars/example.yml') | from_yaml)
+             | combine(lookup('file', aap_eda_vars_file) | from_yaml) }}
+        activation_extra_vars: >-
+          {{ (lookup('file', playbook_dir ~ '/../vars/example.yml') | from_yaml)
+             | combine(lookup('file', aap_eda_vars_file) | from_yaml) | dict2items
+             | rejectattr('key', 'in', ['purefb_arrays', 'config_arrays'] + (['orchestrator_url'] if orchestrator_seeded | bool else []))
+             | items2dict | combine({'aap_organization': aap_organization})
+             | to_nice_yaml(indent=2, width=1000) }}
+
+    # A key the site file lacks takes the example default, and one of those
+    # defaults is a placeholder that an activation would act on: the capacity
+    # and replication rulebooks would post their handoffs to
+    # orchestrator.example.com. Refuse it rather than seed it.
+    - name: Refuse example placeholders in the extra vars the activations would carry
+      ansible.builtin.assert:
+        that:
+          - >-
+            not ((activation_extra_vars | from_yaml).orchestrator_enabled | default(false) | bool)
+            or (orchestrator_seeded | bool)
+            or ('example.com' not in ((activation_extra_vars | from_yaml).orchestrator_url | default('')))
+        fail_msg: >-
+          orchestrator_enabled is true but orchestrator_url is still the example placeholder:
+          set it in {{ aap_eda_vars_file }} or seed the orchestrator credential (AO_CLIENT_ID)
+
+    # The drill schedule launches the template with the playbook's hour gate
+    # on (dr_drill_force false): a drill runs only at dr_drill_hour UTC. With
+    # the UTC zone the two hours are compared here, so a schedule that would
+    # fire and do nothing every night is refused; another zone is the
+    # site's own arithmetic.
+    - name: Refuse a DR drill schedule whose hour is not the drills' dr_drill_hour
+      when: aap_schedules.dr_drill.enabled | bool and aap_schedule_timezone == 'UTC'
+      ansible.builtin.assert:
+        that:
+          - (aap_schedules.dr_drill.time | string)[:2] | int == (activation_site_vars.dr_drill_hour | default(3) | int)
+        fail_msg: >-
+          aap_schedules.dr_drill.time is {{ aap_schedules.dr_drill.time }} but dr_drill_hour in
+          {{ aap_eda_vars_file }} is {{ activation_site_vars.dr_drill_hour | default(3) }}: the drill would never run;
+          set both to the same hour
+        quiet: true
+
+    # --- platform gateway ----------------------------------------------------
+    - name: Organization
+      ansible.platform.organization:
+        name: "{{ aap_organization }}"
+        description: "Event-Driven Ansible for Everpure FlashBlade (flashblade-eda)"
+        state: present
+
+    # --- automation controller -----------------------------------------------
+    # The platform writes this base URL into the links of its notifications
+    # (jobs, workflow approvals); the installer leaves a placeholder there.
+    - name: Base URL for the links in notifications
+      ansible.controller.settings:
+        name: TOWER_URL_BASE
+        value: "{{ aap_url_base }}"
+
+    - name: Credential type for one array (fb_url, api_token and credential_array as extra_vars)
+      ansible.controller.credential_type:
+        name: FlashBlade API
+        description: "One array's management address, API token and inventory name, injected as the extra_vars fb_url, api_token and credential_array; the playbooks refuse to act on an array other than credential_array"
+        kind: cloud
+        inputs: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flashblade_api_inputs.json') | from_json }}"
+        injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flashblade_api_injectors.json') | from_json }}"
+        state: present
+
+    - name: Credential type for the fleet (every array's address and token as one JSON list)
+      ansible.controller.credential_type:
+        name: FlashBlade fleet
+        description: "A JSON list of {name, fb_url, api_token}, one per array, injected as the extra_var purefb_fleet_json; playbooks/tasks/resolve_array.yml picks the entry of the array a launch names"
+        kind: cloud
+        inputs: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flashblade_fleet_inputs.json') | from_json }}"
+        injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flashblade_fleet_injectors.json') | from_json }}"
+        state: present
+
+    # The same JSON serves the controller and the EDA side: the injectors
+    # are environment variables, which both read the same way.
+    - name: Credential type for one array's object store (S3 endpoint and keys as environment variables)
+      ansible.controller.credential_type:
+        name: FlashBlade object store
+        description: "One array's management address and token, S3 endpoint, tail key and state key, injected as the environment variables FB_OBJ_URL, FB_OBJ_TOKEN, FB_OBJ_S3_ENDPOINT, FB_OBJ_S3_ACCESS_KEY, FB_OBJ_S3_SECRET_KEY, FB_OBJ_S3_STATE_ACCESS_KEY and FB_OBJ_S3_STATE_SECRET_KEY, which object_audit_arrays and object_store name in the rulebook vars"
+        kind: cloud
+        inputs: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flashblade_object_store_inputs.json') | from_json }}"
+        injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flashblade_object_store_injectors.json') | from_json }}"
+        state: present
+
+    - name: Credential type for the orchestrator service account
+      ansible.controller.credential_type:
+        name: Orchestrator service account
+        description: "Client credentials of an automation orchestrator service account: AO_CLIENT_ID and AO_CLIENT_SECRET in the environment, orchestrator_url as an extra var"
+        kind: cloud
+        inputs: "{{ lookup('file', playbook_dir ~ '/files/credential_type_orchestrator_sa_inputs.json') | from_json }}"
+        injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_orchestrator_sa_injectors.json') | from_json }}"
+        state: present
+
+    - name: Credential type for a Slack incoming webhook
+      ansible.controller.credential_type:
+        name: Slack webhook
+        description: "An incoming webhook URL, injected as the environment variable SLACK_WEBHOOK_URL; playbooks/notify.yml posts every notification to it"
+        kind: cloud
+        inputs: "{{ lookup('file', playbook_dir ~ '/files/credential_type_slack_webhook_inputs.json') | from_json }}"
+        injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_slack_webhook_injectors.json') | from_json }}"
+        state: present
+
+    # Kept beside the fleet credential for launches that pin one array
+    # (credential_names on an orchestrator node, or a person in the prompt).
+    - name: One FlashBlade API credential per array
+      ansible.controller.credential:
+        name: "{{ array_credential_prefix }}{{ item.name }}"
+        description: "fb_url and api_token for {{ item.name }}"
+        organization: "{{ aap_organization }}"
+        credential_type: FlashBlade API
+        inputs:
+          fb_url: "{{ lookup('env', item.fb_url_env) }}"
+          api_token: "{{ lookup('env', item.api_token_env) }}"
+          array_name: "{{ item.name }}"
+        update_secrets: "{{ aap_update_secrets | bool }}"
+        state: present
+      loop: "{{ aap_arrays }}"
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+
+    - name: Fleet credential (every array in one credential)
+      ansible.controller.credential:
+        name: "{{ fleet_credential_name }}"
+        description: "name, fb_url and api_token of every array in aap_arrays, as one JSON list"
+        organization: "{{ aap_organization }}"
+        credential_type: FlashBlade fleet
+        inputs:
+          arrays: "{{ fleet_arrays | to_json }}"
+        update_secrets: "{{ aap_update_secrets | bool }}"
+        state: present
+      no_log: true
+
+    - name: One object store credential per entry of aap_object_stores
+      ansible.controller.credential:
+        name: "{{ object_store_credential_prefix }}{{ item.array }}"
+        description: "S3 endpoint, tail key and state key of the object store of {{ item.array }}, with the array's address and token"
+        organization: "{{ aap_organization }}"
+        credential_type: FlashBlade object store
+        inputs:
+          array_name: "{{ item.array }}"
+          fb_url: "{{ lookup('env', item.fb_url_env) }}"
+          api_token: "{{ lookup('env', item.api_token_env) }}"
+          endpoint: "{{ lookup('env', item.endpoint_env) }}"
+          access_key: "{{ lookup('env', item.access_key_env) }}"
+          secret_key: "{{ lookup('env', item.secret_key_env) }}"
+          state_access_key: "{{ lookup('env', item.state_access_key_env) }}"
+          state_secret_key: "{{ lookup('env', item.state_secret_key_env) }}"
+        update_secrets: "{{ aap_update_secrets | bool }}"
+        state: present
+      loop: "{{ aap_object_stores }}"
+      loop_control:
+        label: "{{ item.array }}"
+      no_log: true
+
+    - name: Orchestrator service account credential (when its variables are set)
+      when: orchestrator_seeded | bool
+      ansible.controller.credential:
+        name: "{{ orchestrator_credential_name }}"
+        description: "Service account bound to this project's EDA triggers in the orchestrator"
+        organization: "{{ aap_organization }}"
+        credential_type: Orchestrator service account
+        inputs:
+          orchestrator_url: "{{ lookup('env', aap_orchestrator_url_env) }}"
+          client_id: "{{ lookup('env', aap_orchestrator_client_id_env) }}"
+          client_secret: "{{ lookup('env', aap_orchestrator_client_secret_env) }}"
+        update_secrets: "{{ aap_update_secrets | bool }}"
+        state: present
+      no_log: true
+
+    - name: Slack webhook credential (when the webhook variable is set)
+      when: slack_seeded | bool
+      ansible.controller.credential:
+        name: "{{ slack_credential_name }}"
+        description: "Incoming webhook of the channel the FlashBlade notifications go to"
+        organization: "{{ aap_organization }}"
+        credential_type: Slack webhook
+        inputs:
+          webhook_url: "{{ lookup('env', aap_slack_webhook_env) }}"
+        update_secrets: "{{ aap_update_secrets | bool }}"
+        state: present
+      no_log: true
+
+    # A private repository: the project clones with this credential (the
+    # built-in Source Control type, the token as the password).
+    - name: Source control credential for the project (when the repository token is set)
+      when: scm_seeded | bool
+      ansible.controller.credential:
+        name: "{{ scm_credential_name }}"
+        description: "Token the controller project clones {{ aap_project_url }} with"
+        organization: "{{ aap_organization }}"
+        credential_type: Source Control
+        inputs:
+          username: "{{ aap_scm_username }}"
+          password: "{{ lookup('env', aap_scm_token_env) }}"
+        update_secrets: "{{ aap_update_secrets | bool }}"
+        state: present
+      no_log: true
+
+    # The inventory holds names only; addresses and tokens travel in the
+    # credentials. The variables are stored as written (not templated here).
+    - name: Inventory
+      ansible.controller.inventory:
+        name: "{{ aap_inventory_name }}"
+        description: "One host per array, named as in purefb_arrays; fb_url and api_token come from the FlashBlade fleet or FlashBlade API credentials, not from host variables"
+        organization: "{{ aap_organization }}"
+        variables:
+          ansible_connection: local
+          ansible_python_interpreter: !unsafe "{{ ansible_playbook_python }}"
+        state: present
+
+    - name: Localhost in the inventory
+      ansible.controller.host:
+        name: localhost
+        inventory: "{{ aap_inventory_name }}"
+        description: "notify, capacity request / reclaim, alert runbook, landing, lock on arrival, session check, the orchestrator post and the DR drill run here"
+        state: present
+
+    - name: One host per array
+      ansible.controller.host:
+        name: "{{ item.name }}"
+        inventory: "{{ aap_inventory_name }}"
+        description: "FlashBlade {{ item.name }}; address and token come from the credential {{ fleet_credential_name }} or {{ array_credential_prefix }}{{ item.name }}"
+        state: present
+      loop: "{{ aap_arrays }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Execution environment reference
+      ansible.controller.execution_environment:
+        name: "{{ aap_ee_name }}"
+        description: "Image the FlashBlade job templates run in; needs py-pure-client, boto3, the everpure.flashblade collection and the sdodsley.flashblade_eda collection (aap/Containerfile.ee)"
+        image: "{{ aap_ee_image }}"
+        organization: "{{ aap_organization }}"
+        pull: "{{ aap_ee_pull }}"
+        state: present
+
+    - name: Project
+      ansible.controller.project:
+        name: "{{ aap_project_name }}"
+        description: "{{ aap_project_url }} ({{ aap_project_branch }})"
+        organization: "{{ aap_organization }}"
+        scm_type: git
+        scm_url: "{{ aap_project_url }}"
+        scm_branch: "{{ aap_project_branch }}"
+        scm_update_on_launch: false
+        credential: "{{ scm_credential_name if scm_seeded | bool else omit }}"
+        default_environment: "{{ aap_ee_name }}"
+        wait: true
+        state: present
+
+    # Job failures and the workflow's approval events go to Slack through
+    # the platform's own notification template (bot token, chat:write); it
+    # exists before the templates that name it.
+    - name: Slack notification template (when the bot token and channel are set)
+      when: slack_bot_seeded | bool
+      ansible.controller.notification_template:
+        name: "{{ slack_notification_name }}"
+        description: "FlashBlade job failures and controller-tier approval events"
+        organization: "{{ aap_organization }}"
+        notification_type: slack
+        notification_configuration:
+          token: "{{ lookup('env', aap_slack_bot_token_env) }}"
+          channels: ["#{{ lookup('env', aap_slack_channel_env) | regex_replace('^#', '') }}"]
+          hex_color: ""
+        state: present
+      no_log: true
+
+    # Every template prompts for extra vars (target_array and the rest come
+    # from the launch), for credentials (the fleet credential is attached; a
+    # launch may swap it for one array's FlashBlade API credential, or the
+    # object store credential for another array's) and for a limit (apply
+    # baseline is limited to one array per launch). A single-array credential
+    # for an array other than the one the launch names makes the playbook
+    # fail at its credential_array check instead of acting on that array.
+    # The base extra vars are aap_job_extra_vars plus fb_api_version from the
+    # rulebook vars file; a template's own keys are laid over them.
+    - name: One job template per playbook
+      when: >-
+        item.requires | default('') != 'orchestrator'
+        or (aap_seed_orchestrator_template | bool and orchestrator_seeded | bool)
+      ansible.controller.job_template:
+        name: "{{ item.name }}"
+        description: "{{ item.description }}"
+        organization: "{{ aap_organization }}"
+        project: "{{ aap_project_name }}"
+        playbook: "{{ item.playbook }}"
+        inventory: "{{ aap_inventory_name }}"
+        execution_environment: "{{ aap_ee_name }}"
+        credentials: "{{ item.credentials | default([fleet_credential_name]) }}"
+        extra_vars: >-
+          {{ aap_job_extra_vars
+             | combine({'fb_api_version': activation_site_vars.fb_api_version | default('2.16') | string})
+             | combine(item.extra_vars | default({})) }}
+        limit: "{{ item.limit | default(omit) }}"
+        ask_variables_on_launch: true
+        ask_credential_on_launch: true
+        ask_limit_on_launch: true
+        notification_templates_error: "{{ [slack_notification_name] if slack_bot_seeded | bool else omit }}"
+        state: present
+      loop: "{{ job_templates }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # The request node's artifacts (request_id, at_risk_array, ...) reach
+    # the reclaim node as extra vars, which is how the two playbooks hand
+    # over. A denied or timed-out approval takes the failure edge.
+    - name: Controller-tier capacity workflow
+      ansible.controller.workflow_job_template:
+        name: "{{ workflow_name }}"
+        description: "capacity request -> approval -> reclaim; notify when a node fails or the approval is denied"
+        organization: "{{ aap_organization }}"
+        inventory: "{{ aap_inventory_name }}"
+        ask_variables_on_launch: true
+        destroy_current_nodes: "{{ aap_rebuild_workflow_nodes | bool }}"
+        notification_templates_approvals: "{{ [slack_notification_name] if slack_bot_seeded | bool else omit }}"
+        notification_templates_error: "{{ [slack_notification_name] if slack_bot_seeded | bool else omit }}"
+        notification_templates_success: "{{ [slack_notification_name] if slack_bot_seeded | bool else omit }}"
+        state: present
+        workflow_nodes:
+          - identifier: request
+            unified_job_template:
+              name: "FlashBlade - capacity request"
+              type: job_template
+              organization:
+                name: "{{ aap_organization }}"
+            related:
+              success_nodes:
+                - identifier: approve
+              failure_nodes:
+                - identifier: notify_failure
+          - identifier: approve
+            unified_job_template:
+              name: "Approve eradication of the request's pending-eradication candidates"
+              description: "Approve to eradicate the file systems, buckets and snapshots the request listed (only those still pending); deny, or let it time out, to keep them"
+              type: workflow_approval
+              timeout: "{{ aap_approval_timeout_s | int }}"
+            related:
+              success_nodes:
+                - identifier: reclaim
+              failure_nodes:
+                - identifier: notify_rejected
+          - identifier: reclaim
+            unified_job_template:
+              name: "FlashBlade - capacity reclaim"
+              type: job_template
+              organization:
+                name: "{{ aap_organization }}"
+            extra_data:
+              reclaim_action: eradicate_pending
+              approver: workflow-approval
+              # lets the reclaim rebuild the request from the request node's
+              # artifacts when request_dir is not shared between the jobs; a
+              # launch without it is refused when the request file is absent
+              rebuild_from_artifacts: true
+            related:
+              failure_nodes:
+                - identifier: notify_failure
+          - identifier: notify_rejected
+            unified_job_template:
+              name: "FlashBlade - notify"
+              type: job_template
+              organization:
+                name: "{{ aap_organization }}"
+            extra_data:
+              severity: warning
+              subject: "capacity reclaim not approved (denied or timed out)"
+              detail: "the request stays awaiting_approval; nothing was eradicated"
+          - identifier: notify_failure
+            unified_job_template:
+              name: "FlashBlade - notify"
+              type: job_template
+              organization:
+                name: "{{ aap_organization }}"
+            extra_data:
+              severity: critical
+              subject: "capacity reclaim workflow failed"
+              detail: "see the failed node of the workflow job"
+
+    # Schedules on the templates above; a schedule's extra data is laid over
+    # the template's extra vars. The platform computes the next run from the
+    # rule; a disabled schedule stays, so a site can switch one off in its
+    # vars without losing it.
+    - name: Schedules
+      ansible.controller.schedule:
+        name: "{{ item.name }}"
+        description: "{{ item.description }}"
+        unified_job_template: "{{ item.template }}"
+        organization: "{{ aap_organization }}"
+        rrule: "{{ item.rrule }}"
+        extra_data: "{{ item.extra_data | default({}) }}"
+        enabled: "{{ item.enabled | bool }}"
+        state: present
+      loop: "{{ schedules }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # --- Event-Driven Ansible controller --------------------------------------
+    - name: Decision environment reference
+      ansible.eda.decision_environment:
+        name: "{{ aap_eda_de_name }}"
+        description: "Image from decision-environment/: ansible-rulebook, the sdodsley.flashblade_eda and everpure.flashblade collections, py-pure-client and boto3"
+        image_url: "{{ aap_eda_de_image }}"
+        pull_policy: "{{ aap_eda_de_pull_policy }}"
+        organization_name: "{{ aap_organization }}"
+        state: present
+
+    # The EDA project clones the same private repository; its credential is
+    # the EDA controller's own built-in Source Control type.
+    - name: EDA source control credential for the project (when the repository token is set)
+      when: scm_seeded | bool
+      ansible.eda.credential:
+        name: "{{ scm_credential_name }}"
+        description: "Token the EDA project clones {{ aap_project_url }} with"
+        credential_type_name: Source Control
+        organization_name: "{{ aap_organization }}"
+        inputs:
+          username: "{{ aap_scm_username }}"
+          password: "{{ lookup('env', aap_scm_token_env) }}"
+        state: present
+      no_log: true
+
+    - name: EDA project
+      ansible.eda.project:
+        name: "{{ aap_eda_project_name }}"
+        description: "{{ aap_project_url }} ({{ aap_project_branch }})"
+        url: "{{ aap_project_url }}"
+        scm_branch: "{{ aap_project_branch }}"
+        credential: "{{ scm_credential_name if scm_seeded | bool else omit }}"
+        organization_name: "{{ aap_organization }}"
+        state: present
+
+    # Same inputs as the controller types; EDA credentials inject variables
+    # (or environment variables) into the activation, which the rulebooks,
+    # their sources and their run_job_template actions read.
+    - name: EDA credential type for one array
+      ansible.eda.credential_type:
+        name: FlashBlade API
+        description: "One array's management address, API token and inventory name as the variables fb_url, api_token and credential_array"
+        inputs: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flashblade_api_inputs.json') | from_json }}"
+        injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flashblade_api_injectors.json') | from_json }}"
+        state: present
+
+    - name: EDA credential type for the fleet (the list the source plugin polls)
+      ansible.eda.credential_type:
+        name: FlashBlade fleet
+        description: "A JSON list of {name, fb_url, api_token}, one per array, as the variable purefb_arrays the platform rulebooks hand to the purefb_events source"
+        inputs: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flashblade_fleet_inputs.json') | from_json }}"
+        injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flashblade_fleet_eda_injectors.json') | from_json }}"
+        state: present
+
+    - name: EDA credential type for one array's object store
+      ansible.eda.credential_type:
+        name: FlashBlade object store
+        description: "One array's management address and token, S3 endpoint, tail key and state key as the environment variables FB_OBJ_URL, FB_OBJ_TOKEN, FB_OBJ_S3_ENDPOINT, FB_OBJ_S3_ACCESS_KEY, FB_OBJ_S3_SECRET_KEY, FB_OBJ_S3_STATE_ACCESS_KEY and FB_OBJ_S3_STATE_SECRET_KEY, which the object-audit source and the S3 playbooks read through object_audit_arrays and object_store"
+        inputs: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flashblade_object_store_inputs.json') | from_json }}"
+        injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_flashblade_object_store_injectors.json') | from_json }}"
+        state: present
+
+    - name: EDA credential type for the orchestrator service account
+      ansible.eda.credential_type:
+        name: Orchestrator service account
+        description: "Client credentials of an automation orchestrator service account: AO_CLIENT_ID and AO_CLIENT_SECRET in the environment, orchestrator_url as a variable"
+        inputs: "{{ lookup('file', playbook_dir ~ '/files/credential_type_orchestrator_sa_inputs.json') | from_json }}"
+        injectors: "{{ lookup('file', playbook_dir ~ '/files/credential_type_orchestrator_sa_injectors.json') | from_json }}"
+        state: present
+
+    # Not attached to the activations (the fleet credential carries every
+    # array); seeded for a rulebook that polls one array only.
+    - name: One EDA credential per array
+      ansible.eda.credential:
+        name: "{{ array_credential_prefix }}{{ item.name }}"
+        description: "fb_url and api_token for {{ item.name }}"
+        credential_type_name: FlashBlade API
+        organization_name: "{{ aap_organization }}"
+        inputs:
+          fb_url: "{{ lookup('env', item.fb_url_env) }}"
+          api_token: "{{ lookup('env', item.api_token_env) }}"
+          array_name: "{{ item.name }}"
+        state: present
+      loop: "{{ aap_arrays }}"
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+
+    - name: EDA fleet credential (every array in one credential)
+      ansible.eda.credential:
+        name: "{{ fleet_credential_name }}"
+        description: "name, fb_url and api_token of every array in aap_arrays, as one JSON list"
+        credential_type_name: FlashBlade fleet
+        organization_name: "{{ aap_organization }}"
+        inputs:
+          arrays: "{{ fleet_arrays | to_json }}"
+        state: present
+      no_log: true
+
+    - name: One EDA object store credential per entry of aap_object_stores
+      ansible.eda.credential:
+        name: "{{ object_store_credential_prefix }}{{ item.array }}"
+        description: "S3 endpoint, tail key and state key of the object store of {{ item.array }}, with the array's address and token"
+        credential_type_name: FlashBlade object store
+        organization_name: "{{ aap_organization }}"
+        inputs:
+          array_name: "{{ item.array }}"
+          fb_url: "{{ lookup('env', item.fb_url_env) }}"
+          api_token: "{{ lookup('env', item.api_token_env) }}"
+          endpoint: "{{ lookup('env', item.endpoint_env) }}"
+          access_key: "{{ lookup('env', item.access_key_env) }}"
+          secret_key: "{{ lookup('env', item.secret_key_env) }}"
+          state_access_key: "{{ lookup('env', item.state_access_key_env) }}"
+          state_secret_key: "{{ lookup('env', item.state_secret_key_env) }}"
+        state: present
+      loop: "{{ aap_object_stores }}"
+      loop_control:
+        label: "{{ item.array }}"
+      no_log: true
+
+    - name: EDA orchestrator service account credential (when its variables are set)
+      when: orchestrator_seeded | bool
+      ansible.eda.credential:
+        name: "{{ orchestrator_credential_name }}"
+        description: "Service account bound to this project's EDA triggers in the orchestrator"
+        credential_type_name: Orchestrator service account
+        organization_name: "{{ aap_organization }}"
+        inputs:
+          orchestrator_url: "{{ lookup('env', aap_orchestrator_url_env) }}"
+          client_id: "{{ lookup('env', aap_orchestrator_client_id_env) }}"
+          client_secret: "{{ lookup('env', aap_orchestrator_client_secret_env) }}"
+        state: present
+      no_log: true
+
+    # The EDA controller refuses an activation whose rulebook calls
+    # run_job_template unless a credential of its built-in type "Red Hat
+    # Ansible Automation Platform" is attached; ansible-rulebook launches the
+    # job templates with it. A dedicated platform user with execute on the
+    # FlashBlade templates is the right owner of this credential.
+    - name: EDA platform credential for the run_job_template actions
+      ansible.eda.credential:
+        name: "{{ platform_credential_name }}"
+        description: "Platform user the platform rulebooks launch the FlashBlade job templates as"
+        organization_name: "{{ aap_organization }}"
+        credential_type_name: Red Hat Ansible Automation Platform
+        inputs:
+          host: "{{ aap_eda_platform_url }}"
+          username: "{{ aap_eda_platform_username }}"
+          password: "{{ aap_eda_platform_password }}"
+          verify_ssl: "{{ aap_validate_certs | bool }}"
+        state: present
+      no_log: true
+
+    # ansible.eda.rulebook_activation cannot update an activation and, in
+    # 2.13, creates it enabled whatever `enabled` says; so existing ones are
+    # skipped and the enabled flag is enforced through the API afterwards.
+    - name: Activations that already exist
+      ansible.builtin.uri:
+        url: "{{ aap_hostname }}/api/eda/v1/activations/?page_size=200&name__startswith=FlashBlade%20rulebook%20-"
+        headers:
+          Authorization: "Bearer {{ aap_token }}"
+        validate_certs: "{{ aap_validate_certs }}"
+        return_content: true
+      register: existing_activations
+      no_log: true
+
+    # The EDA controller names a rulebook by its path relative to the
+    # project's extensions/eda/rulebooks directory, hence platform/<file>.
+    - name: One rulebook activation per platform rulebook
+      ansible.eda.rulebook_activation:
+        name: "FlashBlade rulebook - {{ item | splitext | first }}"
+        description: "extensions/eda/rulebooks/platform/{{ item }} with {{ aap_eda_vars_file | basename }} (minus the credential-injected keys) as extra vars"
+        project_name: "{{ aap_eda_project_name }}"
+        rulebook_name: "platform/{{ item }}"
+        decision_environment_name: "{{ aap_eda_de_name }}"
+        organization_name: "{{ aap_organization }}"
+        extra_vars: "{{ activation_extra_vars }}"
+        eda_credentials: "{{ activation_credentials }}"
+        enabled: "{{ aap_eda_activations_enabled | bool }}"
+        restart_policy: "{{ aap_eda_restart_policy }}"
+        log_level: "{{ aap_eda_log_level }}"
+        state: present
+      when: ('FlashBlade rulebook - ' ~ (item | splitext | first)) not in (existing_activations.json.results | map(attribute='name') | list)
+      loop: "{{ query('ansible.builtin.fileglob', playbook_dir ~ '/../extensions/eda/rulebooks/platform/*.yml') | map('basename') | sort }}"
+
+    - name: Activations as they stand
+      ansible.builtin.uri:
+        url: "{{ aap_hostname }}/api/eda/v1/activations/?page_size=200&name__startswith=FlashBlade%20rulebook%20-"
+        headers:
+          Authorization: "Bearer {{ aap_token }}"
+        validate_certs: "{{ aap_validate_certs }}"
+        return_content: true
+      register: all_activations
+      no_log: true
+
+    - name: Enforce the enabled flag on every FlashBlade activation
+      ansible.builtin.uri:
+        url: "{{ aap_hostname }}/api/eda/v1/activations/{{ item.id }}/{{ 'enable' if aap_eda_activations_enabled | bool else 'disable' }}/"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ aap_token }}"
+        validate_certs: "{{ aap_validate_certs }}"
+        status_code: [200, 202, 204]
+      loop: "{{ all_activations.json.results }}"
+      loop_control:
+        label: "{{ item.name }}"
+        # fifteen activations starting in the same second contend for the EDA
+        # websocket and some fail their first start; a pause between them avoids it
+        pause: "{{ 10 if aap_eda_activations_enabled | bool else 0 }}"
+      when: (item.is_enabled | bool) != (aap_eda_activations_enabled | bool)
+      changed_when: true
+      no_log: true

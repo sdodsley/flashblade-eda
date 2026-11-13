@@ -1,0 +1,77 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Decision environment for the rulebook activations aap/seed.yml creates on
+# the Event-Driven Ansible controller of Ansible Automation Platform 2.7.
+# decision-environment/ in this tree builds the same content on the upstream
+# ansible-rulebook image for standalone use; this definition builds it on the
+# supported base so an activation runs on a supported image. Build on a host
+# that is logged in to registry.redhat.io, from the repository root:
+#
+#   pip install ansible-builder
+#   ansible-builder build -f aap/decision-environment.yml \
+#       -t flashblade-eda-de:latest --container-runtime podman
+#
+# An activation resolves custom event sources from the collections inside
+# the image only. The rulebooks name theirs by FQCN
+# (sdodsley.flashblade_eda.purefb_events / purefb_object_audit /
+# purefb_syslog) and this image carries that collection, built from this
+# checkout at image build time: additional_build_files copies the collection
+# content (galaxy.yml, meta/, extensions/, playbooks/, plugins/, README.md,
+# LICENSE) into the build context as _build/flashblade_eda, and a galaxy
+# requirement of type `dir` pointing at that directory makes ansible-galaxy
+# build and install it, with its dependencies ansible.eda and
+# everpure.flashblade (galaxy.yml), in the galaxy stage (ansible-builder
+# copies _build to /build and runs the install from there; a `dir`
+# requirement honours build_ignore). This is the form ansible-builder v3
+# supports for content that is not published on a Galaxy server. The
+# supported base already ships ansible.eda under
+# /usr/share/ansible/collections, the path the install targets, so no
+# collections path override is needed here.
+version: 3
+
+images:
+  base_image:
+    name: registry.redhat.io/ansible-automation-platform-27/de-supported-rhel9:latest
+
+dependencies:
+  # The supported images run Ansible on python3.12. Without this pin
+  # ansible-builder installs system packages that bring in python3 (3.9)
+  # and /usr/bin/python3 ends up without pip in the build stage.
+  python_interpreter:
+    package_system: python3.12
+    python_path: /usr/bin/python3.12
+  python:
+    - py-pure-client>=1.98.0
+    - boto3>=1.26
+    - requests
+  # ansible.eda's requirements name systemd-python (its journald source),
+  # which has no wheel and needs Python.h, systemd headers and a compiler the
+  # supported base does not carry; nothing here reads the journal.
+  exclude:
+    python:
+      - systemd-python
+  galaxy:
+    collections:
+      - name: /build/flashblade_eda
+        type: dir
+
+additional_build_files:
+  - src: ../galaxy.yml
+    dest: flashblade_eda
+  - src: ../LICENSE
+    dest: flashblade_eda
+  - src: ../README.md
+    dest: flashblade_eda
+  - src: ../meta
+    dest: flashblade_eda/meta
+  - src: ../extensions
+    dest: flashblade_eda/extensions
+  - src: ../playbooks
+    dest: flashblade_eda/playbooks
+  - src: ../plugins
+    dest: flashblade_eda/plugins
+
+options:
+  package_manager_path: /usr/bin/microdnf

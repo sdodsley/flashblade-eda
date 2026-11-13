@@ -1,0 +1,37 @@
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Execution environment for the FlashBlade job templates, built directly on
+# the supported image when ansible-builder is not available or misbehaves:
+#
+#   podman build -f aap/Containerfile.ee -t localhost/flashblade-eda-ee:latest .
+#
+# Same content as aap/execution-environment.yml: py-pure-client, boto3 and
+# requests (the three packages decision-environment/requirements.txt lists),
+# the everpure.flashblade collection, and this repository built as the
+# collection sdodsley.flashblade_eda, on top of ee-supported-rhel9. The
+# playbooks call sdodsley.flashblade_eda.purefb_* modules, and a project
+# checkout is not a collections path, so the collection has to be in the
+# image: the collection content (galaxy.yml, LICENSE, README.md, meta/,
+# extensions/, playbooks/, plugins/) is copied in, built with
+# `ansible-galaxy collection build` and installed under
+# /usr/share/ansible/collections with its dependencies.
+ARG EE_BASE_IMAGE=registry.redhat.io/ansible-automation-platform-27/ee-supported-rhel9:latest
+FROM $EE_BASE_IMAGE
+USER root
+COPY decision-environment/requirements.txt /tmp/requirements.txt
+COPY requirements.yml /tmp/requirements.yml
+RUN /usr/bin/python3 -m pip install --no-cache-dir -r /tmp/requirements.txt \
+    && ANSIBLE_GALAXY_DISABLE_GPG_VERIFY=1 ansible-galaxy collection install -r /tmp/requirements.yml \
+       --collections-path /usr/share/ansible/collections \
+    && rm -f /tmp/requirements.txt /tmp/requirements.yml
+COPY galaxy.yml LICENSE README.md /tmp/flashblade-eda/
+COPY meta /tmp/flashblade-eda/meta
+COPY extensions /tmp/flashblade-eda/extensions
+COPY playbooks /tmp/flashblade-eda/playbooks
+COPY plugins /tmp/flashblade-eda/plugins
+RUN ansible-galaxy collection build --output-path /tmp/build /tmp/flashblade-eda \
+    && ANSIBLE_GALAXY_DISABLE_GPG_VERIFY=1 ansible-galaxy collection install /tmp/build/sdodsley-flashblade_eda-*.tar.gz \
+       --collections-path /usr/share/ansible/collections \
+    && rm -rf /tmp/flashblade-eda /tmp/build
+USER 1000

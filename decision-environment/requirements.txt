@@ -1,0 +1,17 @@
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Python packages added on top of quay.io/ansible/ansible-rulebook. The base
+# image already ships ansible-rulebook, ansible-core and aiohttp (which the
+# ansible.eda webhook and alertmanager sources need), so only what the
+# plugins and playbooks import is listed: the FlashBlade SDK (FB_2_30
+# client; the plugin negotiates what the array serves), boto3 for the
+# object-audit source and tasks/s3_object.yml, requests for the REST-only
+# modules. aap/Containerfile.ee installs the same three into the execution
+# environment. The root requirements.txt is the venv list for a checkout
+# and is not installed here. The collections come with the collection built
+# from this checkout: ansible.eda and everpure.flashblade are its
+# dependencies (galaxy.yml at the repository root).
+py-pure-client>=1.98.0
+boto3>=1.26
+requests

@@ -1,0 +1,70 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# ansible-builder definition (v3) for the same decision environment as the
+# Containerfile; both produce the same tree. Paths are relative to this file.
+#   ansible-builder build -f decision-environment/execution-environment.yml -t flashblade-eda-de
+# (writes its build context to ./context, which is gitignored)
+#
+# The collection sdodsley.flashblade_eda is built from this checkout inside
+# the image build: additional_build_files copies the collection content
+# (galaxy.yml, meta/, extensions/, playbooks/, plugins/, README.md, LICENSE)
+# into the build context as _build/flashblade_eda (a directory src lands as
+# the CONTENTS of dest, so each directory names its own dest), and a galaxy
+# requirement of type `dir` pointing at that directory makes ansible-galaxy
+# build and install it, with its dependencies ansible.eda and
+# everpure.flashblade (galaxy.yml), in the galaxy stage (ansible-builder
+# copies _build to /build and runs the install from there). A `dir`
+# requirement honours build_ignore, so the artifact is the same as `make
+# collection` produces. This is the form ansible-builder v3 supports for
+# content that is not published on a Galaxy server; the alternative, a
+# pre-built tarball placed in the context, would need `make collection` to
+# run before every image build.
+version: 3
+images:
+  base_image:
+    name: quay.io/ansible/ansible-rulebook:v1.3.2
+dependencies:
+  # the base image's /usr/bin/python3 is 3.9 while ansible-rulebook and the
+  # PYTHONPATH it sets are 3.12; the build stages must use the same one
+  python_interpreter:
+    package_system: python3.12
+    python_path: /usr/bin/python3.12
+  python: requirements.txt
+  galaxy:
+    collections:
+      - name: /build/flashblade_eda
+        type: dir
+additional_build_files:
+  - src: ../galaxy.yml
+    dest: flashblade_eda
+  - src: ../LICENSE
+    dest: flashblade_eda
+  - src: ../README.md
+    dest: flashblade_eda
+  - src: ../meta
+    dest: flashblade_eda/meta
+  - src: ../extensions
+    dest: flashblade_eda/extensions
+  - src: ../playbooks
+    dest: flashblade_eda/playbooks
+  - src: ../plugins
+    dest: flashblade_eda/plugins
+additional_build_steps:
+  # the base image keeps ansible.eda under /app/.ansible/collections and the
+  # galaxy stage leaves an already-installed dependency alone, so the runtime
+  # path names both directories (same as the Containerfile)
+  prepend_galaxy:
+    - ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections:/app/.ansible/collections
+  append_final:
+    # the rulebooks and playbooks as plain files for standalone runs that
+    # name them by path; the collection content under _build/flashblade_eda
+    - COPY _build/flashblade_eda/extensions /opt/flashblade-eda/extensions
+    - COPY _build/flashblade_eda/playbooks /opt/flashblade-eda/playbooks
+    - RUN mkdir -p /var/log/flashblade-eda /var/lib/flashblade-eda/requests /var/lib/flashblade-eda/object_audit && chown -R 1001:0 /var/log/flashblade-eda /var/lib/flashblade-eda && chmod -R g+rwX /var/log/flashblade-eda /var/lib/flashblade-eda
+    - ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections:/app/.ansible/collections
+    - ENV ANSIBLE_LOCALHOST_WARNING=False
+    - WORKDIR /opt/flashblade-eda
+options:
+  user: "1001"

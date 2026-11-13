@@ -22,10 +22,9 @@ EDA controller need to resolve the event sources and run the playbooks:
 Everything else in the tree (tests, docs, the local launcher and the
 environment files, `venv/`, `collections/` and `build/`) is development
 material and is listed in `build_ignore`, so the built artifact carries the
-collection content only. The `build_ignore` list already names the
-directories the FlashArray sibling grew later (`aap/`, `orchestrator/`,
-`prometheus/`, `decision-environment/`, `slack/`, `tools/`), so adding them
-here needs no packaging change.
+collection content only. `build_ignore` also lists `aap/`,
+`orchestrator/`, `prometheus/`, `decision-environment/`, `slack/` and
+`tools/`, so the platform material stays out of the artifact.
 
 The event sources are `sdodsley.flashblade_eda.purefb_events`,
 `sdodsley.flashblade_eda.purefb_object_audit` and
@@ -76,17 +75,79 @@ holds an installed copy does not package it twice.
 
 ## The decision environment
 
-There is no image definition in this repository yet. The FlashArray
-sibling's `decision-environment/Containerfile` and ansible-builder
-definition (on `quay.io/ansible/ansible-rulebook:v1.3.2`) build the
-collection from the checkout and install it with its dependencies; the
-same two files with `flasharray` replaced by `flashblade` and
-py-pure-client pinned at 1.98.0 or newer (the FB_2_30 client, see below)
-produce the image for this project. The facts that definition is written
-around (the upstream base image keeps `ansible.eda` under
-`/app/.ansible/collections`, `additional_build_files` needs one `dest` per
-directory, `python_interpreter` must pin the base's 3.12, the supported
-base lacks what `systemd-python` needs) hold here unchanged.
+`decision-environment/Containerfile` and
+`decision-environment/execution-environment.yml` (ansible-builder v3) build
+the same image on `quay.io/ansible/ansible-rulebook:v1.3.2`;
+`aap/decision-environment.yml` builds the same content on the supported
+`de-supported-rhel9` base for Ansible Automation Platform, and
+`aap/Containerfile.ee` with `aap/execution-environment.yml` build the
+execution environment the job templates run in on `ee-supported-rhel9`.
+`make de` runs the Containerfile build. Each image contains:
+
+- py-pure-client, boto3 and requests (`decision-environment/requirements.txt`,
+  or the inline Python list of the ansible-builder definitions);
+- the collection `sdodsley.flashblade_eda`, built from the checkout at
+  image build time and installed under `/usr/share/ansible/collections`
+  together with `everpure.flashblade` and, where the base image does not
+  already carry it, `ansible.eda`. `plugins/` is part of the copied
+  content: the playbooks call the collection's own `purefb_*` modules, and
+  a project checkout is not a collections path, so the modules have to be
+  in the execution environment as well as the event sources in the
+  decision environment. The Containerfiles copy the collection content in,
+  run `ansible-galaxy collection build` and install the tarball; the
+  ansible-builder definitions copy the content into the build context with
+  `additional_build_files` and install it through a galaxy requirement of
+  type `dir`, which ansible-galaxy builds on the fly in the galaxy stage
+  (the form ansible-builder v3 supports for content that is not on a Galaxy
+  server; a `dir` requirement honours `build_ignore`);
+- in the two decision environments, the rulebooks and playbooks as plain
+  files under `/opt/flashblade-eda`, the working directory, so that a
+  standalone `podman run` names a rulebook by path and
+  `run_playbook: playbooks/<name>.yml` resolves;
+- in the two decision environments, `/var/log/flashblade-eda`,
+  `/var/lib/flashblade-eda/requests` and `/var/lib/flashblade-eda/object_audit`,
+  the default `alert_log` and `request_dir` and a place for the
+  object-audit source's cursor files, writable by the runtime user.
+
+The upstream base image ships `ansible.eda` under `/app/.ansible/collections`
+and `ansible-galaxy collection install` leaves a dependency that is already
+installed there alone, so `ANSIBLE_COLLECTIONS_PATH` in those two images is
+`/usr/share/ansible/collections:/app/.ansible/collections`; with the first
+directory alone ansible-rulebook cannot find `ansible.eda.alertmanager` and
+the other stock sources. The supported bases already keep `ansible.eda`
+under `/usr/share/ansible/collections`, so the `aap/` definitions need no
+override.
+
+Three things about ansible-builder 3 that the definitions are written
+around: `additional_build_files` copies a directory's *contents* into
+`_build/<dest>`, so each collection directory names its own `dest`
+(`flashblade_eda/extensions`, `flashblade_eda/playbooks`,
+`flashblade_eda/plugins`, `flashblade_eda/meta`) or they merge into one;
+the base image's `/usr/bin/python3` is 3.9 while ansible-rulebook and the
+`PYTHONPATH` it sets are 3.12, so `python_interpreter` pins
+`/usr/bin/python3.12` for the build stages; and `ansible.eda`'s
+requirements name `systemd-python`, which has no wheel and needs Python
+headers, systemd headers and a compiler the supported images lack, so the
+`aap/` definitions exclude it (`dependencies.exclude.python`; nothing in
+this project reads the journal). On a rootless host with native overlay,
+buildah can fail every multi-stage `COPY --from` with "copier: stat ... no
+such file or directory" although the stage image holds the path; a
+separate image store with the `vfs` driver (`podman --root <dir>
+--storage-driver vfs`, put first on the PATH as `podman` for the build)
+builds the image. A container from a builder image names its rulebook,
+inventory and vars by absolute path or sets `-w /opt/flashblade-eda`: the
+final stage keeps that working directory, but a relative path is the first
+thing to check when a run says a file does not exist.
+
+Because the sources and modules resolve from the installed collection, one
+image serves two uses: a standalone `podman run ... ansible-rulebook
+--rulebook extensions/eda/rulebooks/<name>.yml` without `--source-dir` (the
+Containerfile header has the full line), and EDA controller activations,
+which pass no `--source-dir` and resolve custom sources from the
+collections in the decision environment only. On a containerized platform
+the images are loaded into the stores the controller and the activation
+workers use, not the host user's ([aap/README.md](../aap/README.md),
+"Images on a containerized platform").
 
 ## Version floors
 

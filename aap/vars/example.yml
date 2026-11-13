@@ -1,0 +1,226 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Variables for aap/seed.yml. The seed loads this file as its defaults; copy
+# it to vars/local-aap.yml (that name is gitignored with the other local
+# files) and pass `-e @vars/local-aap.yml` to override. Nothing secret
+# belongs in either copy: tokens, keys and secrets are read from the
+# environment variables named here.
+
+# --- the platform ----------------------------------------------------------
+# Gateway URL and a token with permission to create an organization (a
+# platform administrator's token for the first run; an organization admin's
+# token is enough for re-runs once the organization exists).
+aap_hostname: "{{ lookup('env', 'AAP_HOST') }}"
+aap_token: "{{ lookup('env', 'AAP_TOKEN') }}"
+# ansible.controller 4.8.0 (shipped with the 2.7 installer) authenticates
+# with basic auth only, so the controller objects also need the account's
+# username and password; the gateway and EDA modules use the token.
+aap_username: "{{ lookup('env', 'AAP_USERNAME') }}"
+aap_password: "{{ lookup('env', 'AAP_PASSWORD') }}"
+aap_validate_certs: true
+# Base URL the platform writes into the links of its notifications (Slack
+# messages about jobs and approvals). The gateway URL by default; a site
+# whose gateway name does not resolve where people read the messages puts
+# the address they can open here.
+aap_url_base: "{{ aap_hostname }}"
+# Seconds each API call may take; a platform that is still finishing its
+# install or running jobs can need more than the modules' 10-second default.
+aap_request_timeout: 60
+
+# --- names of the objects the seed creates ---------------------------------
+aap_organization: FlashBlade
+aap_project_name: FlashBlade EDA
+aap_project_url: https://github.com/sdodsley/flashblade-eda
+aap_project_branch: main
+aap_inventory_name: FlashBlades
+# Execution environment the job templates run in. The supported image name
+# is the default, without a registry: set aap_ee_registry to the registry
+# path the platform pulls from (for example the ansible-automation-platform-27
+# namespace on registry.redhat.io). The playbooks need py-pure-client, boto3,
+# the everpure.flashblade collection and this repository's own collection
+# (sdodsley.flashblade_eda, whose purefb_* modules they call) in the image;
+# aap/Containerfile.ee and aap/execution-environment.yml build that, see
+# aap/README.md.
+aap_ee_name: FlashBlade EDA EE
+aap_ee_registry: ""
+aap_ee_image: "{{ (aap_ee_registry ~ '/') if aap_ee_registry else '' }}ee-supported-rhel9:latest"
+aap_ee_pull: missing
+
+# --- source control (a private repository) ---------------------------------
+# While the repository is private the controller project and the EDA project
+# need a credential to clone it. When the environment variable named here is
+# set, the seed creates "Source control - flashblade-eda" on both sides (the
+# built-in "Source Control" type: this username and the token as the
+# password) and attaches it to both projects; unset, the projects are
+# created without one and clone anonymously.
+aap_scm_token_env: GITHUB_TOKEN
+aap_scm_username: sdodsley
+
+# --- arrays ------------------------------------------------------------------
+# One entry per array, named as in vars/example.yml and the inventory: the
+# seed creates a host and a "FlashBlade API" credential per array from the
+# environment variables named here (the same names env.example uses), and
+# one "FlashBlade fleet" credential that carries every entry as a JSON list
+# (attached to every job template and every activation).
+aap_arrays:
+  - name: fb-a
+    fb_url_env: FB_A_URL
+    api_token_env: FB_A_TOKEN
+  - name: fb-b
+    fb_url_env: FB_B_URL
+    api_token_env: FB_B_TOKEN
+# The array in the limit of "FlashBlade - apply baseline" (one launch applies
+# one array's baseline; the prompt for a limit picks another).
+aap_default_array: "{{ aap_arrays[0].name }}"
+# Re-send the secrets on every run (needed after a token or key rotation;
+# otherwise every run reports the credentials as changed).
+aap_update_secrets: false
+
+# --- object stores -----------------------------------------------------------
+# One entry per array whose object store the automation reads and writes
+# (the audit log bucket and the state bucket of object_audit_arrays and
+# object_store in vars/example.yml). The seed creates one "FlashBlade object
+# store" credential per entry from the environment variables named here (the
+# FB_A_S3_* names of env.example); the credential injects the array's
+# address, token, S3 endpoint and the two key pairs as the environment
+# variables FB_OBJ_URL, FB_OBJ_TOKEN, FB_OBJ_S3_ENDPOINT, FB_OBJ_S3_ACCESS_KEY,
+# FB_OBJ_S3_SECRET_KEY, FB_OBJ_S3_STATE_ACCESS_KEY and
+# FB_OBJ_S3_STATE_SECRET_KEY, so the rulebook vars file an activation or a
+# job carries names those seven in object_audit_arrays and object_store
+# instead of the FB_A_S3_* names. The names are fixed, so one credential
+# serves one array per activation or launch: the first entry's credential
+# is attached to the S3 job templates and to every activation, the others
+# are for the credential prompt and for an activation copy that tails a
+# second array (aap/README.md, "The object store credential").
+aap_object_stores:
+  - array: fb-a
+    fb_url_env: FB_A_URL
+    api_token_env: FB_A_TOKEN
+    endpoint_env: FB_A_S3_ENDPOINT
+    access_key_env: FB_A_S3_ACCESS_KEY
+    secret_key_env: FB_A_S3_SECRET_KEY
+    state_access_key_env: FB_A_S3_STATE_ACCESS_KEY
+    state_secret_key_env: FB_A_S3_STATE_SECRET_KEY
+
+# --- orchestrator service account ------------------------------------------
+# The "Orchestrator service account" credential (controller and EDA) is
+# created only when the client id variable is set; the job template that
+# posts events and every activation get it.
+aap_orchestrator_url_env: AO_URL
+aap_orchestrator_client_id_env: AO_CLIENT_ID
+aap_orchestrator_client_secret_env: AO_CLIENT_SECRET
+# Create the "FlashBlade - orchestrator post" job template (with the
+# credential above; its playbook is playbooks/orchestrator_post.yml).
+aap_seed_orchestrator_template: true
+
+# --- Slack (optional) -------------------------------------------------------
+# With the webhook variable set, a "Slack webhook" credential is created
+# and attached to the notify template, so every notification the rules
+# raise is also posted to the channel the webhook is bound to. With the
+# bot token and channel set, a Slack notification template posts job
+# failures and the controller-tier workflow's approval events (pending,
+# approved, denied, timed out) with links into the platform.
+aap_slack_webhook_env: SLACK_WEBHOOK_URL
+aap_slack_bot_token_env: SLACK_BOT_TOKEN
+aap_slack_channel_env: SLACK_CHANNEL
+
+# --- variables every job template carries ----------------------------------
+# Paths are inside the execution environment: /tmp exists and is writable,
+# and disappears with the job. The durable record of a job in the platform
+# is its output and its artifacts (set_stats); for a persistent alert log or
+# a request directory the controller-tier workflow can read back, expose a
+# host path to the jobs (Settings > Jobs > Paths to expose to isolated jobs)
+# and point these at it. baseline_dir is a checkout of the baseline
+# repository (baseline/README.md) that must be reachable the same way. The
+# seed adds fb_api_version from the rulebook vars file (aap_eda_vars_file)
+# and, per template, the keys its playbook needs from the same file
+# (object_store, the telemetry and containment settings, the showback and
+# selftest settings).
+aap_job_extra_vars:
+  alert_log: /tmp/flashblade-eda-alerts.log
+  request_dir: /tmp/flashblade-eda-requests
+  baseline_dir: /tmp/flashblade-eda-baseline
+
+# Drills for "FlashBlade - DR drill" (the dr_drills shape of
+# vars/example.yml: the file system whose replica on the peer is promoted,
+# read and demoted; peer_file_system defaults to file_system, max_minutes
+# bounds each wait). Empty drills nothing and records that; a launch may
+# pass its own list.
+aap_dr_drills: []
+#  - array: fb-a
+#    file_system: eda-dr-demo
+#    peer: fb-b
+#    peer_file_system: eda-dr-demo
+#    max_minutes: 10
+# Seconds the controller-tier approval node waits before it times out
+# (0 = never).
+aap_approval_timeout_s: 86400
+# Rebuild the workflow's nodes from scratch instead of updating them in place
+# (reports changed on every run; use after renaming a node).
+aap_rebuild_workflow_nodes: false
+
+# --- schedules ---------------------------------------------------------------
+# Controller schedules the seed creates, as daily iCal rules built from
+# these: a quoted "HH:MM" in aap_schedule_timezone (an IANA zone name;
+# unquoted, YAML reads 03:00 as a number and the seed refuses it). They
+# replace the standalone housekeeping tick, which the platform rulebooks
+# leave out. A disabled schedule is created but never fires. The drill
+# schedule launches "FlashBlade - DR drill" with the hour gate on
+# (dr_drill_force false), so with the UTC zone its hour must be the
+# dr_drill_hour of the rulebook vars file; a site whose orchestrator has
+# dr_drill_schedule.json published drills from there and disables this one.
+aap_schedule_timezone: UTC
+aap_schedules:
+  dr_drill:
+    time: "03:00"
+    enabled: true
+  showback:
+    time: "04:00"
+    enabled: true
+  selftest:
+    time: "06:00"
+    enabled: true
+
+# --- Event-Driven Ansible controller ---------------------------------------
+aap_eda_project_name: FlashBlade EDA
+aap_eda_de_name: FlashBlade EDA DE
+# Image built by `make de` (decision-environment/Containerfile) or
+# aap/decision-environment.yml, pushed to a registry the platform can pull
+# from or loaded into the store the activation workers use; no registry is
+# baked in here. The platform rulebooks name their sources by FQCN, so the
+# image must carry the sdodsley.flashblade_eda collection.
+aap_eda_de_registry: ""
+aap_eda_de_image: "{{ (aap_eda_de_registry ~ '/') if aap_eda_de_registry else '' }}flashblade-eda-de:latest"
+# `missing` pulls the image when the workers' store lacks it; `never` for an
+# image loaded into that store by hand (aap/README.md, "Images on a
+# containerized platform"), because a `localhost/` name cannot be pulled.
+aap_eda_de_pull_policy: missing
+# The rulebook vars file every activation gets as its extra vars (FBEDA_VARS
+# when set, else the example file), laid over the example file so a key the
+# site file predates still has its default; minus purefb_arrays and
+# config_arrays, which the fleet credential injects (the config sources fall
+# back to the fleet), and minus orchestrator_url when the orchestrator
+# credential is attached; aap_organization is added for the
+# run_job_template actions. The same rendering gives the job templates
+# their per-template keys.
+aap_eda_vars_file: "{{ lookup('env', 'FBEDA_VARS') | default(playbook_dir ~ '/../vars/example.yml', true) }}"
+# The platform user the activations launch job templates as (the EDA
+# credential of type "Red Hat Ansible Automation Platform" every activation
+# carries). Defaults to the seeding user; a dedicated user with execute on
+# the FlashBlade templates is the right choice.
+# ansible-rulebook reaches the controller through the gateway only when this
+# ends in /api/controller/ (it then uses the v2/ paths under it).
+aap_eda_platform_url: "{{ aap_hostname }}/api/controller/"
+aap_eda_platform_username: "{{ aap_username }}"
+aap_eda_platform_password: "{{ aap_password }}"
+# Whether the FlashBlade activations are enabled. The seed enforces this
+# flag on every activation on every run (the platform cannot modify an
+# activation, so the flag is the one thing it can still set), which means a
+# run with false DISABLES activations that are running. Set true in the
+# site vars file once the decision environment image is in place, and
+# keep it there.
+aap_eda_activations_enabled: false
+aap_eda_restart_policy: on-failure
+aap_eda_log_level: error

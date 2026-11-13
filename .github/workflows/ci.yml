@@ -27,6 +27,9 @@ jobs:
       - name: Lint (black, pyflakes, yamllint)
         run: make lint
 
+      - name: Lint the orchestrator definitions
+        run: make lint-ao
+
       # the repository as the collection sdodsley.flashblade_eda, built into
       # build/ and installed under ./collections; after the lint so that the
       # installed collections are not linted

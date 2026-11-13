@@ -1,0 +1,91 @@
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Decision environment for the FlashBlade rulebooks: ansible-rulebook plus
+# the collection this repository builds into (sdodsley.flashblade_eda, with
+# the three event source plugins, the modules, the rulebooks and the
+# playbooks), its dependencies ansible.eda and everpure.flashblade,
+# py-pure-client and boto3. The same image serves standalone
+# `ansible-rulebook` runs and EDA controller activations: the rulebooks name
+# their sources by FQCN (sdodsley.flashblade_eda.purefb_events /
+# purefb_object_audit / purefb_syslog) and the image resolves them from the
+# installed collection, so no --source-dir is needed and an activation
+# resolves them the same way. CI does not build it.
+#
+# Build, from the repository root (the ansible-builder definition next to
+# this file produces the same tree):
+#   podman build -t flashblade-eda-de -f decision-environment/Containerfile .
+#   ansible-builder build -f decision-environment/execution-environment.yml -t flashblade-eda-de
+#
+# Run one rulebook. No CMD is set on purpose; the command is explicit. Mount
+# vars/ and inventory/ from a checkout and the baseline repository at the
+# path baseline_dir names; pass the credentials as environment variables.
+#   podman run --rm \
+#     -e FB_A_URL -e FB_A_TOKEN -e FB_B_URL -e FB_B_TOKEN \
+#     -v ./vars:/opt/flashblade-eda/vars:Z -v ./inventory:/opt/flashblade-eda/inventory:Z \
+#     -v /opt/flashblade-eda-baseline:/opt/flashblade-eda-baseline:Z \
+#     flashblade-eda-de ansible-rulebook \
+#       --rulebook extensions/eda/rulebooks/alerts.yml \
+#       --inventory inventory/local-lab.yml --vars vars/local-lab.yml
+# For object_audit.yml pass the FB_A_S3_* variables of env.example as well
+# (the source and tasks/s3_object.yml read them by the names
+# object_audit_arrays and object_store give). For capacity.yml add
+# `-e APPROVAL_TOKEN -p 5001:5001` and `--env-vars APPROVAL_TOKEN`, for
+# maintenance.yml the same token with 5003, for contain.yml with 5004; for
+# change_control.yml `-e GIT_WEBHOOK_SECRET -p 5000:5000` and `--env-vars
+# GIT_WEBHOOK_SECRET` (never name an unset variable in --env-vars); for
+# syslog.yml publish 5140/udp and 5140/tcp, for alertmanager.yml 5002. The
+# alert log and the request directory default to /var/log/flashblade-eda
+# and /var/lib/flashblade-eda/requests, created below for the runtime user,
+# and /var/lib/flashblade-eda/object_audit is there for the object-audit
+# source's cursor files when its cursor_dir is pointed at it; mount them to
+# keep records and cursors across runs.
+#
+# Collections path. The base image ships ansible.eda under
+# /app/.ansible/collections, and `ansible-galaxy collection install` leaves
+# a dependency that is already installed there alone, so ansible.eda is not
+# copied into /usr/share/ansible/collections. ANSIBLE_COLLECTIONS_PATH
+# therefore names both directories; with /usr/share/ansible/collections alone
+# ansible-rulebook cannot find ansible.eda.alertmanager and the other stock
+# sources. The variable is set before the install so that the build and the
+# runtime see the same collections.
+#
+# quay.io publishes v-prefixed release tags; v1.3.2 is the ansible-rulebook
+# release the project is tested with. `latest` on that repository is not
+# guaranteed to be the newest release, so the tag is pinned here and in
+# execution-environment.yml.
+FROM quay.io/ansible/ansible-rulebook:v1.3.2
+
+USER root
+ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections:/app/.ansible/collections
+ENV ANSIBLE_LOCALHOST_WARNING=False
+
+COPY decision-environment/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt \
+ && rm -f /tmp/requirements.txt \
+ && mkdir -p /var/log/flashblade-eda /var/lib/flashblade-eda/requests /var/lib/flashblade-eda/object_audit \
+ && chown -R 1001:0 /var/log/flashblade-eda /var/lib/flashblade-eda \
+ && chmod -R g+rwX /var/log/flashblade-eda /var/lib/flashblade-eda
+
+# The collection, built from this checkout (galaxy.yml at the repository
+# root; only the collection content is copied in, plugins/ included because
+# the playbooks call its modules) and installed with its dependencies,
+# ansible.eda and everpure.flashblade (galaxy.yml). This is what makes the
+# FQCN sources and modules resolve without --source-dir.
+COPY galaxy.yml LICENSE README.md /tmp/flashblade-eda/
+COPY meta /tmp/flashblade-eda/meta
+COPY extensions /tmp/flashblade-eda/extensions
+COPY playbooks /tmp/flashblade-eda/playbooks
+COPY plugins /tmp/flashblade-eda/plugins
+RUN ansible-galaxy collection build --output-path /tmp/build /tmp/flashblade-eda \
+ && ansible-galaxy collection install -p /usr/share/ansible/collections /tmp/build/sdodsley-flashblade_eda-*.tar.gz \
+ && rm -rf /tmp/flashblade-eda /tmp/build
+
+# The same rulebooks and playbooks as plain files, so that a standalone run
+# can name them by path (--rulebook extensions/eda/rulebooks/<name>.yml,
+# run_playbook: playbooks/<name>.yml) from the working directory. The
+# Prometheus rules file belongs on the Prometheus server, not in this image.
+COPY extensions /opt/flashblade-eda/extensions
+COPY playbooks /opt/flashblade-eda/playbooks
+WORKDIR /opt/flashblade-eda
+USER 1001
