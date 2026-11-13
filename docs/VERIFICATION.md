@@ -13,11 +13,17 @@ one file system (a Manila share, never touched by the tests), six open
 alerts, and no buckets before part 1. Part 2 added the object store
 account `eda` with its three users, three buckets, audit policy, log
 target and filters ([HARDWARE_NOTES.md](HARDWARE_NOTES.md), "Object
-audit"). Tooling: ansible-rulebook 1.3.x, ansible-core 2.17,
+audit"). Part 3 adds the replication peer `fb-b`, a legacy FlashBlade on
+Purity//FB 4.5.6 (REST 2.17), an array connection `fb-a` to `fb-b` that
+has stayed `connecting`, and a second scratch file system `eda-dr-demo`
+(1 GiB, NFSv3, exported to the client VM) for the DR drill and the legal
+hold ([HARDWARE_NOTES.md](HARDWARE_NOTES.md), "Replication"). Tooling:
+ansible-rulebook 1.3.x, ansible-core 2.17,
 py-pure-client 1.98.0, everpure.flashblade 1.29.0, ansible.eda 2.13.0,
-boto3 1.26 or newer for part 2. An NFS client VM provides the load, the
-quota writes and the S3 traffic. This is a prototype; it is not a
-supported product.
+boto3 1.26 or newer for part 2, Prometheus 3.x with the OTLP receiver and
+Alertmanager for the telemetry test of part 3. An NFS client VM provides
+the load, the quota writes, the S3 traffic and the NLM lock. This is a
+prototype; it is not a supported product.
 
 ## How the tests run
 
@@ -67,6 +73,48 @@ waits one window plus the poll interval for its event.
 | 4 | `quota_limit` of `eda-log` lowered so that `space.virtual` is at or above 80 % of it; first with `log_bucket_quota_max_bytes` 0, then with a ceiling above the current quota | `purefb_audit_health` with `log_bucket_quota_known true` and `log_bucket_used_pct` at or above `log_bucket_quota_warn_pct` on the next poll; `auditor_guard.yml` in mode `quota` records critical and changes nothing with the ceiling at 0; with a ceiling it sends `PATCH buckets?names=eda-log` `{"quota_limit": "<bytes>"}` raised by `log_bucket_quota_step_pct` (25) and capped at the ceiling, the record carries the old and new quota, and the rule stays quiet for six hours by its throttle; the quota is put back to 1073741824 afterwards | passed 2026-11-12: with the quota lowered to 209715200 and a 170 MB object written, the next health poll read 85.2 % and `auditor_guard.yml` raised the quota to 262144000 (step 25 %, ceiling 2 GiB) within a minute (record critical with the old and new quota); the quota was put back to 1073741824 afterwards; the ceiling-0 notify-only path was not run on the array |
 | 5 | two windows of traffic from the `eda-app` key, the rulebook killed after the first window's objects were emitted and restarted before the second window's objects were written | the cursor file `<cursor_dir>/<array>.json` (and `eda-state/cursors/object_audit/<array>.json`) holds the last key and the seen keys of the retained windows at the kill; after the restart no record of the first window is emitted again and every record of the second window arrives exactly once (`event_id` compared with the log objects' `eventId`s); a late authority of the first window written after the restart is still picked up (`late_windows` 2); `purefb_audit_health` reads `cursor_persisted true` | passed 2026-11-12: nine records of the 22:00 window were emitted before the stop at 22:06:22Z; the cursor file then held `last_key .../220000.A247.1.log`, the nine seen keys of that window plus the newest of the previous one and `floor 2026/11/12/215500`; three records were written while the rulebook was down and arrived in the 22:05 window; after the restart at 22:10:21Z exactly three more `purefb_s3_event`s were emitted (12 in total), every log object appeared once in the output (one event and one rollup each) and no `event_id` repeated; `cursor_persisted true` on the health event; a late authority was not provoked on the array (unit-tested) |
 
+## Lab exit tests for part 3
+
+Run by hand against the lab pair with the rulebook named in each row
+started through `run.sh`, or with the playbook or module run directly
+where the row says so; the load, the NLM lock and the read-only check
+come from the client VM. Every test restores what it changes: the
+telemetry target is deleted, the tarpit lifted and the `eda-tarpit`
+policy removed, the client's export entry put back to `rw`, the window
+closed, the lock released, the legal hold removed, the replica demoted.
+The eradication module is never run for real on the shared array; its
+ratchet is unit-tested and the lab run is check mode only.
+
+Two facts of the lab shape these tests and are not defects of the code.
+A Prometheus OTLP receiver could not be started on the lab network in this
+session: the rulebook host sits behind NAT and the lab VM step was refused
+by the permission layer. The telemetry test is therefore split: the two
+modules and `telemetry_setup.yml` are exercised against a TCP port that
+answers (the array accepts a target it can connect to), the Alertmanager
+rulebook and `telemetry_check.yml` are driven by
+`tests/replay_alertmanager.yml`, and the live silence test (the target
+disabled, `FlashBladeTelemetrySilent` firing on a real receiver, the
+array's own test delivering its dummy metric) waits for the receiver.
+And the array connection `fb-a` to `fb-b` has stayed `connecting` since
+it was created (the replication VIPs differ in MTU, 9000 against 1500,
+and MTU is a subnet property on 2.21), so the replica link of
+`eda-dr-demo` cannot be created yet and the DR drill waits on it; the
+live replication signal reports that connection state, which is what
+test 4 checks. Everything else (tarpit, quarantine, locks, maintenance,
+legal hold, showback, selftest, the replication signal) runs live.
+
+| # | Test | Expected | Status |
+| --- | --- | --- | --- |
+| 1 | `telemetry_setup.yml` against `fb-a` with `telemetry_target_name` `eda-prom`, `telemetry_endpoint` `<receiver>:9090/api/v1/otlp`, `telemetry_transport` `otlp-http-protobuf-without-tls`, `telemetry_source` a data VIP and `telemetry_policies` the twelve built-ins; then, on a real receiver, the target disabled (`purefb_telemetry_target enabled: false`) for longer than the silence window | `purefb_telemetry_target` creates the target (`POST /telemetry-targets?names=eda-prom`; a scheme in the endpoint is stripped with a warning) and attaches it to every listed policy, `purefb_telemetry_policy` reads each policy back with `eda-prom` in `targets`, its metric names and resolution; the array's own `GET /telemetry-targets/test` runs and its status is recorded (`set_stats` `target`, `policies_attached` 12, `test_ok`); a second run changes nothing; `selftest.yml`'s telemetry check reads ok. On the receiver, `storage_device_iops` and its siblings appear with the promoted device attribute; disabling the target fires `FlashBladeTelemetrySilent` after `absent_over_time` of twice the policy's resolution or `telemetry_silence_minutes`, Alertmanager delivers it to `alertmanager.yml`, `telemetry_check.yml` records kind `telemetry_check` with verdict `pipeline` (array and receiver answer, the array's test fails) and `set_stats` `verdict`, `test_status`, `array_reachable`, `receiver_reachable`; re-enabling the target resolves the alert and the resolved notification follows at info | passed in part 2026-11-13 (the module contract; the pipeline waits for a receiver): `telemetry_setup.yml` created `eda-prom` (transport otlp-http-protobuf-without-tls, source 2200-datavip) at `10.21.200.129:22`, the only lab port that answered TCP since no receiver could be started (see "Not verified"), attached it to all twelve policies by PATCHing their `targets`, and the array's test answered 400 (recorded `test_ok false`); `tests/replay_alertmanager.yml` drove `telemetry_check.yml` (record kind `telemetry_check`, `target_found true`) and `capacity_request.yml`; the target was disabled afterwards; the live silence rule and the dummy metric are pending the receiver |
+| 2 | `tarpit.yml` with `action apply` on `eda-demo-quota` and `tarpit_ops_per_sec` 100 while dd runs on the client VM; then `action lift` | `purefb_qos` creates `eda-tarpit` with `max_total_ops_per_sec` 100 (`purepolicy` / `qos create` in the audit log) and assigns it (`PATCH /file-systems qos_policy`); dd's rate on the VM drops to about 100 ops/s; the next `purefb_fs_performance` reads `eda_tarpit true` and `eda_capped false`; the record is kind `tarpit`, `set_stats` `file_system`, `action apply`, `policy eda-tarpit`, `changed true`; `lift` clears the policy from the file system (the clearing body that worked is recorded in HARDWARE_NOTES.md), keeps the policy object, the rate recovers and `eda_tarpit` reads false; a file system that already carries a policy of its own is recorded and left alone; the two containment rules fire the same playbook from `tests/replay_contain.yml` | passed 2026-11-13: 3000 direct 4 KiB writes from the VM took 3.0 s before (about 1000 ops/s), 32.4 s with `eda-tarpit` at 100 ops/s (379 kB/s) and 3.8 s after the lift; `purefb_qos` created the policy (`purepolicy` / `qos create`), the file system was assigned and cleared with the empty-name form; records kind `tarpit` at warning (apply) and info (lift) |
+| 3 | `quarantine_client.yml` with `action quarantine`, `client` the VM's address and `file_system eda-demo-quota`; a write and a read attempted on the VM's mount; then `action release` | the legacy rule `<ip>(rw,no_root_squash)` is re-read and rewritten `<ip>(ro,no_root_squash)` through `PATCH /file-systems nfs.rules`; on the VM a write fails read-only while a read succeeds; the record is kind `quarantine`, severity critical, naming the file system touched, `set_stats` `client`, `action`, `file_systems`, `changed_count 1`; `release` puts `rw` back and the write succeeds; a client listed in `contain_exclude_clients`, or the array's own management or replication address, is refused with nothing changed; with `file_system` empty the Manila share is skipped by `contain_exclude_file_systems`; the same two actions arrive through the `locks_port` webhook under the bearer token | passed 2026-11-13: the legacy rule went from `10.21.200.129(rw,no_root_squash)` to `(ro,...)`, a write on the VM's mount failed with "Read-only file system" while a read worked, the release put rw back and the next write succeeded; records critical (quarantine) and warning (release); `tests/replay_contain.yml` later quarantined and tarpitted the scratch file systems from its fixture, which shows the replay drives the real playbooks, and was undone by hand |
+| 4 | `tests/replay_replication.yml` with `tests/fixtures/replication.yml` (a connection down, a paused bucket link, a lagging link that escalates, a recovery); then `replication.yml` live against `fb-a` | replayed: the connection down notifies at critical (throttled one hour by array and remote), the paused link notifies (or runs `replication_resume.yml` with `replication_auto_resume` true), the lagging link notifies at warning while `escalate` is false and at critical once it is true, the recovery is logged; live: `purefb_array_connection` for the peer with `status connecting`, `connected false` and no `previous_status` on the first poll, `purefb_replication` with `connection_count 1`, `connections_down` naming the peer, `fs_link_count 0`, `bucket_link_count 0`, `issue_count 1` and `maintenance_active`, the "Array connection not connected" rule notifying once an hour and the summary logged at debug; when the connection comes up, `previous_status connecting` and the "back" rule logs it | passed 2026-11-13: replayed, the connection down notified at critical, the paused bucket link at warning, the lagging link escalated to critical after five polls and the recovery was logged at info; live, `replication.yml` read the real connection to the peer in state `connecting` and paged it at critical on its first poll (the first version put `vars.` inside an action, which ansible-rulebook refuses: fixed) |
+| 5 | `dr_drill.yml` with `dr_drills` `[{array: fb-a, file_system: eda-dr-demo, peer: fb-b, peer_file_system: eda-dr-demo, max_minutes: 10}]`, run by hand at `dr_drill_hour` (or with the hour set to now) | `tasks/dr_drill_one.yml` resolves `fb-b` through `resolve_array`, sends `PATCH /file-systems?names=eda-dr-demo requested_promotion_state promoted` to the peer, polls `promotion_status` until `promoted` within `max_minutes`, reads the file system's space and export, then demotes (`requested_promotion_state demoted`, without `discard_non_snapshotted_data` because `dr_drill_discard` is false) and waits for `demoted`; the record is kind `dr_drill` at info with the durations; the marker `showback/dr/<date>-eda-dr-demo.json` appears in `eda-state` and a second run the same day records that it already ran; a timeout or a refusal records critical and the always block still demotes | pending: the array connection `fb-a` to `fb-b` has stayed in `connecting` (the peer's global certificate, CA-issued, expired on 2025-07-05), so no replica link could be created and the drill is unit-tested only; `eda-dr-demo` waits on `fb-a` |
+| 6 | `purefb_maintenance` against `fb-a`: `state present timeout 1`, the same again, `extend true timeout 2`, then `state absent`; `health.yml` running alongside | the first run posts `/maintenance-windows?names=array` `{"timeout": 3600000}` and returns `window` `{name array, created, expires}` with `changed true`; the second changes nothing; `extend` deletes and re-posts and `expires` moves out by an hour; `maintenance_active true` on the next `purefb_health`; `absent` deletes the window and the flag drops; check mode reports each change without posting | passed 2026-11-13: `state present timeout 1` posted the window (`puremaintenance schedule --timeout '1h' array` in the audit log), the same again changed nothing, `state absent` closed it; `extend` was not exercised on the array |
+| 7 | `flock` held on a file in the VM's NFSv3 mount of `eda-demo-quota`; `purefb_fs_session kind locks client <ip>` first in check mode, then for real; the same through the `locks_port` webhook with `action release_locks` (`release_locks.yml`) | `GET /file-systems/locks` lists the NLM lock with the VM's address, `file_system eda-demo-quota`, `protocol nfs` and the path (the item fields are recorded in HARDWARE_NOTES.md, both endpoints being empty on the idle lab until now); check mode returns `removed.items` naming it with `changed true` and makes no delete call; the real run calls `delete_file_systems_locks` by client, returns `removed.locks 1`, `changed true`, and the `flock` holder on the VM loses or has to re-acquire the lock; `kind sessions` reports zero because an NFSv3 mount has no NFSv4 session; `release_locks.yml` writes a record of kind `release_locks` at warning naming the approver, `set_stats` `client`, `removed_sessions`, `removed_locks` | passed 2026-11-13: an `flock` from the VM appeared as one NFSv3 lock under `/file-systems/locks` (client 10.21.200.129, source `eda-demo-quota`, path `/lock-demo.txt`; an NFSv3 client has no session rows), `release_locks.yml` removed it through `purefb_fs_session` (0 sessions, 1 lock) and the listing read 0 afterwards; check mode and the webhook path were not exercised |
+| 8 | `purefb_legal_hold` against `fb-a`: `name eda-ir-drill`, a description, `file_system eda-dr-demo`, `paths ["/"]`, `recursive true`; the same again; `entities_state absent`; `state absent` | `POST /legal-holds` creates the hold and `post_legal_holds_held_entities` the entity; `GET /legal-holds/held-entities` lists `{legal_hold eda-ir-drill, file_system eda-dr-demo, path /}` and the module returns `hold` with `held_entities`; the second run changes nothing; `entities_state absent` sends `DELETE /legal-holds/held-entities?names=eda-ir-drill&file_system_names=eda-dr-demo&paths=/` and the entity is gone (the answer shape is recorded in HARDWARE_NOTES.md); `state absent` deletes the hold; check mode reports without writing | passed 2026-11-13 (hold `eda-ir-demo`, paths `["/"]`, recursive): the first run created the hold and held the path (CHANGED), the second changed nothing, `state absent` released the entity and deleted the hold (CHANGED); three facts came out of it and are in the module: a held entity is released with `PATCH /legal-holds/held-entities ... released=true` (DELETE is 405), a directory needs `recursive=true` on the release too, and a hold applied or released moments ago stays "in use" for several seconds, so the delete is retried; `entities_state absent` alone was not run on the array |
+| 9 | `housekeeping.yml` with `housekeeping_interval` lowered to a few minutes, `selftest_checks` the five defaults, `prometheus_url` empty, `showback_bucket eda-state` | on the first tick `selftest.yml` records kind `selftest` at info with per-check results: `rest` (GET `/arrays`) ok, `s3` (a get of `cursors/object_audit/fb-a.json` in `eda-state`, ok on 200 or 404) ok, `audit` (the `eda-audit` policy enabled with members and filters) ok, `telemetry` ok while the test-1 target exists or skipped with `telemetry_endpoint` empty, `prometheus` skipped; `showback.yml` writes `showback/<yyyy-mm-dd>/fb-a.json` to `eda-state` with `date`, `array`, `file_systems`, `buckets`, `accounts` and `totals`, records kind `showback` at info and `set_stats` `date`, `object_key`, `file_systems`, `buckets`; on the second tick showback skips because the object exists and selftest runs again; `dr_drill.yml` runs and does nothing outside `dr_drill_hour`; a check made to fail (a wrong `telemetry_target_name`) turns the selftest record critical with `failed` naming it | passed 2026-11-13 (both playbooks run by hand, not from the tick): `showback.yml` wrote `showback/2026-11-13/fb-a.json` to `eda-state` (3 file systems, 3 buckets, 1 account) and left it alone on the second run; `selftest.yml` recorded rest, s3 and audit ok and telemetry and prometheus failed (target disabled, no receiver) at critical, the intended verdict; its first run asked REST 2.16 for the 2.20 audit endpoints, fixed |
+
 ## Replayed only
 
 Exercised from fixtures under `tests/fixtures/`, not induced on the array:
@@ -74,8 +122,18 @@ a blade fault and a degraded LAG (`tests/replay_health.yml`), the alert
 routes (`tests/replay_alerts.yml`), days to full (`tests/replay_capacity.yml`),
 a client's share, the object-side fixture (a canary hit, a landing
 marker, an evidence put, a denied-storm rollup and a quota health event
-through `tests/replay_object_audit.yml`) and a posture event with every
-finding kind (`tests/replay_posture.yml` from `tests/fixtures/posture.yml`).
+through `tests/replay_object_audit.yml`), a posture event with every
+finding kind (`tests/replay_posture.yml` from `tests/fixtures/posture.yml`),
+and for part 3 a connection down, a paused bucket link, a lagging link
+that escalates and a recovery (`tests/replay_replication.yml` from
+`tests/fixtures/replication.yml`), three Alertmanager payloads in the
+shape `ansible.eda.alertmanager` emits, a `FlashBladeTelemetrySilent`
+firing, a `FlashBladeCapacityHigh` firing and a resolved alert
+(`tests/replay_alertmanager.yml` from `tests/fixtures/alertmanager.yml`),
+and a client hog, a hogging file system and a calm capped file system
+(`tests/replay_contain.yml`). The rule generator is exercised against a
+fixture listing (`tests/fixtures/telemetry_rules.json`) and compared with
+the golden `tests/fixtures/flashblade.rules.yml` by the unit tests.
 The replay rulebooks are kept
 rule-for-rule identical to the live ones by the unit test, so a replayed
 event takes the same path as a live one.
@@ -94,10 +152,12 @@ event takes the same path as a live one.
   its playbooks, but it was not run on a drifted array separately.
 - The QoS cap and lift (`qos_cap.yml`, `qos_lift.yml`): written against
   `/qos-policies` and `patch_file_systems qos_policy` through the raw REST
-  task; not yet run on an array.
+  task; not yet run on an array. The tarpit test of part 3 exercises the
+  same endpoints through `purefb_qos`.
 - A maintenance window older than REST 2.16: the gate reads false there by
   design and no such array is in the lab.
-- Scale beyond one array; the 4.5.6 peer is read only by later parts.
+- Scale beyond one array; the 4.5.6 peer is reached by part 3 only for the
+  array connection and the DR drill.
 - Of the object side, what the five tests above do not touch: the landing
   command, the legal hold on arrival, the honey, error-storm and
   mass-delete rules, and the `posture.yml` rules; unit-tested and replayed
@@ -109,5 +169,27 @@ event takes the same path as a live one.
   as public), no uncovered bucket, no old key, no expiring certificate.
 - Kafka object notifications (Purity//FB 4.10.a): the bucket tail is the
   only object transport the lab can show.
-- The telemetry, containment and replication work of the later parts
-  ([DESIGN.md](DESIGN.md), "Roadmap").
+- Of part 3, what the lab run did not reach: the DR drill (test 5, the
+  array connection); `housekeeping.yml` itself (its two playbooks ran by
+  hand); `purefb_maintenance extend`; `purefb_fs_session` in check mode and
+  the `locks_port` webhook; `purefb_eradication` beyond check mode (no
+  change at the array's own values, a longer delay reported as a change;
+  never written on the lab); `replication_resume.yml` (no bucket link);
+  the certificate renewal (no expiring self-signed array certificate); and
+  the silence rule and the array's test
+  against a real OTLP receiver, the resource attribute names Prometheus
+  promotes (`device_name` assumed) and the shape of the health and space
+  metrics the hand-written rules select (marked `verify:` in
+  `prometheus/flashblade.rules.yml`); the export-policy form of the
+  quarantine (the lab's scratch file systems use the legacy `nfs.rules`
+  string, so the `before_rule_name` insert and the rule delete are
+  unit-tested only); an SMB session termination (no SMB client in the
+  lab); a paused bucket link and `replication_resume.yml` (no bucket link
+  exists; replayed only); `purefb_eradication` writing for real (check
+  mode only on the shared array); `purefb_alert_flag` as a module (the
+  PATCH it wraps is verified from part 1); `renew_certificate.yml` (the
+  rule is replayed from the posture fixture; the array's certificate is
+  not renewed on the lab); the containment rules firing from live
+  telemetry (the lab is idle, so `baseline_known` is false and the rules
+  are replayed); `FlashBladeCapacityHigh` and the other hand-written
+  Prometheus rules firing on real series.

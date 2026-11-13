@@ -40,13 +40,18 @@ throttles included.
   `playbooks/` work and files outside it do not.
 - An action that changes an array is gated by what its event carries:
   `maintenance_active` where the event has it (alert, audit, session,
-  health, hardware and config events; telemetry events do not),
+  health, hardware, config, posture and replication events; telemetry
+  events do not),
   `automation_users` on audit events and `automation_keys` on S3 events so
   the automation never reacts to itself, and a per-site switch that falls
   back to notify on the file system grow, the user quota raise, the client
   diagnostics, the QoS cap, the canary and anomaly key disable, the audit
-  re-attach and the public-bucket revert. A new action states which of
-  the three it has, and README.md's gating paragraph says so.
+  re-attach, the public-bucket revert, the client quarantine
+  (`ir_auto_contain`), the tarpit (`ir_auto_tarpit`), the paused-link
+  resume (`replication_auto_resume`) and the certificate renewal
+  (`certs_auto_renew`); the lock and session release has no switch, only
+  the approval webhook on `locks_port`. A new action states which of the
+  three it has, and README.md's gating paragraph says so.
 - Every record a playbook appends to the alert log carries `time`, `kind`,
   `severity` and `array`.
 - State that must survive a rulebook restart lives on the array or in a

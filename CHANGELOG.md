@@ -2,12 +2,14 @@
 
 ## 0.1.0 (unreleased)
 
-The first two parts of flashblade-eda: Event-Driven Ansible for Everpure
+The first three parts of flashblade-eda: Event-Driven Ansible for Everpure
 FlashBlade, a prototype and the sibling of flasharray-eda. Written against
 Purity//FB 4.6.4 (REST 2.21) on a FlashBlade//S200 with py-pure-client
 1.98.0 and everpure.flashblade 1.29.0; part 1 (REST pull and management
 syslog) and part 2 (the object side) have both passed their lab exit
-tests. The tests are listed in
+tests; part 3 (telemetry, containment and replication) has passed seven
+of its nine lab exit tests and the telemetry one in part; the DR drill and
+the live OTLP path wait on the lab. The tests are listed in
 [docs/VERIFICATION.md](docs/VERIFICATION.md), the array facts in
 [docs/HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md) and the design in
 [docs/DESIGN.md](docs/DESIGN.md).
@@ -30,8 +32,7 @@ tests. The tests are listed in
   system and object store, pending-eradication counts and top growers;
   per-file-system quota usage; array, per-client, per-file-system and
   per-bucket performance with ops shares and streaks; and the config
-  fields the drift rulebook compares. The `replication` signal of the
-  design is refused by name until a later part.
+  fields the drift rulebook compares.
 - Part 2 adds the `posture` signal to `purefb_events`: one `purefb_posture`
   per poll with the public buckets (`public_status`,
   `public_access_config`), the buckets outside every enabled audit policy
@@ -41,6 +42,30 @@ tests. The tests are listed in
   policies that grant everyone full control, a count for each and
   `issue_count`; every read is optional, so an array without an endpoint
   reports an empty list.
+- Part 3 adds the `replication` signal to `purefb_events` (the reserved
+  list it was refused from is now empty; an unknown signal is still
+  refused): `get_array_connections`, `get_targets`,
+  `get_file_system_replica_links` and `get_bucket_replica_links`, each
+  optional, feed one `purefb_replication` per array per poll (the
+  connections with `status`, `type`, `version`, `replication_addresses`,
+  `management_address`, `encrypted` and `throttled`; `connections_down`;
+  the S3 targets and `targets_down`; `fs_links` and `bucket_links` with
+  `status`, `status_details`, `direction`, `paused`, `lag_ms`,
+  `recovery_point`, `recovery_point_age_s`, `policies` and the bucket
+  backlog; `links_unhealthy` against `replication_ok_statuses`,
+  `links_paused`, `links_lagging` against `replication_lag_warn_s`,
+  `max_lag_ms`, `issue_count`, `maintenance_active`), a
+  `purefb_replica_link` per link whose state is worth a rule and once on
+  recovery (`kind`, `local`, `remote`, `remote_object`, `unhealthy`,
+  `lagging`, `paused`, `recovered`, `consecutive_issue_polls`, `escalate`
+  at `replication_escalate_polls`) and a `purefb_array_connection` per
+  connection whose status changed (`status`, `previous_status`,
+  `connected`). New arguments `replication_lag_warn_s` (900),
+  `replication_ok_statuses` (replicating, idle, connected, healthy),
+  `replication_escalate_polls` (5) and `replication_interval`.
+  `purefb_fs_performance` and `purefb_bucket_performance` gain
+  `eda_tarpit`, true when the object's QoS policy is `eda-tarpit`
+  (`eda_capped` keeps meaning any `eda-cap-*` policy).
 - `purefb_syslog` receives what a FlashBlade syslog server sends: the
   `purity.alert` and `purity.audit` layouts of the management service,
   parsed into fields, and the one-JSON-object-per-line records of the
@@ -81,6 +106,40 @@ tests. The tests are listed in
   `s3_prefixes`; a filter that differs is deleted and recreated because
   the array has no PATCH). Check mode, idempotent, unit-tested with a fake
   AnsibleModule and client.
+- Part 3 adds eight more in the same style, each with check mode,
+  idempotency and the collection's `module_utils` guard; the REST-only
+  ones carry a small helper that logs in with the token, uses the session
+  header, logs out in a `finally` and never puts the token in a message:
+  `purefb_telemetry_target` (REST: `name`, `endpoint` as `host:port[/path]`
+  with a scheme stripped and warned about, `transport`
+  `otlp-http-protobuf` or `otlp-http-protobuf-without-tls`, `source` the
+  network interface, `enabled`, `policies` to attach the target to without
+  removing other targets, `test` to run the array's delivery test, `state`;
+  returns `target` and `test`), `purefb_telemetry_policy` (REST: `name`
+  one of the twelve built-ins, `targets` as the full list; returns
+  `policy` with `enabled`, `targets`, `metric_names` and `resolution_ms`;
+  `enabled` is read-only on REST 2.21), `purefb_maintenance` (`state`,
+  `timeout` in hours 1 to 48, default 4, `extend` to delete and re-post;
+  returns `window`), `purefb_qos` (`name`, `max_total_ops_per_sec` of 100
+  or more, `max_total_bytes_per_sec`, `enabled`, `file_systems` and
+  `buckets` to assign the policy to, `state`; absent clears the policy
+  from the listed objects and from any the array reports carrying it,
+  then deletes; returns `policy`), `purefb_fs_session` (an action module
+  without `state`: `kind` sessions, locks or both, `client`, `user`,
+  `protocols`, `disruptive`, `file_system`, `path`, `recursive`, `inode`;
+  one of client, user or file system required; lists first, removes only
+  what matched, changed only when something went; returns `removed` with
+  `sessions`, `locks` and `items`), `purefb_legal_hold` (`name`,
+  `description`, `state`; `file_system`, `paths` and `recursive` manage
+  held entities under `entities_state`, the removal over REST because the
+  SDK has no delete; returns `hold` with `held_entities`),
+  `purefb_alert_flag` (REST: `alert` the numeric name, `flagged`; returns
+  `alert` with `name`, `code`, `flagged`) and `purefb_eradication`
+  (`eradication_delay_days` 1 to 30, `manual_eradication` all-enabled or
+  all-disabled, `force`; a ratchet that refuses to shorten the delay or
+  re-enable manual eradication without `force`; returns
+  `eradication_config`). Unit-tested with the fake client and a `requests`
+  stub.
 
 ### Rulebooks
 
@@ -120,10 +179,47 @@ tests. The tests are listed in
 - `capacity.yml` passes `s3_requests_enabled` and `object_store` to
   `grow_fs.yml` and `capacity_request.yml`, which then also write the
   request object to the log bucket.
+- Part 3 adds four rulebooks. `alertmanager.yml` on
+  `ansible.eda.alertmanager` (`alertmanager_host`, `alertmanager_port`)
+  routes by `event.alert.labels.alertname`: `FlashBladeTelemetrySilent`
+  firing runs `telemetry_check.yml`; `FlashBladeHealthNotOk` notifies
+  critical; `FlashBladeCapacityHigh` runs `capacity_request.yml` (with
+  `request_dir`, `s3_requests_enabled` and `object_store`, as the
+  FlashArray one); `FlashBladeLatencyHigh`, `FlashBladeConnectorErrors`
+  and `FlashBladeReplicationStalled` notify warning; any other firing
+  alert notifies at its severity label (default warning); a resolved
+  alert notifies info; the array is read from the fixed `array_name`
+  label the rule file sets. `replication.yml` on the `replication`
+  signal: an array connection not connected notifies (throttled an hour
+  by array and remote) and its return is logged; a paused replica link
+  runs `replication_resume.yml` behind `replication_auto_resume`, else
+  notifies; an unhealthy or lagging link notifies at warning and, once
+  `escalate` is true, at critical with a six-hour throttle; a recovered
+  link and the per-poll summary are logged. `contain.yml` on the
+  telemetry signal: a client at `contain_min_share_pct` of the array's
+  ops for `contain_consecutive_polls` polls, with the array's write
+  latency at `baseline_latency_ratio` and `baseline_known`, runs
+  `quarantine_client.yml` behind `ir_auto_contain`, else notifies
+  critical; a file system hogging the array with no cap runs
+  `tarpit.yml apply` behind `ir_auto_tarpit`; a tarpitted file system
+  normal for `contain_release_normal_polls` polls runs `tarpit.yml
+  lift`; a second ruleset, "FlashBlade containment approvals", is an
+  `ansible.eda.webhook` on `locks_port` under `APPROVAL_TOKEN` taking
+  `{array, action, client, file_system}` for `quarantine`, `release`,
+  `release_locks` (`release_locks.yml`), `tarpit` and `lift` (there is no
+  separate `locks.yml`). `housekeeping.yml` on `ansible.eda.tick` every
+  `housekeeping_interval` seconds: `selftest.yml` on every tick,
+  `showback.yml` (the playbook decides by the date), `dr_drill.yml` with
+  `dr_drills` (the playbook runs at `dr_drill_hour` and once a day per
+  file system). `posture.yml` gains "Expiring certificate - renew":
+  `expiring_cert_count > 0` with `certs_auto_renew` runs
+  `renew_certificate.yml`.
 - The gates of the FlashArray project carry over: `maintenance_active`
   (false where the endpoint is absent, REST < 2.16), `automation_users`
   and, on S3 events, `automation_keys`, literal throttles, per-site
-  switches that fall back to notify, approval on every eradication.
+  switches that fall back to notify (twelve after part 3), approval on
+  every eradication, and no switch at all for lock breaking, which only
+  the `locks_port` webhook reaches.
 
 ### Playbooks
 
@@ -163,6 +259,90 @@ tests. The tests are listed in
   leaving `s3_status`, `s3_json` and `s3_error`. `grow_fs.yml` and
   `capacity_request.yml` also put the request to
   `<log_bucket>/requests/<id>.json` when `s3_requests_enabled`.
+- Part 3 adds ten playbooks and one task file, the array-facing ones in
+  the shape of `grow_fs.yml` (`resolve_array` first, one alert-log record
+  with `time`, `kind`, `severity` and `array`, one `set_stats` last):
+  `telemetry_setup.yml` (the two telemetry modules create the target,
+  attach it to `telemetry_policies` and run the array's test; `set_stats`
+  `target`, `policies_attached`, `test_ok`), `telemetry_check.yml` (the
+  target and its test through `fb_rest.yml`, a GET of the management
+  VIP's `/api/api_version` and, with `prometheus_url`, of
+  `/api/v1/query?query=up`; `verdict` pipeline, array, receiver or
+  healthy, critical for array; `set_stats` `verdict`, `test_status`,
+  `array_reachable`, `receiver_reachable`), `quarantine_client.yml`
+  (`action` quarantine or release on one file system or on every live
+  file system naming the client, minus `contain_exclude_file_systems`;
+  refuses `contain_exclude_clients` and the array's own addresses; the
+  legacy `nfs.rules` entry rewritten `rw` to `ro` after a re-read, or an
+  export-policy rule `client <ip> permission ro access root-squash`
+  posted before the first rule and deleted on release; record kind
+  `quarantine` critical; `set_stats` `client`, `action`, `file_systems`,
+  `changed_count`), `tarpit.yml` (`action` apply or lift: the `eda-tarpit`
+  policy at `tarpit_ops_per_sec` through `purefb_qos`, assigned unless the
+  file system already carries a policy, cleared on lift with the policy
+  object kept; record kind `tarpit`; `set_stats` `file_system`, `action`,
+  `policy`, `changed`), `release_locks.yml` (`purefb_fs_session` for a
+  client's sessions, locks or both; record kind `release_locks` warning
+  naming `approver`; `set_stats` `client`, `removed_sessions`,
+  `removed_locks`), `replication_resume.yml` (the paused bucket link's
+  target and credential read from `/bucket-replica-links`, then
+  `purefb_bucket_replica paused: false`; record kind `replication`;
+  `set_stats` `bucket`, `resumed`), `dr_drill.yml` (localhost; loops
+  `dr_drills` into `tasks/dr_drill_one.yml`: resolve the peer, promote
+  the replica file system, wait for `promotion_status`, read its space
+  and export, demote with `discard_non_snapshotted_data` only when
+  `dr_drill_discard`, always demoting in the always block; record kind
+  `dr_drill` info on success and critical on failure; the marker
+  `<showback_prefix>dr/<date>-<file system>.json` in the state bucket
+  stops a second run the same day), `showback.yml` (file systems,
+  buckets and accounts read from the array and written as
+  `<showback_prefix><yyyy-mm-dd>/<array>.json` to `showback_bucket`,
+  skipped when the object exists; record kind `showback`; `set_stats`
+  `date`, `object_key`, `file_systems`, `buckets`), `selftest.yml`
+  (array-facing, run for every array in `purefb_arrays` at once by
+  `housekeeping.yml`; `selftest_checks` rest, s3, audit, telemetry and
+  prometheus, the last two skipped when `telemetry_endpoint` or
+  `prometheus_url` is empty; one record kind `selftest`, critical when
+  any check failed; `set_stats` `checks`, `failed`) and
+  `renew_certificate.yml` (only an `array` certificate whose `issued_by`
+  equals `issued_to` is renewed with `purefb_certs generate` for
+  `certs_renew_days`, keeping its common name and SANs; anything else is
+  recorded as needing a human; record kind `certificate`; `set_stats`
+  `certificate`, `renewed`, `valid_to`).
+
+### Prometheus
+
+- `tools/telemetry_rules.py` reads an array's
+  `/telemetry-metrics-policies/rules` (`telemetry_rules.py <fb_url>
+  <TOKEN_ENV> [--out prometheus/flashblade.rules.yml] [--silence-minutes
+  10] [--array-label device_name]`, the token read from the named
+  environment variable) and writes a Prometheus rule file: one
+  `FlashBladeTelemetrySilent` alert per policy on `absent_over_time` of
+  the policy's first metric over twice its resolution or
+  `--silence-minutes`, whichever is longer (labels `severity critical`,
+  `domain telemetry`, `policy`), plus the hand-written
+  `FlashBladeHealthNotOk`, `FlashBladeCapacityHigh` (with
+  `annotations.value` as the FlashArray one), `FlashBladeLatencyHigh`,
+  `FlashBladeConnectorErrors` and `FlashBladeReplicationStalled`; every
+  alert sets a fixed `array_name` label from the `--array-label` resource
+  attribute, and the expressions whose metric shape is unverified carry a
+  `verify:` comment. A unit test runs it against
+  `tests/fixtures/telemetry_rules.json` and compares with the golden
+  `tests/fixtures/flashblade.rules.yml`.
+- `prometheus/flashblade.rules.yml` is the generator's output for the lab
+  array's twelve policies; `prometheus/prometheus.example.yml` configures
+  the OTLP receiver (no scrape jobs; `promote_all_resource_attributes`,
+  `translation_strategy: UnderscoreEscapingWithSuffixes`, the rule file,
+  Alertmanager on 127.0.0.1:9093; the `--web.enable-otlp-receiver` and
+  `--web.enable-lifecycle` flags in a comment);
+  `prometheus/alertmanager.example.yml` routes to the EDA listener
+  (`http://127.0.0.1:5002/alerts`, `send_resolved`, grouped by
+  `alertname` and `array_name`); `prometheus/README.md` explains how the
+  array pushes (the endpoint form `<host>:9090/api/v1/otlp`, the
+  transport without TLS for a plain receiver, the source VIP), how to run
+  Prometheus 3.x and Alertmanager under systemd, the ssh reverse tunnel
+  for a rulebook host behind NAT, the generator and what the silence rule
+  means.
 
 ### Repository
 
@@ -184,6 +364,30 @@ tests. The tests are listed in
   marker, an evidence put, a denied-storm rollup and a quota health event,
   and `tests/replay_posture.yml` one posture event with every finding kind
   (`tests/fixtures/posture.yml`).
+- Part 3: `vars/example.yml` gains the replication keys
+  (`replication_interval`, `replication_lag_warn_s`,
+  `replication_ok_statuses`, `replication_escalate_polls`,
+  `replication_auto_resume`, `dr_drills`, `dr_drill_hour`,
+  `dr_drill_discard`), the containment keys (`ir_auto_contain`,
+  `ir_auto_tarpit`, `tarpit_ops_per_sec`, `contain_consecutive_polls`,
+  `contain_min_share_pct`, `contain_release_normal_polls`,
+  `contain_exclude_clients`, `contain_exclude_file_systems`, `locks_port`),
+  the telemetry keys (`telemetry_target_name`, `telemetry_endpoint`,
+  `telemetry_source`, `telemetry_transport`, `telemetry_policies`,
+  `telemetry_silence_minutes`, `telemetry_array_label`, `prometheus_url`),
+  the housekeeping keys (`housekeeping_interval`, `showback_bucket`,
+  `showback_prefix`, `selftest_checks`) and the certificate keys
+  (`certs_auto_renew`, `certs_renew_days`; `cert_warn_days` is reused);
+  the unit tests gain `ansible.eda.tick` among the known sources, the new
+  playbooks' required extra vars and artifact keys, the polling-trio check
+  for `replication.yml` and the first ruleset of `contain.yml`, and
+  `tests/replay_replication.yml` (`tests/fixtures/replication.yml`: a
+  connection down, a paused bucket link, a lagging link that escalates, a
+  recovery), `tests/replay_alertmanager.yml` (`tests/fixtures/alertmanager.yml`:
+  a `FlashBladeTelemetrySilent` firing, a `FlashBladeCapacityHigh` firing,
+  a resolved alert) and `tests/replay_contain.yml` (a client hog, a hogging
+  file system, a calm capped file system); `prometheus/` and `tools/` are
+  development material already in `build_ignore`.
 - Apache-2.0; SPDX headers on every Python, YAML and shell file. The
   modules re-license under the collection's GPL-3.0-or-later when they
   move there ([docs/PACKAGING.md](docs/PACKAGING.md)).

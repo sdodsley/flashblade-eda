@@ -4,11 +4,15 @@
 #
 # The repository root is the Ansible collection sdodsley.flashblade_eda: the
 # three event source plugins (extensions/eda/plugins/event_source), the
-# modules (plugins/modules), the rulebooks (extensions/eda/rulebooks) and
-# the playbooks (playbooks/) are already laid out as collection content. `make collection` builds the
+# eleven modules (plugins/modules: the object-audit trio of part 2 and the
+# telemetry, maintenance, QoS, session, legal hold, alert flag and
+# eradication modules of part 3), the rulebooks (extensions/eda/rulebooks)
+# and the playbooks (playbooks/, with tasks/) are already laid out as
+# collection content. `make collection` builds the
 # tarball into build/ and installs it under ./collections, which env.sh puts
 # first on ANSIBLE_COLLECTIONS_PATH. Everything else in the tree (tests,
-# docs, local tooling) is development material and stays out of the
+# docs, the Prometheus material under prometheus/, the rule generator under
+# tools/, local tooling) is development material and stays out of the
 # artifact through build_ignore.
 namespace: sdodsley
 name: flashblade_eda

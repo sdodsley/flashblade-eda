@@ -34,11 +34,12 @@ matters.
   pending-eradication objects sits behind an approval on every path.
   Start with the four switches off and `orchestrator_enabled` off, and
   read the rules you enable.
-- **The approvals and maintenance webhooks need a bearer token.** The
-  capacity approval ruleset and the maintenance-window ruleset accept a
-  POST only with `Authorization: Bearer <APPROVAL_TOKEN>`. Generate a long
-  random value and put it in the env file; `run.sh` passes it to
-  ansible-rulebook with `--env-vars`, and the rulebooks read
+- **The approvals, maintenance and containment webhooks (`approval_port`,
+  `maintenance_port`, `locks_port`) need a bearer token.** The capacity
+  approval ruleset, the maintenance-window ruleset and the containment
+  ruleset accept a POST only with `Authorization: Bearer <APPROVAL_TOKEN>`.
+  Generate a long random value and put it in the env file; `run.sh`
+  passes it to ansible-rulebook with `--env-vars`, and the rulebooks read
   `{{ APPROVAL_TOKEN }}` from the environment, never from a vars file. A
   maintenance window silences every alert the array does not exempt, so
   the token that opens one is a token that silences the array.
