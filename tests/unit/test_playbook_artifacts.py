@@ -9,9 +9,15 @@ another array's credential (credential_array, injected by the FlashBlade
 API credential type) and resolves the array's credentials through
 playbooks/tasks/resolve_array.yml before it touches the token; the REST
 helper never shows a token; every alert-log record carries time, kind,
-severity and array; and no Jinja expression hides an escape literal."""
+severity and array; no Jinja expression hides an escape literal; and
+aap/seed.yml carries the fixed job template names, builds its activations
+from the platform rulebooks and loads its credential types from JSON that
+parses and injects what the playbooks read."""
 
+import json
+import pathlib
 import re
+import urllib.parse
 
 import pytest
 import yaml
@@ -577,3 +583,328 @@ def test_no_escape_literals_inside_jinja_expressions(repo_root):
                         f"{path.relative_to(repo_root)}: {literal.group(0)} in {body[:70]!r}"
                     )
     assert offenders == [], "\n".join(offenders)
+
+
+# ---- the platform seed (aap/) -----------------------------------------------
+
+# the job templates aap/seed.yml creates: one per playbook, named as
+# aap/README.md lists them; the platform rulebooks' run_job_template actions
+# and the orchestrator definitions launch them by these names
+JOB_TEMPLATE_NAMES = {
+    "FlashBlade - alert runbook",
+    "FlashBlade - apply baseline",
+    "FlashBlade - auditor guard",
+    "FlashBlade - canary",
+    "FlashBlade - capacity reclaim",
+    "FlashBlade - capacity request",
+    "FlashBlade - client diagnose",
+    "FlashBlade - DR drill",
+    "FlashBlade - flag alert",
+    "FlashBlade - grow file system",
+    "FlashBlade - identify LED",
+    "FlashBlade - landing",
+    "FlashBlade - lock on arrival",
+    "FlashBlade - maintenance window",
+    "FlashBlade - notify",
+    "FlashBlade - orchestrator post",
+    "FlashBlade - posture revert",
+    "FlashBlade - QoS cap",
+    "FlashBlade - QoS lift",
+    "FlashBlade - quarantine client",
+    "FlashBlade - reconcile",
+    "FlashBlade - release locks",
+    "FlashBlade - remediate DNS",
+    "FlashBlade - remediate NTP",
+    "FlashBlade - renew certificate",
+    "FlashBlade - replication resume",
+    "FlashBlade - S3 anomaly",
+    "FlashBlade - S3 approval",
+    "FlashBlade - selftest",
+    "FlashBlade - session check",
+    "FlashBlade - showback",
+    "FlashBlade - tarpit",
+    "FlashBlade - telemetry check",
+    "FlashBlade - telemetry setup",
+    "FlashBlade - user quota",
+}
+WORKFLOW_NAME = "FlashBlade - capacity reclaim (controller tier)"
+ACTIVATION_PREFIX = "FlashBlade rulebook - "
+PLATFORM_RULEBOOKS = "extensions/eda/rulebooks/platform"
+# what each credential type injects, as the playbooks (resolve_array.yml,
+# the S3 helper), the source plugins and the orchestrator bridge read it:
+# (env names, extra_vars names), one row per injectors file in aap/files
+INJECTOR_SHAPES = [
+    # FlashBlade API: the array's URL, token and inventory name
+    (set(), {"fb_url", "api_token", "credential_array"}),
+    # FlashBlade fleet: the JSON list, for resolve_array.yml on the
+    # controller and for the purefb_events source on the EDA side
+    (set(), {"purefb_fleet_json"}),
+    (set(), {"purefb_arrays"}),
+    # FlashBlade object store: the environment the object-side playbooks read
+    (
+        {
+            "FB_OBJ_URL",
+            "FB_OBJ_TOKEN",
+            "FB_OBJ_S3_ENDPOINT",
+            "FB_OBJ_S3_ACCESS_KEY",
+            "FB_OBJ_S3_SECRET_KEY",
+            "FB_OBJ_S3_STATE_ACCESS_KEY",
+            "FB_OBJ_S3_STATE_SECRET_KEY",
+        },
+        set(),
+    ),
+    # Orchestrator service account and Slack webhook
+    ({"AO_CLIENT_ID", "AO_CLIENT_SECRET"}, {"orchestrator_url"}),
+    ({"SLACK_WEBHOOK_URL"}, set()),
+]
+# inputs that hold a secret wherever a credential type defines them
+SECRET_INPUTS = {
+    "api_token",
+    "arrays",
+    "secret_key",
+    "state_secret_key",
+    "client_secret",
+    "webhook_url",
+}
+# hosts a URL in aap/ may name: the project's repository and public
+# registries; a site's own platform, orchestrator or array never
+PUBLIC_URL_HOSTS = {
+    "github.com",
+    "galaxy.ansible.com",
+    "console.redhat.com",
+    "registry.redhat.io",
+    "registry.access.redhat.com",
+    "quay.io",
+    "pypi.org",
+    "docs.ansible.com",
+}
+INJECTED = re.compile(r"{{\s*([a-z_]+)\s*}}")
+
+
+def _seed(repo_root):
+    return _load(repo_root / "aap" / "seed.yml")
+
+
+def _seed_tasks(repo_root, module):
+    """Every task of the seed that calls `module`, blocks included."""
+    return [
+        task
+        for tasks in _all_task_lists(_seed(repo_root))
+        for task in tasks
+        if module in task
+    ]
+
+
+def _literal(play, value):
+    """A play-level value that may be written as "{{ some_var }}"."""
+    match = re.fullmatch(r"{{\s*(\w+)\s*}}", str(value).strip())
+    return play["vars"][match.group(1)] if match else value
+
+
+def test_seed_carries_the_fixed_job_template_names(repo_root):
+    """One job template per playbook, named as aap/README.md and the
+    platform rulebooks name them, created by one task that prompts for
+    variables, credential and limit; the seed's module defaults cover the
+    three platform collections."""
+    play = _seed(repo_root)[0]
+    templates = play["vars"]["job_templates"]
+    assert {t["name"] for t in templates} == JOB_TEMPLATE_NAMES
+    assert len(templates) == len(JOB_TEMPLATE_NAMES), "a template named twice"
+    playbooks = {p.name for p in (repo_root / "playbooks").glob("*.yml")}
+    named = {pathlib.PurePosixPath(t["playbook"]).name for t in templates}
+    assert named == playbooks, sorted(named ^ playbooks)
+    for template in templates:
+        path = repo_root / template["playbook"]
+        assert path.exists(), f"{template['name']}: {template['playbook']} missing"
+    (task,) = _seed_tasks(repo_root, "ansible.controller.job_template")
+    args = task["ansible.controller.job_template"]
+    for prompt in (
+        "ask_variables_on_launch",
+        "ask_credential_on_launch",
+        "ask_limit_on_launch",
+    ):
+        assert args.get(prompt) is True, prompt
+    assert set(play["module_defaults"]) == {
+        "group/ansible.platform.gateway",
+        "group/ansible.controller.controller",
+        "group/ansible.eda.eda",
+    }
+
+
+def test_seed_limits_apply_baseline_to_the_default_array(repo_root):
+    """One launch applies one array's baseline: the template is limited to
+    localhost (the play that refreshes the checkout) plus the default
+    array, and no other template carries a limit; every template prompts
+    for the limit, so another array's launch changes the credential and
+    the limit together."""
+    play = _seed(repo_root)[0]
+    templates = play["vars"]["job_templates"]
+    baseline = next(t for t in templates if t["name"] == "FlashBlade - apply baseline")
+    assert baseline["limit"] == "localhost,{{ aap_default_array }}"
+    assert [t for t in templates if "limit" in t] == [baseline]
+
+
+def test_seed_workflow_runs_request_approval_reclaim(repo_root):
+    """The controller-tier workflow: the request template, then a workflow
+    approval, then the reclaim template with the fixed extra data; each of
+    the three takes a failure edge to a notify node."""
+    play = _seed(repo_root)[0]
+    (task,) = _seed_tasks(repo_root, "ansible.controller.workflow_job_template")
+    workflow = task["ansible.controller.workflow_job_template"]
+    assert _literal(play, workflow["name"]) == WORKFLOW_NAME
+    nodes = workflow["workflow_nodes"]
+    by_id = {n["identifier"]: n for n in nodes}
+    assert len(by_id) == len(nodes), "an identifier twice"
+
+    def node_for(name):
+        return next(n for n in nodes if n["unified_job_template"].get("name") == name)
+
+    request = node_for("FlashBlade - capacity request")
+    reclaim = node_for("FlashBlade - capacity reclaim")
+    (approve,) = [
+        n for n in nodes if n["unified_job_template"]["type"] == "workflow_approval"
+    ]
+    assert request["related"]["success_nodes"] == [
+        {"identifier": approve["identifier"]}
+    ]
+    assert approve["related"]["success_nodes"] == [
+        {"identifier": reclaim["identifier"]}
+    ]
+    extra = reclaim["extra_data"]
+    assert extra["reclaim_action"] == "eradicate_pending"
+    assert extra["approver"] == "workflow-approval"
+    assert extra["rebuild_from_artifacts"] is True
+    for node in (request, approve, reclaim):
+        failures = node["related"].get("failure_nodes")
+        assert failures, f"{node['identifier']}: no failure edge"
+        for edge in failures:
+            target = by_id[edge["identifier"]]["unified_job_template"]
+            assert target.get("name") == "FlashBlade - notify", edge
+
+
+def test_seed_activations_come_from_the_platform_rulebooks(repo_root):
+    """The seed makes one activation per file of the platform rulebook
+    directory, named FlashBlade rulebook - <name>, pinned to
+    platform/<file> and switched by aap_eda_activations_enabled; the
+    directory holds plain file names that survive the template."""
+    (task,) = _seed_tasks(repo_root, "ansible.eda.rulebook_activation")
+    loop = task["loop"]
+    assert "fileglob" in loop, loop
+    assert f"{PLATFORM_RULEBOOKS}/*.yml" in loop, loop
+    args = task["ansible.eda.rulebook_activation"]
+    assert args["name"].startswith(ACTIVATION_PREFIX), args["name"]
+    assert args["rulebook_name"].startswith("platform/"), args["rulebook_name"]
+    assert "aap_eda_activations_enabled" in str(args["enabled"])
+    files = sorted((repo_root / PLATFORM_RULEBOOKS).glob("*.yml"))
+    assert files, f"{PLATFORM_RULEBOOKS} holds no rulebook to activate"
+    for path in files:
+        assert re.fullmatch(r"[a-z_]+\.yml", path.name), path.name
+
+
+def _credential_files(repo_root):
+    files = sorted((repo_root / "aap" / "files").glob("*.json"))
+    assert files, "aap/files holds no credential type JSON"
+    return {path.name: json.loads(path.read_text()) for path in files}
+
+
+def test_credential_type_files_parse_and_pair_up(repo_root):
+    """Every JSON under aap/files parses; an *_inputs.json lists fields, an
+    *_injectors.json (or *_eda_injectors.json) injects extra_vars or env,
+    refers only to inputs its pair defines, and every token-like input is
+    marked secret."""
+    loaded = _credential_files(repo_root)
+    inputs = {n: d for n, d in loaded.items() if n.endswith("_inputs.json")}
+    injectors = {n: d for n, d in loaded.items() if n.endswith("_injectors.json")}
+    assert set(loaded) == set(inputs) | set(injectors), sorted(loaded)
+    for name, doc in inputs.items():
+        fields = doc.get("fields")
+        assert isinstance(fields, list) and fields, f"{name}: no fields"
+        ids = [f["id"] for f in fields]
+        assert len(ids) == len(set(ids)), f"{name}: an input twice"
+        assert set(doc.get("required", [])) <= set(ids), f"{name}: required"
+        for field in fields:
+            if field["id"] in SECRET_INPUTS:
+                assert field.get("secret") is True, f"{name}: {field['id']} open"
+    for name, doc in injectors.items():
+        sections = set(doc)
+        assert sections & {"extra_vars", "env"}, f"{name}: no extra_vars, no env"
+        assert sections <= {"extra_vars", "env", "file"}, f"{name}: {sections}"
+        pair = re.sub(r"(_eda)?_injectors\.json$", "_inputs.json", name)
+        assert pair in inputs, f"{name}: no {pair}"
+        ids = {f["id"] for f in inputs[pair]["fields"]}
+        used = {
+            v
+            for section in doc.values()
+            for value in section.values()
+            for v in INJECTED.findall(value)
+        }
+        assert used <= ids, f"{name}: injects {sorted(used - ids)}, undefined"
+
+
+def test_credential_types_inject_the_documented_variables(repo_root):
+    """Each credential type injects what the playbooks and the source
+    plugins read: one injectors file per row of INJECTOR_SHAPES. The
+    FlashBlade API type names the array it belongs to as credential_array,
+    which every array-facing playbook compares with the array it was asked
+    to act on, and the seed fills that input from the array's name on the
+    controller and on the EDA side."""
+    loaded = _credential_files(repo_root)
+    injectors = [d for n, d in loaded.items() if n.endswith("_injectors.json")]
+    shapes = [(set(d.get("env", {})), set(d.get("extra_vars", {}))) for d in injectors]
+    for env, extra in INJECTOR_SHAPES:
+        assert (env, extra) in shapes, f"no injectors with {sorted(env | extra)}"
+    api = next(
+        d for d in injectors if set(d.get("extra_vars", {})) == INJECTOR_SHAPES[0][1]
+    )
+    assert api["extra_vars"] == {
+        "fb_url": "{{ fb_url }}",
+        "api_token": "{{ api_token }}",
+        "credential_array": "{{ array_name }}",
+    }
+    play = _seed(repo_root)[0]
+    credential_inputs = [
+        t[k]["inputs"]
+        for tasks in _all_task_lists([play])
+        for t in tasks
+        for k in t
+        if k in ("ansible.controller.credential", "ansible.eda.credential")
+        and t[k].get("credential_type", t[k].get("credential_type_name"))
+        == "FlashBlade API"
+    ]
+    assert len(credential_inputs) == 2, "one FlashBlade API credential task a side"
+    for inputs in credential_inputs:
+        assert "{{" in inputs["array_name"], inputs["array_name"]
+
+
+def test_seed_variables_are_documented_and_hold_no_site_specifics(repo_root):
+    """Every aap_* variable the seed reads is in aap/vars/example.yml; the
+    aap/ tree names no address, no home directory and no host other than
+    the project's repository and public registries; every task that writes
+    a credential (its inputs hold a token) is no_log."""
+    seed_text = (repo_root / "aap" / "seed.yml").read_text()
+    example = _load(repo_root / "aap" / "vars" / "example.yml")
+    referenced = set(re.findall(r"\baap_[a-z0-9_]+", seed_text))
+    missing = sorted(referenced - set(example))
+    assert not missing, f"aap/seed.yml reads variables example.yml lacks: {missing}"
+    tree = "\n".join(
+        p.read_text() for p in sorted((repo_root / "aap").rglob("*")) if p.is_file()
+    )
+    assert not re.search(r"\b\d{1,3}(\.\d{1,3}){3}\b", tree), "an address in aap/"
+    urls = {u for u in re.findall(r"https?://[^\s'\")]+", tree) if "<" not in u}
+    hosts = {urllib.parse.urlparse(u).hostname for u in urls}
+    assert hosts <= PUBLIC_URL_HOSTS, sorted(urls)
+    github = {u for u in urls if "github.com" in u}
+    assert github <= {"https://github.com/sdodsley/flashblade-eda"}, sorted(github)
+    assert "/home/" not in tree and "C:\\" not in tree
+    credential_tasks = [
+        task
+        for tasks in _all_task_lists(_seed(repo_root))
+        for task in tasks
+        if any(k.endswith(".credential") for k in task)
+    ]
+    # controller: per array, fleet, object store, orchestrator, Slack
+    # webhook, source control; EDA: per array, fleet, object store,
+    # orchestrator, platform user, source control
+    assert len(credential_tasks) >= 10, len(credential_tasks)
+    for task in credential_tasks:
+        assert task.get("no_log") is True, f"{task.get('name')}: credential shown"
