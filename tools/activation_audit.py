@@ -70,6 +70,10 @@ ENV_TOKEN = "AAP_TOKEN"
 ENV_URL = ("AAP_HOSTNAME", "CONTROLLER_HOST")
 ENV_VERIFY = ("AAP_VALIDATE_CERTS", "CONTROLLER_VERIFY_SSL")
 TIMEOUT_SECONDS = 60
+# a 5xx from the gateway is tried again this often: the activations listing is
+# the controller's slowest call and times out under load
+REQUEST_RETRIES = 8
+RETRY_SLEEP_SECONDS = 10
 DELETE_WAIT_SECONDS = 120
 NAME_WAIT_SECONDS = 300
 NAME_TAKEN = "activation with this name already exists"
@@ -194,7 +198,8 @@ class Client:
             self.context.check_hostname = False
             self.context.verify_mode = ssl.CERT_NONE
 
-    def request(self, method, path, body=None, retries=8):
+    def request(self, method, path, body=None, retries=None):
+        retries = REQUEST_RETRIES if retries is None else retries
         data = json.dumps(body).encode() if body is not None else None
         request = urllib.request.Request(
             self.base + path,
@@ -214,7 +219,7 @@ class Client:
                     status = response.status
             except urllib.error.HTTPError as exc:
                 if exc.code in (500, 502, 503, 504) and attempt + 1 < retries:
-                    time.sleep(10)
+                    time.sleep(RETRY_SLEEP_SECONDS)
                     continue
                 try:
                     detail = exc.read()[:300].decode(errors="replace")

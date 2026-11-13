@@ -445,13 +445,14 @@ def test_recreate_finds_the_create_the_gateway_kept_answering_errors_to(
             8, "FlashBlade rulebook - capacity", dict(good, alerts_interval=30)
         ),
     ]
-    # the client's first four attempts are answered 503 and do nothing; the
-    # fifth is carried out and answered 503 as well, so the client gives up
-    store.answer_503 = 4
+    # every attempt but the last is answered 503 and does nothing; the last
+    # is carried out and answered 503 as well, so the client gives up
+    store.answer_503 = audit.REQUEST_RETRIES - 1
     store.ghost_create = 1
     code = _run_recreate(audit, store, files, monkeypatch)
     out = capsys.readouterr()
-    assert len(_posts(store)) == 5  # looked up by name, not posted again
+    # looked up by name, not posted again
+    assert len(_posts(store)) == audit.REQUEST_RETRIES
     assert len(store.created) == 1
     assert "had gone through as id 101" in out.out
     assert code == 0
@@ -597,7 +598,8 @@ def test_recreate_waits_out_a_list_error_after_the_delete(
         ),
         _activation(9, "FlashBlade rulebook - health", dict(good, alerts_interval=31)),
     ]
-    store.list_503_after_delete = 5  # the client's five attempts all fail once
+    # the client's attempts all fail once
+    store.list_503_after_delete = audit.REQUEST_RETRIES
     code = _run_recreate(audit, store, files, monkeypatch)
     out = capsys.readouterr()
     assert "could not read the activations list" in out.out
@@ -654,7 +656,7 @@ def test_recreate_waits_out_a_detail_error_after_the_create(
         ),
         _activation(9, "FlashBlade rulebook - health", dict(good, alerts_interval=31)),
     ]
-    store.detail_503_after_create = 5
+    store.detail_503_after_create = audit.REQUEST_RETRIES
     code = _run_recreate(audit, store, files, monkeypatch)
     out = capsys.readouterr()
     assert "could not read FlashBlade rulebook - capacity (id 101)" in out.out
@@ -700,7 +702,9 @@ def test_recreate_keeps_waiting_when_the_lookup_itself_fails(
         # the list answers 5xx once, right after the create was refused
         calls["n"] += 1
         if calls["n"] == 3:
-            raise audit.AuditError(f"GET {path}: gave up after 5 attempts")
+            raise audit.AuditError(
+                f"GET {path}: gave up after {audit.REQUEST_RETRIES} attempts"
+            )
         return real_list_all(self, path)
 
     monkeypatch.setattr(audit.Client, "list_all", flaky_list_all)
