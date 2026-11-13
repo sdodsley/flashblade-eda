@@ -14,7 +14,7 @@ EDA controller need to resolve the event sources and run the playbooks:
 | --- | --- |
 | `extensions/eda/plugins/event_source/` | `purefb_events.py`, `purefb_object_audit.py` and `purefb_syslog.py` |
 | `extensions/eda/rulebooks/` | the rulebooks, which name their sources by FQCN |
-| `plugins/modules/` | `purefb_log_target.py`, `purefb_audit_policy.py` and `purefb_bucket_audit_filter.py` |
+| `plugins/modules/` | `purefb_log_target.py`, `purefb_audit_policy.py`, `purefb_bucket_audit_filter.py`, `purefb_telemetry_target.py`, `purefb_telemetry_policy.py`, `purefb_maintenance.py`, `purefb_qos.py`, `purefb_fs_session.py`, `purefb_legal_hold.py`, `purefb_alert_flag.py` and `purefb_eradication.py` |
 | `playbooks/` | the playbooks, `runbooks/` and `tasks/` |
 | `meta/runtime.yml` | `requires_ansible: ">=2.15.0"` |
 | `README.md`, `LICENSE` | the collection readme and licence |
@@ -40,12 +40,14 @@ for a FQCN. The dependencies are declared in `galaxy.yml`: `ansible.eda`
 `requirements.yml` lists the same two for `ansible-galaxy collection
 install -r`.
 
-`plugins/modules/` is collection content too: the three object-audit
-modules the collection has no equivalent for yet (log targets, audit
-policies and their members, bucket audit filters). A playbook names them
-`sdodsley.flashblade_eda.purefb_log_target`,
-`sdodsley.flashblade_eda.purefb_audit_policy` and
-`sdodsley.flashblade_eda.purefb_bucket_audit_filter`, with the same
+`plugins/modules/` is collection content too: the eleven modules the
+collection has no equivalent for yet. Three came with the object side (log
+targets, audit policies and their members, bucket audit filters:
+`purefb_log_target`, `purefb_audit_policy`, `purefb_bucket_audit_filter`)
+and eight with part 3 (`purefb_telemetry_target`, `purefb_telemetry_policy`,
+`purefb_maintenance`, `purefb_qos`, `purefb_fs_session`,
+`purefb_legal_hold`, `purefb_alert_flag`, `purefb_eradication`). A
+playbook names them `sdodsley.flashblade_eda.<module>`, with the same
 `fb_url`, `api_token` and `disable_warnings` options as the collection's
 own modules, because they import `get_system` and `purefb_argument_spec`
 from the `everpure.flashblade` module_utils; that collection has to be
