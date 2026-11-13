@@ -1,6 +1,8 @@
 # Developer entry points. `make check` is what CI runs.
 PY ?= python3
 PLUGINS = extensions/eda/plugins/event_source plugins/modules
+# the developer tools (the Prometheus rule generator) are linted, not shipped
+TOOLS = tools
 # playbooks only: tests/replay_*.yml are rulebooks, not playbooks
 PLAYBOOKS = $(wildcard playbooks/*.yml) $(filter-out $(wildcard tests/replay_*.yml),$(wildcard tests/*.yml))
 # the collection the repository root builds into (galaxy.yml)
@@ -26,8 +28,8 @@ collection:
 	ansible-galaxy collection install --force -p collections build/$(COLLECTION)-*.tar.gz
 
 lint:
-	black --check $(PLUGINS) $(wildcard tests/*.py) tests/unit
-	pyflakes $(PLUGINS) $(wildcard tests/*.py) tests/unit
+	black --check $(PLUGINS) $(TOOLS) $(wildcard tests/*.py) tests/unit
+	pyflakes $(PLUGINS) $(TOOLS) $(wildcard tests/*.py) tests/unit
 	yamllint -s .
 
 test:

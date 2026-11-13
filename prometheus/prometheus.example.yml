@@ -1,0 +1,37 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Prometheus configuration for a FlashBlade that pushes OTLP metrics. There
+# is no scrape job: the array's telemetry target posts protobuf over HTTP to
+# <this host>:9090/api/v1/otlp (the endpoint purefb_telemetry_target is
+# given, without a scheme), and the receiver stores the series. The service
+# needs two flags the configuration file cannot set:
+#   --web.enable-otlp-receiver   accept pushes on /api/v1/otlp/v1/metrics
+#   --web.enable-lifecycle       POST /-/reload after the rule file is regenerated
+# Prometheus 3.5 or newer: promote_all_resource_attributes and
+# translation_strategy are 3.x settings. Every resource attribute becomes a
+# label, which is how the array's name reaches the rules (device_name, the
+# label flashblade.rules.yml and the alertmanager rulebook read; verify it
+# against the first series the receiver shows). The translation strategy is
+# the default, written out because the generated rule names depend on it:
+# dots become underscores and a unit becomes a suffix.
+global:
+  evaluation_interval: 60s  # the 1 minute policies push every 60 s
+
+otlp:
+  promote_all_resource_attributes: true
+  translation_strategy: UnderscoreEscapingWithSuffixes
+
+storage:
+  tsdb:
+    # pushed samples arrive late when the array retries; accept them
+    out_of_order_time_window: 30m
+
+rule_files:
+  - /etc/prometheus/flashblade.rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["127.0.0.1:9093"]
