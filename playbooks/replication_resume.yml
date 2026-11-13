@@ -1,0 +1,117 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Resume a paused bucket replica link. Called by the replication rulebook
+# (replication_auto_resume true) with target_array, bucket (the local
+# bucket of the link), reason, fb_api_version and alert_log; or by hand:
+#   ansible-playbook -i inventory/local-lab.yml playbooks/replication_resume.yml \
+#       -e target_array=fb-a -e bucket=eda-data -e alert_log=$PWD/alerts.log
+# The link is read first (GET /bucket-replica-links?local_bucket_names=)
+# so that the remote array, the remote bucket and the remote credential
+# everpure.flashblade.purefb_bucket_replica needs come from the array, not
+# from the event; the module then patches paused to false and nothing else
+# (it reuses the link's own target and credential). A link that is not
+# paused, or that does not exist, is recorded and left alone.
+# verify: the credential option takes the bare credential name (the module
+# prefixes the remote array); the link reports it as <remote>/<name>.
+- name: Resume a paused bucket replica link
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    # the bucket name goes into a query string and a module argument
+    - name: Refuse a bucket name that is not plain
+      ansible.builtin.assert:
+        that:
+          - bucket is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+        fail_msg: "bucket {{ bucket | string | truncate(80) }} is not a plain bucket name"
+
+    - name: Read the replica link
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "bucket-replica-links?local_bucket_names={{ bucket }}"
+        fb_rest_ignore_errors: true
+
+    - name: Keep what the array said
+      ansible.builtin.set_fact:
+        link: "{{ (fb_rest_json['items'] | default([{}]))[0] | default({}) }}"
+        read_error: "{{ fb_rest_error | trim }}"
+
+    - name: Decide whether there is anything to resume
+      ansible.builtin.set_fact:
+        link_found: "{{ link.local_bucket is defined }}"
+        link_paused: "{{ link.paused | default(false) | bool }}"
+        remote_name: "{{ link.remote.name | default('') }}"
+        remote_bucket: "{{ link.remote_bucket.name | default(bucket) }}"
+        remote_credential: "{{ link.remote_credentials.name | default('') | regex_replace('^[^/]*/', '') }}"
+
+    - name: Resume the link
+      when: link_found | bool and link_paused | bool
+      everpure.flashblade.purefb_bucket_replica:
+        fb_url: "{{ fb_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ bucket }}"
+        target: "{{ remote_name }}"
+        target_bucket: "{{ remote_bucket }}"
+        credential: "{{ remote_credential }}"
+        paused: false
+        state: present
+      register: resume_result
+      ignore_errors: true
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        resumed: "{{ link_found | bool and link_paused | bool and not (resume_result.failed | default(false)) and (resume_result.changed | default(false)) }}"
+        outcome: >-
+          {{ ('no replica link for bucket ' ~ bucket ~ (': ' ~ read_error if read_error else '')) if not link_found | bool
+             else 'link is not paused (status ' ~ (link.status | default('')) ~ '); nothing to resume' if not link_paused | bool
+             else ('resume refused by the array: ' ~ (resume_result.msg | default('failed') | string | truncate(200))) if resume_result.failed | default(false)
+             else 'resumed' if resume_result.changed | default(false)
+             else 'already running' }}
+
+    - name: Record the resume
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'replication',
+              'severity': 'warning' if resumed | bool else 'info',
+              'array': inventory_hostname, 'bucket': bucket, 'remote': remote_name, 'remote_bucket': remote_bucket,
+              'credential': remote_credential, 'status_before': link.status | default(''),
+              'paused_before': link_paused | bool, 'resumed': resumed | bool,
+              'reason': reason | default('') | trim, 'outcome': outcome | trim, 'changed': resumed | bool} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the outcome
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}/{{ bucket }} -> {{ remote_name }}:{{ remote_bucket }}: resume :: {{ outcome | trim }}"
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'bucket': bucket, 'remote': remote_name,
+              'resumed': resumed | bool, 'outcome': outcome | trim, 'changed': resumed | bool} }}
+      run_once: true
+      delegate_to: localhost

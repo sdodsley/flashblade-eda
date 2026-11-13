@@ -1,0 +1,179 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Point the array's own telemetry at the Prometheus OTLP receiver. Run by
+# hand (and by the lab exit test) with target_array, telemetry_target_name,
+# telemetry_endpoint, telemetry_source, telemetry_transport,
+# telemetry_policies and alert_log:
+#   ansible-playbook -i inventory/local-lab.yml playbooks/telemetry_setup.yml \
+#       -e target_array=fb-a -e @vars/local-lab.yml -e alert_log=$PWD/alerts.log
+# sdodsley.flashblade_eda.purefb_telemetry_target creates the target
+# (endpoint "<host>:<port>[/<path>]" with no scheme, the transport, the
+# source interface the push leaves from, enabled); the array opens a
+# connection at creation and refuses an endpoint nothing listens on, so
+# the receiver must be up first. sdodsley.flashblade_eda.purefb_telemetry_policy
+# then attaches the target to every policy in telemetry_policies: its
+# targets option is the policy's whole list, so the list the array holds is
+# read first (GET /telemetry-metrics-policies) and the new target is added
+# to it, never replacing a target somebody else attached. Last, GET
+# /telemetry-targets/test asks the array to push its dummy metric and say
+# whether it arrived. Telemetry arrived with REST 2.21 (Purity//FB 4.6.4),
+# so the reads ask for that version whatever fb_api_version says. Every
+# step is idempotent; a refusal is recorded, not fatal, so the record says
+# how far the setup got.
+# verify: the success shape of /telemetry-targets/test once a receiver
+# exists (the lab had none; a port that is not one answered 400).
+- name: Set up the telemetry target and its policies
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  vars:
+    telemetry_api_version: "2.21"
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    # names become module arguments and query strings; the endpoint form is
+    # the array's own rule
+    - name: Refuse a target, endpoint, source, transport or policy list the array would not take
+      ansible.builtin.assert:
+        that:
+          - telemetry_target_name is match('^[A-Za-z0-9][A-Za-z0-9_.:-]*$')
+          - telemetry_endpoint | string is match('^(https?://)?[A-Za-z0-9][A-Za-z0-9.-]*:[0-9]+(/[A-Za-z0-9._/-]*)?$')
+          - telemetry_source | string is match('^[A-Za-z0-9][A-Za-z0-9_.:-]*$')
+          - telemetry_transport in ['otlp-http-protobuf', 'otlp-http-protobuf-without-tls']
+          - telemetry_policies is not string and telemetry_policies | length > 0
+          - telemetry_policies | reject('match', '^[A-Za-z0-9][A-Za-z0-9_.-]*$') | list | length == 0
+        fail_msg: >-
+          telemetry_target_name must be a plain name, telemetry_endpoint "<host>:<port>[/<path>]" with an optional scheme,
+          telemetry_source a network interface name, telemetry_transport otlp-http-protobuf or
+          otlp-http-protobuf-without-tls, and telemetry_policies a non-empty list of policy names
+
+    - name: Make sure the telemetry target exists and is enabled
+      sdodsley.flashblade_eda.purefb_telemetry_target:
+        fb_url: "{{ fb_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ telemetry_target_name }}"
+        endpoint: "{{ telemetry_endpoint }}"
+        transport: "{{ telemetry_transport }}"
+        source: "{{ telemetry_source }}"
+        enabled: true
+        state: present
+      register: target_result
+      ignore_errors: true
+
+    - name: Read the metric policies and the targets each one holds
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "telemetry-metrics-policies"
+        fb_rest_api_version: "{{ telemetry_api_version }}"
+        fb_rest_ignore_errors: true
+
+    - name: Lay the policies out as name -> target names
+      ansible.builtin.set_fact:
+        policy_targets: >-
+          {%- set out = {} -%}
+          {%- for p in (fb_rest_json['items'] | default([])) -%}
+          {%- set _ = out.update({p.name: (p.targets | default([], true) | map(attribute='name') | list)}) -%}
+          {%- endfor -%}
+          {{ out }}
+        policies_read_error: "{{ fb_rest_error | trim }}"
+
+    # the module enforces the whole list, so the target is added to what the
+    # array already holds for that policy
+    - name: Attach the target to every listed policy, keeping the targets already there
+      when: not (target_result.failed | default(false))
+      sdodsley.flashblade_eda.purefb_telemetry_policy:
+        fb_url: "{{ fb_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ item }}"
+        targets: "{{ ((policy_targets[item] | default([])) + [telemetry_target_name]) | unique | list }}"
+        state: present
+      loop: "{{ telemetry_policies }}"
+      register: policy_results
+      ignore_errors: true
+
+    - name: Ask the array to push its test metric to the receiver
+      when: not (target_result.failed | default(false))
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "telemetry-targets/test?names={{ telemetry_target_name }}"
+        fb_rest_api_version: "{{ telemetry_api_version }}"
+        fb_rest_ignore_errors: true
+
+    - name: Note what was attached, what failed and what the test said
+      ansible.builtin.set_fact:
+        policies_attached: >-
+          {{ policy_results.results | default([]) | rejectattr('skipped', 'defined') | rejectattr('failed')
+             | map(attribute='item') | list }}
+        policies_changed: >-
+          {{ policy_results.results | default([]) | selectattr('changed', 'defined') | selectattr('changed') | map(attribute='item') | list }}
+        attach_errors: >-
+          {%- set out = [] -%}
+          {%- for r in policy_results.results | default([]) -%}
+          {%- if r.failed | default(false) -%}{%- set _ = out.append(r.item ~ ': ' ~ (r.msg | default('failed') | string | truncate(160))) -%}{%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+        test_status: "{{ fb_rest_status | default(0) if not (target_result.failed | default(false)) else 0 }}"
+        test_error: "{{ (fb_rest_error | default('') | trim) if not (target_result.failed | default(false)) else 'target not created' }}"
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        test_ok: "{{ (test_status | int) == 200 }}"
+        setup_changed: "{{ (target_result.changed | default(false)) or (policies_changed | length) > 0 }}"
+        outcome: >-
+          {{ ('target refused by the array: ' ~ (target_result.msg | default('failed') | string | truncate(200))) if target_result.failed | default(false)
+             else ('target ' ~ ('created' if target_result.changed | default(false) else 'already present')
+                   ~ '; attached to ' ~ (policies_attached | length) ~ ' of ' ~ (telemetry_policies | length) ~ ' policies'
+                   ~ ((' (' ~ (policies_changed | join(', ')) ~ ' changed)') if (policies_changed | length) > 0 else '')
+                   ~ ((' errors: ' ~ (attach_errors | join('; '))) if (attach_errors | length) > 0 else '')
+                   ~ '; test ' ~ ('delivered' if (test_status | int) == 200 else ('failed ' ~ test_status ~ ' ' ~ test_error))) }}
+
+    - name: Record the setup
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'telemetry_setup',
+              'severity': 'info' if not (target_result.failed | default(false)) and (attach_errors | length) == 0 and test_ok | bool else 'warning',
+              'array': inventory_hostname, 'target': telemetry_target_name, 'endpoint': telemetry_endpoint,
+              'transport': telemetry_transport, 'source': telemetry_source,
+              'policies_attached': policies_attached, 'policies_changed': policies_changed, 'attach_errors': attach_errors,
+              'policies_read_error': policies_read_error, 'test_status': test_status | int, 'test_error': test_error,
+              'test_ok': test_ok | bool, 'outcome': outcome | trim, 'changed': setup_changed | bool} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the outcome
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} telemetry target {{ telemetry_target_name }} -> {{ telemetry_endpoint }} :: {{ outcome | trim }}"
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'target': telemetry_target_name, 'endpoint': telemetry_endpoint,
+              'policies_attached': policies_attached, 'test_ok': test_ok | bool,
+              'outcome': outcome | trim, 'changed': setup_changed | bool} }}
+      run_once: true
+      delegate_to: localhost

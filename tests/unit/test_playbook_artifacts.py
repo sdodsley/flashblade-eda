@@ -48,7 +48,27 @@ ARTIFACT_KEYS = {
     "s3_approval.yml": {"request_id", "action", "outcome"},
     "auditor_guard.yml": {"mode", "changed_objects", "outcome"},
     "posture_revert.yml": {"buckets", "reverted"},
+    "telemetry_check.yml": {
+        "verdict",
+        "test_status",
+        "array_reachable",
+        "receiver_reachable",
+    },
+    "telemetry_setup.yml": {"target", "policies_attached", "test_ok"},
+    "quarantine_client.yml": {"client", "action", "file_systems", "changed_count"},
+    "tarpit.yml": {"file_system", "action", "policy", "changed"},
+    "release_locks.yml": {"client", "removed_sessions", "removed_locks"},
+    "replication_resume.yml": {"bucket", "resumed"},
+    "dr_drill.yml": {"drills", "failed_count"},
+    "showback.yml": {"date", "object_key", "file_systems", "buckets"},
+    "selftest.yml": {"checks", "failed"},
+    "renew_certificate.yml": {"certificate", "renewed", "valid_to"},
 }
+
+# playbook -> the task file it includes per loop item; the array work (the
+# resolve, the guard, the token) lives there and is checked as part of the
+# playbook
+INCLUDED_TASKS = {"dr_drill.yml": "tasks/dr_drill_one.yml"}
 
 # playbook -> the array whose credential it must have been given; every
 # playbook addressed with hosts: "{{ target_array }}" compares with
@@ -56,15 +76,17 @@ ARTIFACT_KEYS = {
 CREDENTIAL_ARRAY_CHECKS = {
     "capacity_request.yml": "at_risk_array",
     "capacity_reclaim.yml": "request.array",
+    "dr_drill.yml": "drill.peer",
 }
 CREDENTIAL_GUARD = "credential_array is not defined or credential_array == {}"
 
 RESOLVE_ARRAY = "{{ playbook_dir }}/tasks/resolve_array.yml"
 FB_REST = "{{ playbook_dir }}/tasks/fb_rest.yml"
 # playbook -> the expression it resolves; alert_runbook resolves only for a
-# per-code runbook (its other routes touch no array) and capacity_request
+# per-code runbook (its other routes touch no array), capacity_request
 # only when the array is an inventory host (the request must still be
-# written for one that is not)
+# written for one that is not) and dr_drill resolves each drill's peer in
+# the task file it includes
 RESOLVES = {
     "alert_runbook.yml": "target_array",
     "apply_baseline.yml": "inventory_hostname",
@@ -72,6 +94,7 @@ RESOLVES = {
     "canary.yml": "inventory_hostname",
     "capacity_reclaim.yml": "request.array",
     "capacity_request.yml": "at_risk_array",
+    "dr_drill.yml": "drill.peer",
     "flag_alert.yml": "inventory_hostname",
     "grow_fs.yml": "inventory_hostname",
     "identify_led.yml": "inventory_hostname",
@@ -79,11 +102,20 @@ RESOLVES = {
     "posture_revert.yml": "inventory_hostname",
     "qos_cap.yml": "inventory_hostname",
     "qos_lift.yml": "inventory_hostname",
+    "quarantine_client.yml": "inventory_hostname",
     "reconcile.yml": "inventory_hostname",
+    "release_locks.yml": "inventory_hostname",
     "remediate_dns.yml": "inventory_hostname",
     "remediate_ntp.yml": "inventory_hostname",
+    "renew_certificate.yml": "inventory_hostname",
+    "replication_resume.yml": "inventory_hostname",
     "s3_anomaly.yml": "inventory_hostname",
     "s3_approval.yml": "inventory_hostname",
+    "selftest.yml": "inventory_hostname",
+    "showback.yml": "inventory_hostname",
+    "tarpit.yml": "inventory_hostname",
+    "telemetry_check.yml": "inventory_hostname",
+    "telemetry_setup.yml": "inventory_hostname",
     "user_quota.yml": "inventory_hostname",
 }
 S3_OBJECT = "{{ playbook_dir }}/tasks/s3_object.yml"
@@ -154,25 +186,38 @@ def test_playbook_ends_with_one_set_stats_publishing_the_documented_keys(
     assert not missing, f"{name}: artifacts missing {sorted(missing)}"
 
 
+def _walk_tasks(tasks, out):
+    """Flatten a task list in run order (block, then rescue, then always)."""
+    for task in tasks:
+        if "block" in task:
+            _walk_tasks(task["block"], out)
+            _walk_tasks(task.get("rescue", []), out)
+            _walk_tasks(task.get("always", []), out)
+        else:
+            out.append(task)
+    return out
+
+
 def _ordered_tasks(doc):
     """Every task in run order, blocks flattened (rescue and always last)."""
     out = []
-
-    def walk(tasks):
-        for task in tasks:
-            if "block" in task:
-                walk(task["block"])
-                walk(task.get("rescue", []))
-                walk(task.get("always", []))
-            else:
-                out.append(task)
-
     for play in doc:
         if "import_playbook" in play:
             continue
         for key in ("pre_tasks", "tasks", "post_tasks"):
-            walk(play.get(key, []))
+            _walk_tasks(play.get(key, []), out)
     return out
+
+
+def _playbook_tasks(repo_root, name):
+    """The playbook's tasks followed by those of the task file it includes
+    per item (INCLUDED_TASKS), so the array work in that file is checked
+    with the playbook that runs it."""
+    tasks = _ordered_tasks(_load(repo_root / "playbooks" / name))
+    if name in INCLUDED_TASKS:
+        included = _load(repo_root / "playbooks" / INCLUDED_TASKS[name])
+        tasks = tasks + _walk_tasks(included, [])
+    return tasks
 
 
 def _include_file(task):
@@ -232,13 +277,13 @@ def test_grow_fs_keeps_the_guard_rails(repo_root):
     )
 
 
-def _assert_conditions(doc):
-    out = []
-    for tasks in _all_task_lists(doc):
-        for task in tasks:
-            if "ansible.builtin.assert" in task:
-                out.extend(task["ansible.builtin.assert"]["that"])
-    return out
+def _assert_conditions(tasks):
+    return [
+        condition
+        for task in tasks
+        if "ansible.builtin.assert" in task
+        for condition in task["ansible.builtin.assert"]["that"]
+    ]
 
 
 def test_playbooks_refuse_another_arrays_credential(repo_root):
@@ -250,11 +295,54 @@ def test_playbooks_refuse_another_arrays_credential(repo_root):
         doc = _load(path)
         if isinstance(doc[0], dict) and doc[0].get("hosts") == "{{ target_array }}":
             expected[path.name] = "inventory_hostname"
-    assert len(expected) >= 2 + 10, sorted(expected)
+    assert len(expected) >= 3 + 19, sorted(expected)
     for name, array in sorted(expected.items()):
-        doc = _load(repo_root / "playbooks" / name)
-        conditions = _assert_conditions(doc)
+        conditions = _assert_conditions(_playbook_tasks(repo_root, name))
         assert CREDENTIAL_GUARD.format(array) in conditions, f"{name}: no guard"
+    # the drill resolves its peer's credentials and then checks the guard as
+    # the first two tasks of its block, so a missing entry or a mismatch is
+    # recorded as a failed drill and nothing is promoted on another array
+    drill = _load(repo_root / "playbooks" / INCLUDED_TASKS["dr_drill.yml"])
+    block = next(t for t in drill if "block" in t)
+    assert _include_file(block["block"][0]) == RESOLVE_ARRAY
+    assert block["block"][0]["vars"]["resolve_array_name"] == "{{ drill.peer }}"
+    second = block["block"][1]["ansible.builtin.assert"]["that"]
+    assert CREDENTIAL_GUARD.format("drill.peer") in second
+    # the demote runs in the always, only after this drill promoted, through
+    # the REST helper with the peer's own URL and token
+    demote = next(
+        t
+        for t in _walk_tasks(block["always"], [])
+        if _include_file(t) == FB_REST and t["vars"].get("fb_rest_method") == "PATCH"
+    )
+    assert demote["vars"]["fb_rest_body"] == (
+        "{{ {'requested_promotion_state': 'demoted'} }}"
+    )
+    assert demote["vars"]["fb_rest_url"] == "{{ hostvars[drill.peer].fb_url }}"
+    always_block = next(t for t in block["always"] if "block" in t)
+    assert always_block["when"] == "drill_promoted | bool"
+    record = next(
+        t for t in _walk_tasks(block["always"], []) if "ansible.builtin.lineinfile" in t
+    )
+    line = record["ansible.builtin.lineinfile"]["line"]
+    assert record["ansible.builtin.lineinfile"]["path"] == "{{ alert_log }}"
+    for key in RECORD_KEYS + ("'kind': 'dr_drill'",):
+        assert key in line, f"dr_drill_one.yml: record lacks {key}"
+
+
+def test_fan_out_playbooks_accept_the_rulebooks_host_list(repo_root):
+    """selftest.yml and showback.yml are run by the tick rulebook for every
+    array at once (target_array is a comma list, an Ansible host pattern),
+    so their guard checks membership in that list instead of equality, and
+    still refuses another array's credential."""
+    for name in ("selftest.yml", "showback.yml"):
+        doc = _load(repo_root / "playbooks" / name)
+        assert doc[0]["hosts"] == "{{ target_array }}", name
+        conditions = _assert_conditions(_ordered_tasks(doc))
+        assert "inventory_hostname in (target_array | string | split(','))" in (
+            conditions
+        ), name
+        assert CREDENTIAL_GUARD.format("inventory_hostname") in conditions, name
     # apply_baseline spans every array (hosts: all:!localhost), so instead of
     # an assert that would fail every multi-array launch its first task ends
     # the hosts whose credential is not attached, before any baseline is read
@@ -278,11 +366,11 @@ def test_array_facing_playbooks_resolve_the_array_before_touching_the_token(
     playbooks that never touch an array over REST (notify, orchestrator_post,
     client_diagnose, session_check, landing, lock_on_arrival) never resolve
     one and never name the token or the REST helper (the S3 helper, which
-    takes its keys from the object_store entry, is allowed)."""
+    takes its keys from the object_store entry, is allowed). dr_drill.yml is
+    checked together with the task file it includes per drill."""
     playbooks = repo_root / "playbooks"
     for path in sorted(playbooks.glob("*.yml")):
-        doc = _load(path)
-        tasks = _ordered_tasks(doc)
+        tasks = _playbook_tasks(repo_root, path.name)
         includes = [t for t in tasks if _include_file(t) == RESOLVE_ARRAY]
         if path.name not in RESOLVES:
             assert not includes, f"{path.name}: includes resolve_array.yml"

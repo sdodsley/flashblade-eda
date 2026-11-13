@@ -1,0 +1,178 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The telemetry pipeline went silent: decide where. Called by the
+# Alertmanager rulebook on FlashBladeTelemetrySilent with target_array,
+# alert (the alert name), policy, started_at, telemetry_target_name,
+# prometheus_url, fb_api_version and alert_log; or by hand:
+#   ansible-playbook -i inventory/local-lab.yml playbooks/telemetry_check.yml \
+#       -e target_array=fb-a -e alert=manual -e telemetry_target_name=eda-prom \
+#       -e prometheus_url=http://prom.example.com:9090 -e alert_log=$PWD/alerts.log
+# Four reads, none of which changes anything: the telemetry target (GET
+# /telemetry-targets, REST 2.21), the array's own delivery test (GET
+# /telemetry-targets/test: the array pushes dummy_metric_milliseconds to
+# the receiver and reports whether it arrived), the unauthenticated
+# /api/api_version of the management address (the array is alive) and,
+# when prometheus_url is set, the receiver's query API (the receiver is
+# alive). The verdict is the first that holds:
+#   array     the management address does not answer: the array itself,
+#             not the pipeline (critical)
+#   receiver  Prometheus does not answer (warning)
+#   healthy   the array's test delivered: the silence was transient
+#             (warning, since the alert fired)
+#   pipeline  both ends answer and the test failed: the target is disabled,
+#             its endpoint or source is wrong, or the path between them is
+#             blocked (warning)
+# The alert fired, so one telemetry_check record is written whatever the
+# verdict. Telemetry targets arrived with REST 2.21, so those two reads ask
+# for that version whatever fb_api_version says.
+# verify: the shape of a successful /telemetry-targets/test answer (the lab
+# had no receiver; a port that is not one answered 400 with an empty body).
+- name: Check the telemetry pipeline after a silence alert
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  vars:
+    telemetry_api_version: "2.21"
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    # the target name goes into a query string; the URL is fetched
+    - name: Refuse a target name that is not plain, or a Prometheus URL that is not http(s)
+      ansible.builtin.assert:
+        that:
+          - telemetry_target_name is match('^[A-Za-z0-9][A-Za-z0-9_.:-]*$')
+          - prometheus_url | default('') | string is match('^(https?://[A-Za-z0-9][A-Za-z0-9._:/-]*)?$')
+        fail_msg: >-
+          telemetry_target_name {{ telemetry_target_name | string | truncate(80) }} must be a plain name and
+          prometheus_url {{ prometheus_url | default('') | string | truncate(80) }} an http(s) URL or empty
+
+    - name: Read the telemetry target
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "telemetry-targets?names={{ telemetry_target_name }}"
+        fb_rest_api_version: "{{ telemetry_api_version }}"
+        fb_rest_ignore_errors: true
+
+    - name: Keep what the array said about the target
+      ansible.builtin.set_fact:
+        target_now: "{{ (fb_rest_json['items'] | default([{}]))[0] | default({}) }}"
+        target_status: "{{ fb_rest_status }}"
+        target_error: "{{ fb_rest_error | trim }}"
+
+    - name: Run the array's delivery test against the receiver
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "telemetry-targets/test?names={{ telemetry_target_name }}"
+        fb_rest_api_version: "{{ telemetry_api_version }}"
+        fb_rest_ignore_errors: true
+
+    - name: Keep the test outcome
+      ansible.builtin.set_fact:
+        test_status: "{{ fb_rest_status }}"
+        test_body: "{{ fb_rest_json }}"
+        test_error: "{{ fb_rest_error | trim }}"
+
+    # the versions list needs no token: the management address answering
+    # is the fact wanted, as fb_rest.yml builds the base URL
+    - name: Ask the management address for its API versions
+      ansible.builtin.uri:
+        url: >-
+          {{ fb_url | string | regex_replace('/+$', '') | regex_replace('^(?!https?://)', 'https://') }}/api/api_version
+        method: GET
+        return_content: true
+        validate_certs: "{{ fb_validate_certs | default(false) | bool }}"
+        timeout: 20
+      register: array_probe
+      failed_when: false
+
+    - name: Ask the receiver whether it answers queries
+      when: prometheus_url | default('') | length > 0
+      ansible.builtin.uri:
+        url: "{{ prometheus_url }}/api/v1/query?query=up"
+        method: GET
+        return_content: true
+        timeout: 20
+      register: receiver_probe
+      failed_when: false
+
+    - name: Settle what answered
+      ansible.builtin.set_fact:
+        array_reachable: "{{ (array_probe.status | default(0) | int) == 200 }}"
+        receiver_checked: "{{ (prometheus_url | default('') | length) > 0 }}"
+        receiver_reachable: >-
+          {{ (receiver_probe.status | default(0) | int) == 200 if (prometheus_url | default('') | length) > 0 else true }}
+        target_enabled: "{{ target_now.enabled | default(false) | bool }}"
+        test_delivered: "{{ (test_status | int) == 200 }}"
+
+    - name: Decide the verdict
+      ansible.builtin.set_fact:
+        verdict: >-
+          {{ 'array' if not array_reachable | bool
+             else 'receiver' if receiver_checked | bool and not receiver_reachable | bool
+             else 'healthy' if test_delivered | bool
+             else 'pipeline' }}
+
+    - name: Explain the verdict
+      ansible.builtin.set_fact:
+        outcome: >-
+          {{ 'the management address does not answer /api/api_version: the array, not the pipeline' if verdict | trim == 'array'
+             else ('the receiver at ' ~ prometheus_url ~ ' does not answer: status ' ~ (receiver_probe.status | default(0))) if verdict | trim == 'receiver'
+             else 'the array delivered its test metric: the silence was transient' if verdict | trim == 'healthy'
+             else ('both ends answer but the array could not deliver: target '
+                   ~ (('present, enabled=' ~ target_enabled) if target_now.name is defined else ('not found: ' ~ target_error))
+                   ~ '; test ' ~ test_status ~ ' ' ~ test_error) }}
+
+    - name: Record the check
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'telemetry_check',
+              'severity': 'critical' if verdict | trim == 'array' else 'warning',
+              'array': inventory_hostname, 'alert': alert | default(''), 'policy': policy | default(''),
+              'started_at': started_at | default(''), 'target': telemetry_target_name,
+              'target_found': target_now.name is defined, 'target_enabled': target_enabled | bool,
+              'endpoint': target_now.endpoint | default(''), 'transport': target_now.transport | default(''),
+              'test_status': test_status | int, 'test_body': test_body, 'test_error': test_error,
+              'array_reachable': array_reachable | bool, 'receiver_checked': receiver_checked | bool,
+              'receiver_reachable': receiver_reachable | bool, 'prometheus_url': prometheus_url | default(''),
+              'verdict': verdict | trim, 'outcome': outcome | trim, 'changed': false} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the verdict
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} telemetry silent ({{ alert | default('') }} {{ policy | default('') }}):
+          verdict {{ verdict | trim }} :: {{ outcome | trim }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the verdict as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'alert': alert | default(''), 'verdict': verdict | trim,
+              'test_status': test_status | int, 'array_reachable': array_reachable | bool,
+              'receiver_reachable': receiver_reachable | bool, 'target_enabled': target_enabled | bool,
+              'changed': false} }}
+      run_once: true
+      delegate_to: localhost

@@ -1,0 +1,99 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Recorded-shape replication events for replay through ansible.eda.generic,
+# as purefb_events (signal replication) would emit them: an array
+# connection that has dropped out of connected, a paused bucket replica
+# link, a lagging file system link whose streak has reached the escalation
+# threshold, the same link recovered, and one per-poll summary. REPLAY_ARRAY
+# and REPLAY_PEER (the peer array's name as /array-connections reports it)
+# are substituted with sed when the test builds its vars file. The link and
+# bucket names are the lab's (eda-data, eda-dr-demo); with
+# replication_auto_resume true replication_resume.yml looks for a bucket
+# replica link of eda-data on the array and records that there is none.
+fixture_events:
+  - purefb_array_connection:
+      array: "REPLAY_ARRAY"
+      remote: "REPLAY_PEER"
+      status: connecting
+      previous_status: connected
+      type: async-replication
+      version: 4.5.6
+      replication_addresses:
+        - 192.0.2.7
+      connected: false
+  - purefb_replica_link:
+      array: "REPLAY_ARRAY"
+      kind: bucket
+      local: eda-data
+      remote: "REPLAY_PEER"
+      remote_object: eda-data
+      direction: outbound
+      status: paused
+      status_details: ""
+      paused: true
+      lag_ms: 120000
+      lag_s: 120
+      lagging: false
+      recovery_point_age_s: 660
+      unhealthy: false
+      recovered: false
+      consecutive_issue_polls: 2
+      escalate: false
+  - purefb_replica_link:
+      array: "REPLAY_ARRAY"
+      kind: file_system
+      local: eda-dr-demo
+      remote: "REPLAY_PEER"
+      remote_object: eda-dr-demo
+      direction: outbound
+      status: replicating
+      status_details: ""
+      paused: false
+      lag_ms: 1860000
+      lag_s: 1860
+      lagging: true
+      recovery_point_age_s: 1900
+      unhealthy: false
+      recovered: false
+      consecutive_issue_polls: 5
+      escalate: true
+  - purefb_replica_link:
+      array: "REPLAY_ARRAY"
+      kind: file_system
+      local: eda-dr-demo
+      remote: "REPLAY_PEER"
+      remote_object: eda-dr-demo
+      direction: outbound
+      status: replicating
+      status_details: ""
+      paused: false
+      lag_ms: 32000
+      lag_s: 32
+      lagging: false
+      recovery_point_age_s: 70
+      unhealthy: false
+      recovered: true
+      consecutive_issue_polls: 0
+      escalate: false
+  - purefb_replication:
+      array: "REPLAY_ARRAY"
+      maintenance_active: false
+      connections:
+        - {remote: "REPLAY_PEER", status: connecting, type: async-replication, version: 4.5.6, replication_addresses: [192.0.2.7], management_address: 192.0.2.6, encrypted: false, throttled: false}
+      connection_count: 1
+      connections_down: ["REPLAY_PEER"]
+      targets: []
+      targets_down: []
+      fs_links:
+        - {local_file_system: eda-dr-demo, remote: "REPLAY_PEER", remote_file_system: eda-dr-demo, direction: outbound, status: replicating, status_details: "", lag_ms: 1860000, recovery_point: 1794512130000, recovery_point_age_s: 1900, policies: []}
+      bucket_links:
+        - {local_bucket: eda-data, remote: "REPLAY_PEER", remote_bucket: eda-data, direction: outbound, status: paused, status_details: "", paused: true, lag_ms: 120000, recovery_point: 1794513370000, recovery_point_age_s: 660, backlog_bytes: 0, backlog_ops: 0}
+      fs_link_count: 1
+      bucket_link_count: 1
+      links_unhealthy: []
+      links_paused: [eda-data]
+      links_lagging: [eda-dr-demo]
+      max_lag_ms: 1860000
+      issue_count: 3

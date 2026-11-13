@@ -1,0 +1,264 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Replication as a contract: the array connections to the peers, the S3
+# replication targets, and every file system and bucket replica link with
+# its direction, status, lag and recovery point. The plugin's replication
+# signal emits one purefb_replication summary per array per poll, one
+# purefb_array_connection per connection whose status changed (every
+# connection on the first poll) and one purefb_replica_link per link whose
+# state is worth a rule: not in replication_ok_statuses, paused, or lagging
+# past replication_lag_warn_s; the same link again with recovered true once
+# it leaves the issue set. The plugin keeps the streak
+# (consecutive_issue_polls) and flags escalate at replication_escalate_polls.
+#
+# Connection: not connected -> critical, once an hour per peer; back -> an
+#             info record.
+# Paused:     a paused bucket link is resumed (playbooks/replication_resume.yml,
+#             everpure.flashblade.purefb_bucket_replica paused false) when
+#             replication_auto_resume is true; a paused file system link, or
+#             any paused link with the switch off, is notified. Pausing is a
+#             human act, so the switch defaults to off.
+# Unhealthy:  unhealthy or lagging -> warning once an hour per link; a streak
+#             the plugin escalates -> critical once every six hours.
+# Recovered:  an info record, so the alert log shows the end of the incident.
+# The DR drill (playbooks/dr_drill.yml, promote and demote a replica on the
+# peer) is scheduled by housekeeping.yml, not here.
+# One event matches one rule (the first in order), so the paused rules sit
+# before the unhealthy ones and the escalation before the warning.
+
+- name: FlashBlade replication
+  hosts: all
+
+  sources:
+    - sdodsley.flashblade_eda.purefb_events:
+        arrays: "{{ purefb_arrays }}"
+        signals: [replication]
+        replication_interval: "{{ replication_interval }}"
+        replication_lag_warn_s: "{{ replication_lag_warn_s }}"
+        replication_ok_statuses: "{{ replication_ok_statuses }}"
+        replication_escalate_polls: "{{ replication_escalate_polls }}"
+
+  rules:
+    # A poll that fails once is a blip; one that keeps failing is an array
+    # nobody is watching. The first failure of a streak is recorded at info
+    # (the alert log; under the default Slack floor), once an hour per array
+    # and signal, because health.yml already pages for the array itself and
+    # nine rulebooks poll the same arrays; a streak the plugin flags as
+    # escalated (poll_error_escalate, default 10 polls) pages at critical once
+    # every six hours, since a signal that fails on its own is worth a page.
+    # Anything in between is logged below.
+    - name: Poll failing for many polls - escalate
+      condition: >-
+        event.purefb_poll_error is defined and
+        event.purefb_poll_error.escalate == true
+      throttle:
+        once_within: 6 hours
+        group_by_attributes:
+          - event.purefb_poll_error.array
+          - event.purefb_poll_error.signal
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row"
+            detail: "{{ event.purefb_poll_error.error }}"
+            target_array: "{{ event.purefb_poll_error.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Poll failed - notify once
+      condition: >-
+        event.purefb_poll_error is defined and
+        event.purefb_poll_error.consecutive == 1
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_poll_error.array
+          - event.purefb_poll_error.signal
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: info
+            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed"
+            detail: "{{ event.purefb_poll_error.error }}"
+            target_array: "{{ event.purefb_poll_error.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Report poll errors without acting
+      condition: event.purefb_poll_error is defined
+      action:
+        debug:
+          msg: "poll failed ({{ event.purefb_poll_error.signal }} on {{ event.purefb_poll_error.array }}): {{ event.purefb_poll_error.error }}"
+
+    - name: Array connection not connected - notify
+      condition: >-
+        event.purefb_array_connection.connected is defined and
+        event.purefb_array_connection.connected == false
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_array_connection.array
+          - event.purefb_array_connection.remote
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: >-
+              {{ event.purefb_array_connection.array }} connection to {{ event.purefb_array_connection.remote }}
+              is {{ event.purefb_array_connection.status }}
+            detail: >-
+              type={{ event.purefb_array_connection.type }} version={{ event.purefb_array_connection.version }}
+              replication addresses {{ event.purefb_array_connection.replication_addresses }};
+              was {{ event.purefb_array_connection.previous_status | default('unknown') }}
+            target_array: "{{ event.purefb_array_connection.array }}"
+            alert_log: "{{ alert_log }}"
+
+    # previous_status is absent on the first poll, so a connection that is
+    # simply up is not recorded as having come back
+    - name: Array connection back - log
+      condition: >-
+        event.purefb_array_connection.connected is defined and
+        event.purefb_array_connection.connected == true and
+        event.purefb_array_connection.previous_status is defined and
+        event.purefb_array_connection.previous_status != "connected"
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: info
+            subject: "{{ event.purefb_array_connection.array }} connection to {{ event.purefb_array_connection.remote }} is connected again"
+            detail: "was {{ event.purefb_array_connection.previous_status }}; type={{ event.purefb_array_connection.type }}"
+            target_array: "{{ event.purefb_array_connection.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Replica link paused - resume
+      condition: >-
+        event.purefb_replica_link.paused is defined and
+        event.purefb_replica_link.paused == true and
+        event.purefb_replica_link.kind == "bucket" and
+        vars.replication_auto_resume == true
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_replica_link.array
+          - event.purefb_replica_link.local
+      action:
+        run_playbook:
+          name: playbooks/replication_resume.yml
+          extra_vars:
+            target_array: "{{ event.purefb_replica_link.array }}"
+            bucket: "{{ event.purefb_replica_link.local }}"
+            reason: >-
+              link to {{ event.purefb_replica_link.remote }}:{{ event.purefb_replica_link.remote_object }} paused,
+              status={{ event.purefb_replica_link.status }}, recovery point {{ event.purefb_replica_link.recovery_point_age_s }}s old
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    # file system links have no pause flag to clear from here; a paused one
+    # is a human's doing and is notified whatever the switch says
+    - name: Replica link paused - notify
+      condition: >-
+        event.purefb_replica_link.paused is defined and
+        event.purefb_replica_link.paused == true
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_replica_link.array
+          - event.purefb_replica_link.local
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: >-
+              Replica link {{ event.purefb_replica_link.local }} ->
+              {{ event.purefb_replica_link.remote }}:{{ event.purefb_replica_link.remote_object }} is paused
+            detail: >-
+              {{ event.purefb_replica_link.kind }} link, direction={{ event.purefb_replica_link.direction }},
+              status={{ event.purefb_replica_link.status }}, recovery point {{ event.purefb_replica_link.recovery_point_age_s }}s old;
+              replication_auto_resume={{ replication_auto_resume }}
+            target_array: "{{ event.purefb_replica_link.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Replica link still unhealthy - escalate
+      condition: >-
+        event.purefb_replica_link.escalate is defined and
+        event.purefb_replica_link.escalate == true
+      throttle:
+        once_within: 6 hours
+        group_by_attributes:
+          - event.purefb_replica_link.array
+          - event.purefb_replica_link.local
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: critical
+            subject: >-
+              Replica link {{ event.purefb_replica_link.local }} -> {{ event.purefb_replica_link.remote }}
+              has had an issue ({{ event.purefb_replica_link.status }}, lag {{ event.purefb_replica_link.lag_s }} s) for {{ event.purefb_replica_link.consecutive_issue_polls }} polls
+            detail: >-
+              {{ event.purefb_replica_link.kind }} link, direction={{ event.purefb_replica_link.direction }},
+              lag {{ event.purefb_replica_link.lag_s }}s, recovery point {{ event.purefb_replica_link.recovery_point_age_s }}s old,
+              details={{ event.purefb_replica_link.status_details }}
+            target_array: "{{ event.purefb_replica_link.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Replica link unhealthy or lagging - notify
+      condition: >-
+        event.purefb_replica_link.escalate is defined and
+        event.purefb_replica_link.escalate == false and
+        (event.purefb_replica_link.unhealthy == true or event.purefb_replica_link.lagging == true)
+      throttle:
+        once_within: 1 hour
+        group_by_attributes:
+          - event.purefb_replica_link.array
+          - event.purefb_replica_link.local
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: warning
+            subject: >-
+              Replica link {{ event.purefb_replica_link.local }} -> {{ event.purefb_replica_link.remote }}
+              is {{ event.purefb_replica_link.status }}, lag {{ event.purefb_replica_link.lag_s }}s
+            detail: >-
+              {{ event.purefb_replica_link.kind }} link, direction={{ event.purefb_replica_link.direction }},
+              unhealthy={{ event.purefb_replica_link.unhealthy }} lagging={{ event.purefb_replica_link.lagging }}
+              for {{ event.purefb_replica_link.consecutive_issue_polls }} polls,
+              recovery point {{ event.purefb_replica_link.recovery_point_age_s }}s old,
+              details={{ event.purefb_replica_link.status_details }}
+            target_array: "{{ event.purefb_replica_link.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Replica link recovered - log
+      condition: >-
+        event.purefb_replica_link.recovered is defined and
+        event.purefb_replica_link.recovered == true
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: info
+            subject: "Replica link {{ event.purefb_replica_link.local }} -> {{ event.purefb_replica_link.remote }} recovered"
+            detail: >-
+              {{ event.purefb_replica_link.kind }} link, status={{ event.purefb_replica_link.status }},
+              lag {{ event.purefb_replica_link.lag_s }}s, recovery point {{ event.purefb_replica_link.recovery_point_age_s }}s old
+            target_array: "{{ event.purefb_replica_link.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Replication summary - log
+      condition: event.purefb_replication.issue_count is defined
+      action:
+        debug:
+          msg: >-
+            replication {{ event.purefb_replication.array }}: {{ event.purefb_replication.connection_count }} connection(s),
+            down {{ event.purefb_replication.connections_down }}; targets down {{ event.purefb_replication.targets_down }};
+            {{ event.purefb_replication.fs_link_count }} file system and {{ event.purefb_replication.bucket_link_count }} bucket link(s),
+            unhealthy {{ event.purefb_replication.links_unhealthy }}, paused {{ event.purefb_replication.links_paused }},
+            lagging {{ event.purefb_replication.links_lagging }}, max lag {{ event.purefb_replication.max_lag_ms }} ms;
+            {{ event.purefb_replication.issue_count }} issue(s), maintenance={{ event.purefb_replication.maintenance_active }}

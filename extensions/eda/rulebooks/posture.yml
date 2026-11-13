@@ -16,7 +16,10 @@
 # Everything is notify-only except public buckets: with posture_auto_revert
 # true playbooks/posture_revert.yml blocks public access on them
 # (purefb_bucket block_public_access, block_new_public_policies), a
-# reversible brake that leaves the bucket policy in place. One event
+# reversible brake that leaves the bucket policy in place; and expiring
+# certificates: with certs_auto_renew true playbooks/renew_certificate.yml
+# re-issues a self-signed array certificate for certs_renew_days with its
+# current names (a CA-issued one is recorded for a human). One event
 # carries every finding, so the ruleset matches every rule the event
 # satisfies (match_multiple_rules) rather than the first one; each rule is
 # throttled on its own for 24 hours per array.
@@ -176,6 +179,29 @@
             subject: "{{ event.purefb_posture.expiring_cert_count }} certificate(s) expiring on {{ event.purefb_posture.array }}"
             detail: "{{ event.purefb_posture.expiring_certs }} (days left; negative once expired)"
             target_array: "{{ event.purefb_posture.array }}"
+            alert_log: "{{ alert_log }}"
+
+    # The whole expiring_certs list travels: the playbook renews the
+    # self-signed array certificates among them (purefb_certs generate, the
+    # current common name and alternative names, certs_renew_days) and
+    # records the rest as needing a human.
+    - name: Expiring certificate - renew
+      condition: >-
+        event.purefb_posture.expiring_cert_count is defined and
+        event.purefb_posture.expiring_cert_count > 0 and
+        vars.certs_auto_renew == true
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.purefb_posture.array
+      action:
+        run_playbook:
+          name: playbooks/renew_certificate.yml
+          extra_vars:
+            target_array: "{{ event.purefb_posture.array }}"
+            certificate: "{{ event.purefb_posture.expiring_certs }}"
+            certs_renew_days: "{{ certs_renew_days }}"
+            fb_api_version: "{{ fb_api_version }}"
             alert_log: "{{ alert_log }}"
 
     - name: Bucket without audit coverage - notify

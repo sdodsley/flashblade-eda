@@ -1,0 +1,104 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Release a client's sessions and locks: a dead client whose NFS locks or
+# SMB sessions still hold files is the oldest storage ticket there is. Only
+# ever approved, never automatic: called by the containment approvals
+# webhook with target_array, client, file_system (optional: locks on that
+# file system only), kind (sessions | locks | both, default both), approver
+# and alert_log; or by hand:
+#   ansible-playbook -i inventory/local-lab.yml playbooks/release_locks.yml \
+#       -e target_array=fb-a -e client=192.0.2.10 -e kind=both -e approver=jane -e alert_log=$PWD/alerts.log
+# sdodsley.flashblade_eda.purefb_fs_session lists first and removes only
+# what matched the client (and the file system, for locks); removing a
+# session with open files needs release_disruptive true (the array's own
+# disruptive flag), off unless the approver says so. The record names the
+# approver, because the array's audit log will show the automation's user,
+# not the person who asked.
+- name: Release a client's sessions and locks
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    # the address and the names become module arguments
+    - name: Refuse a client that is not an address, an unknown kind, or a file system name that is not plain
+      ansible.builtin.assert:
+        that:
+          - client | string is match('^[0-9A-Fa-f.:]+$')
+          - kind | default('both') in ['sessions', 'locks', 'both']
+          - (file_system | default('') | length) == 0 or file_system is match('^[A-Za-z0-9][A-Za-z0-9_.:-]*$')
+        fail_msg: >-
+          client {{ client | string | truncate(60) }} must be an IPv4 or IPv6 address, kind sessions, locks or both,
+          and file_system {{ file_system | default('') | string | truncate(80) }} a plain name or empty
+
+    - name: Remove what the client holds
+      sdodsley.flashblade_eda.purefb_fs_session:
+        fb_url: "{{ fb_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        kind: "{{ kind | default('both') }}"
+        client: "{{ client }}"
+        file_system: "{{ file_system if (file_system | default('') | length) > 0 else omit }}"
+        disruptive: "{{ release_disruptive | default(false) | bool }}"
+      register: release_result
+      ignore_errors: true
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        removed_sessions: "{{ release_result.removed.sessions | default(0) | int }}"
+        removed_locks: "{{ release_result.removed.locks | default(0) | int }}"
+        removed_items: "{{ release_result.removed['items'] | default([]) }}"
+        released: "{{ not (release_result.failed | default(false)) and (release_result.changed | default(false)) }}"
+        outcome: >-
+          {{ ('refused by the array: ' ~ (release_result.msg | default('failed') | string | truncate(200))) if release_result.failed | default(false)
+             else ('removed ' ~ (release_result.removed.sessions | default(0)) ~ ' session(s) and '
+                   ~ (release_result.removed.locks | default(0)) ~ ' lock(s)') if release_result.changed | default(false)
+             else 'nothing held by that client' }}
+
+    - name: Record the release
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'release_locks', 'severity': 'warning',
+              'array': inventory_hostname, 'client': client, 'file_system': file_system | default(''),
+              'release_kind': kind | default('both'), 'approver': approver | default(''),
+              'disruptive': release_disruptive | default(false) | bool,
+              'removed_sessions': removed_sessions | int, 'removed_locks': removed_locks | int,
+              'removed_items': removed_items, 'outcome': outcome | trim, 'changed': released | bool} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the release
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: release {{ kind | default('both') }} of {{ client }}
+          {{ ('on ' ~ file_system) if (file_system | default('') | length) > 0 else '' }}
+          approved by {{ approver | default('unknown') }} :: {{ outcome | trim }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'client': client, 'file_system': file_system | default(''),
+              'removed_sessions': removed_sessions | int, 'removed_locks': removed_locks | int,
+              'outcome': outcome | trim, 'changed': released | bool} }}
+      run_once: true
+      delegate_to: localhost

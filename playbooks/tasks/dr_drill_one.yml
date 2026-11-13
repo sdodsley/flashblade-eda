@@ -1,0 +1,296 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# One DR drill (included by dr_drill.yml with `drill`, `drill_date`,
+# object_store, showback_prefix, dr_drill_discard, fb_api_version and
+# alert_log). Runs on localhost against the drill's peer:
+#   1. the marker <showback_prefix>dr/<date>-<file_system>.json in the
+#      source array's state bucket says the drill already ran today: skip
+#   2. the peer's credentials are resolved and the guard checked; the
+#      replica link of the peer's file system must exist and the file
+#      system must be demoted (a replica), or the drill fails here
+#   3. PATCH /file-systems requested_promotion_state promoted, then wait
+#      until the peer reports promotion_status promoted (at most
+#      max_minutes), then read the promoted file system: space, export,
+#      writable
+#   4. always: demote it again (requested_promotion_state demoted, with
+#      discard_non_snapshotted_data only when dr_drill_discard is true; the
+#      drill writes nothing, so there is nothing to discard), wait for
+#      demoted, write the marker, record the drill (info on success,
+#      critical on any failure, a demote that did not complete included)
+# The writes and the one-field reads go through tasks/fb_rest.yml with the
+# peer's URL and token. The waits are everpure.flashblade.purefb_info
+# (filesystems subset, which carries promotion_status) with until/retries,
+# because an included task file cannot be retried; a module read of the
+# peer every 30 s is the price of a wait with a ceiling. A demote is only
+# attempted when this drill promoted, so a replica somebody promoted on
+# purpose before the drill is left as it is and the drill is recorded as
+# failed.
+# verify: a demote without discard is accepted when nothing was written
+# after the promotion (the drill only reads).
+- name: Start the drill with a clean slate
+  ansible.builtin.set_fact:
+    drill_peer_fs: "{{ drill.peer_file_system | default(drill.file_system) }}"
+    drill_minutes: "{{ drill.max_minutes | default(10) | int }}"
+    drill_store: "{{ (object_store | default({}))[drill.array] | default({}) }}"
+    drill_store_known: "{{ drill.array in (object_store | default({})) and ((object_store | default({}))[drill.array].state_bucket | default('') | length) > 0 }}"
+    drill_marker: "{{ showback_prefix | default('showback/') }}dr/{{ drill_date }}-{{ drill.file_system }}.json"
+    drill_error: ""
+    drill_link: {}
+    drill_before: {}
+    drill_after: {}
+    drill_promoted: false
+    drill_demoted: false
+    drill_skipped: false
+    drill_cleanup_error: ""
+    drill_marker_written: false
+
+- name: Look for today's marker of {{ drill.file_system }}
+  when: drill_store_known | bool
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/s3_object.yml"
+  vars:
+    s3_action: head
+    s3_bucket: "{{ drill_store.state_bucket }}"
+    s3_key: "{{ drill_marker }}"
+    s3_identity: state
+    s3_store: "{{ drill_store }}"
+
+- name: Note whether this drill already ran today
+  when: drill_store_known | bool
+  ansible.builtin.set_fact:
+    drill_skipped: "{{ (s3_status | int) == 200 }}"
+
+- name: Promote the replica on the peer, read it, then demote it and record whatever happened
+  when: not drill_skipped | bool
+  block:
+    - name: Resolve the peer's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ drill.peer }}"
+
+    # On Ansible Automation Platform the FlashBlade API credential injects
+    # credential_array and hostvars[<any array>].fb_url points at that array,
+    # so a drill whose peer is another array is failed (and recorded as
+    # critical below) instead of being run on the wrong one. The names go
+    # into query strings and an object key.
+    - name: Refuse a drill with another array's credential attached, or names that are not plain
+      ansible.builtin.assert:
+        that:
+          - credential_array is not defined or credential_array == drill.peer
+          - drill.peer in hostvars
+          - drill.array is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+          - drill.file_system is match('^[A-Za-z0-9][A-Za-z0-9_.:-]*$')
+          - drill_peer_fs is match('^[A-Za-z0-9][A-Za-z0-9_.:-]*$')
+          - drill_minutes | int > 0
+        fail_msg: >-
+          the attached credential is for {{ credential_array | default('') }}, not {{ drill.peer }}; or
+          {{ drill.peer }} is not an inventory host; or the drill's names are not plain names
+
+    - name: Read the replica link of {{ drill_peer_fs }} on the peer
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_url: "{{ hostvars[drill.peer].fb_url }}"
+        fb_rest_token: "{{ hostvars[drill.peer].api_token }}"
+        fb_rest_method: GET
+        fb_rest_path: "file-system-replica-links?local_file_system_names={{ drill_peer_fs }}"
+        fb_rest_ignore_errors: true
+
+    - name: Keep the link
+      ansible.builtin.set_fact:
+        drill_link: "{{ (fb_rest_json['items'] | default([{}]))[0] | default({}) }}"
+        drill_link_error: "{{ fb_rest_error | trim }}"
+
+    - name: Fail the drill when the peer has no replica link for the file system
+      when: drill_link.local_file_system is not defined
+      ansible.builtin.fail:
+        msg: "no replica link for {{ drill_peer_fs }} on {{ drill.peer }}{{ (': ' ~ drill_link_error) if drill_link_error else '' }}"
+
+    - name: Read the file system on the peer before the promotion
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_url: "{{ hostvars[drill.peer].fb_url }}"
+        fb_rest_token: "{{ hostvars[drill.peer].api_token }}"
+        fb_rest_method: GET
+        fb_rest_path: "file-systems?names={{ drill_peer_fs }}"
+
+    - name: Keep the file system before
+      ansible.builtin.set_fact:
+        drill_before: "{{ (fb_rest_json['items'] | default([{}]))[0] | default({}) }}"
+
+    # a replica reads demoted; anything else is somebody's live failover,
+    # not a drill's business
+    - name: Fail the drill when the file system is not a demoted replica
+      when: (drill_before.promotion_status | default('')) != 'demoted'
+      ansible.builtin.fail:
+        msg: "{{ drill_peer_fs }} on {{ drill.peer }} is {{ drill_before.promotion_status | default('unknown') }}, not demoted; not drilling"
+
+    - name: Promote the replica
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_url: "{{ hostvars[drill.peer].fb_url }}"
+        fb_rest_token: "{{ hostvars[drill.peer].api_token }}"
+        fb_rest_method: PATCH
+        fb_rest_path: "file-systems?names={{ drill_peer_fs }}"
+        fb_rest_body: "{{ {'requested_promotion_state': 'promoted'} }}"
+
+    - name: Note that the promotion was accepted, so the demote below must run
+      ansible.builtin.set_fact:
+        drill_promoted: true
+
+    # verify: purefb_info filesystems carries promotion_status for each
+    # file system, keyed by name
+    - name: Wait until the peer reports the file system promoted
+      everpure.flashblade.purefb_info:
+        fb_url: "{{ hostvars[drill.peer].fb_url }}"
+        api_token: "{{ hostvars[drill.peer].api_token }}"
+        disable_warnings: true
+        gather_subset:
+          - filesystems
+      register: peer_info
+      until: (peer_info.purefb_info.filesystems[drill_peer_fs].promotion_status | default('')) == 'promoted'
+      retries: "{{ (drill_minutes | int) * 2 }}"
+      delay: 30
+
+    - name: Read the promoted file system
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_url: "{{ hostvars[drill.peer].fb_url }}"
+        fb_rest_token: "{{ hostvars[drill.peer].api_token }}"
+        fb_rest_method: GET
+        fb_rest_path: "file-systems?names={{ drill_peer_fs }}"
+
+    - name: Keep the file system after
+      ansible.builtin.set_fact:
+        drill_after: "{{ (fb_rest_json['items'] | default([{}]))[0] | default({}) }}"
+  rescue:
+    - name: Keep the failure for the record
+      ansible.builtin.set_fact:
+        drill_error: "{{ ansible_failed_result.msg | default('drill failed') | string | truncate(240) }}"
+  always:
+    - name: Demote the replica again
+      when: drill_promoted | bool
+      block:
+        - name: Demote the file system on the peer
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+          vars:
+            fb_rest_url: "{{ hostvars[drill.peer].fb_url }}"
+            fb_rest_token: "{{ hostvars[drill.peer].api_token }}"
+            fb_rest_method: PATCH
+            fb_rest_path: "file-systems?names={{ drill_peer_fs }}{{ '&discard_non_snapshotted_data=true' if dr_drill_discard | default(false) | bool else '' }}"
+            fb_rest_body: "{{ {'requested_promotion_state': 'demoted'} }}"
+            fb_rest_ignore_errors: true
+
+        - name: Keep the demote outcome
+          ansible.builtin.set_fact:
+            drill_demote_status: "{{ fb_rest_status }}"
+            drill_cleanup_error: "{{ '' if (fb_rest_status | int) == 200 else ('demote refused: ' ~ (fb_rest_error | trim)) }}"
+
+        - name: Wait until the peer reports the file system demoted
+          when: (drill_demote_status | int) == 200
+          everpure.flashblade.purefb_info:
+            fb_url: "{{ hostvars[drill.peer].fb_url }}"
+            api_token: "{{ hostvars[drill.peer].api_token }}"
+            disable_warnings: true
+            gather_subset:
+              - filesystems
+          register: peer_info_after
+          until: (peer_info_after.purefb_info.filesystems[drill_peer_fs].promotion_status | default('')) == 'demoted'
+          retries: "{{ (drill_minutes | int) * 2 }}"
+          delay: 30
+          ignore_errors: true
+
+        - name: Note whether the demote completed
+          ansible.builtin.set_fact:
+            drill_demoted: "{{ (drill_demote_status | int) == 200 and not (peer_info_after.failed | default(false)) }}"
+            drill_cleanup_error: >-
+              {{ drill_cleanup_error if drill_cleanup_error
+                 else ('demote accepted but ' ~ drill_peer_fs ~ ' did not read demoted within ' ~ drill_minutes ~ ' minutes')
+                 if (peer_info_after.failed | default(false)) else '' }}
+      rescue:
+        - name: Keep the cleanup failure for the record
+          ansible.builtin.set_fact:
+            drill_cleanup_error: "{{ ansible_failed_result.msg | default('demote failed') | string | truncate(240) }}"
+
+    - name: Settle the drill's result
+      ansible.builtin.set_fact:
+        drill_result: "{{ 'failed' if drill_error or (drill_promoted | bool and not drill_demoted | bool) else 'ok' }}"
+
+    - name: Write today's marker
+      when: drill_store_known | bool
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/s3_object.yml"
+      vars:
+        s3_action: put
+        s3_bucket: "{{ drill_store.state_bucket }}"
+        s3_key: "{{ drill_marker }}"
+        s3_body: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'dr_drill_marker', 'date': drill_date,
+              'array': drill.array, 'file_system': drill.file_system, 'peer': drill.peer,
+              'peer_file_system': drill_peer_fs, 'result': drill_result,
+              'error': drill_error | trim, 'cleanup_error': drill_cleanup_error | trim} | to_nice_json }}
+        s3_identity: state
+        s3_store: "{{ drill_store }}"
+
+    - name: Note whether the marker was written
+      when: drill_store_known | bool
+      ansible.builtin.set_fact:
+        drill_marker_written: "{{ (s3_status | int) == 200 }}"
+
+    - name: Record the drill
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'dr_drill',
+              'severity': 'critical' if drill_result == 'failed' else 'info',
+              'array': drill.peer, 'source_array': drill.array, 'file_system': drill.file_system,
+              'peer_file_system': drill_peer_fs,
+              'link': {'direction': drill_link.direction | default(''), 'status': drill_link.status | default(''),
+                       'lag_ms': drill_link.lag | default(''), 'recovery_point': drill_link.recovery_point | default(''),
+                       'remote': drill_link.remote.name | default('')},
+              'before': {'promotion_status': drill_before.promotion_status | default(''), 'writable': drill_before.writable | default('')},
+              'after': {'promotion_status': drill_after.promotion_status | default(''), 'writable': drill_after.writable | default(''),
+                        'provisioned': drill_after.provisioned | default(''), 'virtual': drill_after.space.virtual | default(''),
+                        'nfs_rules': drill_after.nfs.rules | default(''), 'export_policy': drill_after.nfs.export_policy.name | default('')},
+              'promoted': drill_promoted | bool, 'demoted': drill_demoted | bool,
+              'marker': drill_marker if drill_store_known | bool else '', 'marker_written': drill_marker_written | bool,
+              'error': drill_error | trim, 'cleanup_error': drill_cleanup_error | trim,
+              'outcome': ('FAILED ' ~ (drill_error | trim if drill_error else drill_cleanup_error | trim)) if drill_result == 'failed'
+                         else 'promoted, read and demoted on ' ~ drill.peer,
+              'changed': drill_promoted | bool} | to_json }}
+
+    - name: Show the drill
+      ansible.builtin.debug:
+        msg: >-
+          DR drill {{ drill.array }}:{{ drill.file_system }} -> {{ drill.peer }}:{{ drill_peer_fs }}:
+          {{ ('FAILED ' ~ (drill_error | trim if drill_error else drill_cleanup_error | trim)) if drill_result == 'failed'
+             else ('OK promoted (writable=' ~ (drill_after.writable | default('?')) ~ ', ' ~ (drill_after.space.virtual | default('?')) ~ ' bytes) and demoted') }}
+
+# drills_done accumulates across the drills dr_drill.yml includes; the
+# artifacts below describe this drill alone and dr_drill.yml replaces them
+# with the whole run at the end (aggregate is off, so the last writer wins).
+- name: Keep this drill for the run's artifacts
+  ansible.builtin.set_fact:
+    drills_done: >-
+      {{ drills_done | default([]) + [{'array': drill.array, 'peer': drill.peer, 'file_system': drill.file_system,
+                                       'peer_file_system': drill_peer_fs,
+                                       'result': 'skipped' if drill_skipped | bool else drill_result | default('failed'),
+                                       'error': (drill_error | trim) if drill_error else (drill_cleanup_error | trim)}] }}
+
+- name: Publish this drill as job artifacts
+  ansible.builtin.set_stats:
+    aggregate: false
+    per_host: false
+    data: >-
+      {{ {'drills': drills_done[-1:], 'failed_count': 1 if (drills_done | last).result == 'failed' else 0} }}
+  run_once: true
+  delegate_to: localhost

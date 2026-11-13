@@ -1,0 +1,83 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Housekeeping: the things that run on a clock, not on an event. One
+# ansible.eda.tick source fires every housekeeping_interval seconds (an
+# hour by default) and every rule below matches every tick
+# (match_multiple_rules); each playbook decides for itself whether there is
+# anything to do at this hour, so a restart of the rulebook never repeats a
+# day's work.
+#
+# Selftest:  playbooks/selftest.yml checks, per array, what the other
+#            rulebooks depend on: REST answers, the state bucket is
+#            reachable, the audit baseline is enabled with members and
+#            filters, the telemetry target exists and is enabled, the
+#            Prometheus receiver is ready. One record per array, critical
+#            when a check fails.
+# Showback:  playbooks/showback.yml writes one ledger a day per array to the
+#            state bucket (<showback_prefix><date>/<array>.json: file
+#            systems, buckets, accounts and totals); an existing ledger for
+#            today is left alone. showback_enabled turns it off.
+# DR drills: playbooks/dr_drill.yml runs every drill in dr_drills at
+#            dr_drill_hour (UTC) once a day: promote the replica on the peer,
+#            read it, demote it, record the result; a marker object in the
+#            state bucket stops a second run the same day.
+# The playbooks fan out over the arrays: target_array is every name in
+# purefb_arrays, comma-joined (an Ansible host pattern), so one tick covers
+# the fleet in one run. By hand they take one array like every other
+# playbook.
+
+- name: FlashBlade housekeeping
+  hosts: all
+  match_multiple_rules: true
+
+  sources:
+    - ansible.eda.tick:
+        delay: "{{ housekeeping_interval }}"
+
+  rules:
+    - name: Hourly selftest
+      condition: event.i is defined
+      action:
+        run_playbook:
+          name: playbooks/selftest.yml
+          extra_vars:
+            target_array: "{{ purefb_arrays | map(attribute='name') | join(',') }}"
+            object_store: "{{ object_store }}"
+            selftest_checks: "{{ selftest_checks }}"
+            audit_baseline: "{{ audit_baseline }}"
+            prometheus_url: "{{ prometheus_url }}"
+            telemetry_target_name: "{{ telemetry_target_name }}"
+            telemetry_endpoint: "{{ telemetry_endpoint }}"
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Daily showback
+      condition: >-
+        event.i is defined and
+        vars.showback_enabled == true
+      action:
+        run_playbook:
+          name: playbooks/showback.yml
+          extra_vars:
+            target_array: "{{ purefb_arrays | map(attribute='name') | join(',') }}"
+            object_store: "{{ object_store }}"
+            showback_bucket: "{{ showback_bucket }}"
+            showback_prefix: "{{ showback_prefix }}"
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: DR drills
+      condition: event.i is defined
+      action:
+        run_playbook:
+          name: playbooks/dr_drill.yml
+          extra_vars:
+            dr_drills: "{{ dr_drills }}"
+            dr_drill_hour: "{{ dr_drill_hour }}"
+            dr_drill_discard: "{{ dr_drill_discard }}"
+            object_store: "{{ object_store }}"
+            showback_prefix: "{{ showback_prefix }}"
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"

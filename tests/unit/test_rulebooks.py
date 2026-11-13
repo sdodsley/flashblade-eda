@@ -29,6 +29,7 @@ SOURCES = {
     "ansible.eda.webhook",
     "ansible.eda.alertmanager",
     "ansible.eda.generic",
+    "ansible.eda.tick",
 }
 # the sources that poll an array and emit purefb_poll_error
 POLLING_SOURCES = (
@@ -163,6 +164,70 @@ REQUIRED_EXTRA_VARS = {
         "alert_log",
     },
     "playbooks/posture_revert.yml": {"target_array", "buckets", "alert_log"},
+    "playbooks/telemetry_check.yml": {
+        "target_array",
+        "alert",
+        "telemetry_target_name",
+        "alert_log",
+    },
+    "playbooks/telemetry_setup.yml": {
+        "target_array",
+        "telemetry_target_name",
+        "telemetry_endpoint",
+        "telemetry_source",
+        "telemetry_transport",
+        "telemetry_policies",
+        "alert_log",
+    },
+    # the exclusion lists have defaults in the playbook, but a rule that
+    # left them out would quarantine the automation's own hosts
+    "playbooks/quarantine_client.yml": {
+        "target_array",
+        "client",
+        "action",
+        "contain_exclude_clients",
+        "contain_exclude_file_systems",
+        "alert_log",
+    },
+    "playbooks/tarpit.yml": {
+        "target_array",
+        "file_system",
+        "action",
+        "tarpit_ops_per_sec",
+        "alert_log",
+    },
+    "playbooks/release_locks.yml": {"target_array", "client", "approver", "alert_log"},
+    "playbooks/replication_resume.yml": {"target_array", "bucket", "alert_log"},
+    "playbooks/dr_drill.yml": {
+        "dr_drills",
+        "dr_drill_hour",
+        "object_store",
+        "showback_prefix",
+        "alert_log",
+    },
+    "playbooks/showback.yml": {
+        "target_array",
+        "object_store",
+        "showback_bucket",
+        "showback_prefix",
+        "alert_log",
+    },
+    "playbooks/selftest.yml": {
+        "target_array",
+        "object_store",
+        "selftest_checks",
+        "audit_baseline",
+        "telemetry_target_name",
+        "telemetry_endpoint",
+        "prometheus_url",
+        "alert_log",
+    },
+    "playbooks/renew_certificate.yml": {
+        "target_array",
+        "certificate",
+        "certs_renew_days",
+        "alert_log",
+    },
 }
 
 # every polling rulebook starts with these three rules, in this order
@@ -310,6 +375,75 @@ def _rules_by_name(path):
         for rule in ruleset.get("rules", []):
             out[rule["name"]] = rule
     return out
+
+
+def test_housekeeping_runs_every_rule_on_each_tick(repo_root):
+    """housekeeping.yml has one tick source and matches every rule per tick
+    (match_multiple_rules), so the selftest, the showback and the drills
+    all run from the same clock; the playbooks decide by hour and date."""
+    doc = yaml.safe_load(
+        (
+            repo_root / "extensions" / "eda" / "rulebooks" / "housekeeping.yml"
+        ).read_text()
+    )
+    assert len(doc) == 1
+    ruleset = doc[0]
+    assert ruleset.get("match_multiple_rules") is True
+    assert [list(s)[0] for s in ruleset["sources"]] == ["ansible.eda.tick"]
+    names = [r["name"] for r in ruleset["rules"]]
+    assert names == ["Hourly selftest", "Daily showback", "DR drills"]
+    for rule in ruleset["rules"]:
+        assert rule["condition"].startswith("event.i is defined"), rule["name"]
+    # the fan-out playbooks get every polled array as one host pattern
+    for rule in ruleset["rules"][:2]:
+        target = rule["action"]["run_playbook"]["extra_vars"]["target_array"]
+        assert target == "{{ purefb_arrays | map(attribute='name') | join(',') }}"
+
+
+def test_containment_acts_only_behind_its_switches(repo_root):
+    """Every acting rule of contain.yml's telemetry ruleset is gated by
+    ir_auto_contain or ir_auto_tarpit, the lift reads the plugin's
+    eda_tarpit flag (not eda_capped, which is client.yml's cap), and the
+    approvals ruleset is a token-protected webhook on locks_port."""
+    doc = yaml.safe_load(
+        (repo_root / "extensions" / "eda" / "rulebooks" / "contain.yml").read_text()
+    )
+    telemetry, approvals = doc
+    acting = {
+        r["name"]: r
+        for r in telemetry["rules"]
+        if r["name"] not in POLL_ERROR_RULES
+        and r["action"]["run_playbook"]["name"] != "playbooks/notify.yml"
+    }
+    assert set(acting) == {
+        "Client holding the array - quarantine",
+        "File system hogging - tarpit",
+        "Tarpitted file system calm - lift",
+    }
+    assert (
+        "vars.ir_auto_contain == true"
+        in acting["Client holding the array - quarantine"]["condition"]
+    )
+    assert (
+        "vars.ir_auto_tarpit == true"
+        in acting["File system hogging - tarpit"]["condition"]
+    )
+    lift = acting["Tarpitted file system calm - lift"]["condition"]
+    assert "eda_tarpit == true" in lift and "eda_capped" not in lift
+    assert "vars.contain_release_normal_polls" in lift
+    source = approvals["sources"][0]["ansible.eda.webhook"]
+    assert source["port"] == "{{ locks_port }}"
+    assert source["token"] == "{{ APPROVAL_TOKEN }}"
+    actions = {
+        r["action"]["run_playbook"]["name"]
+        for r in approvals["rules"]
+        if "run_playbook" in r["action"]
+    }
+    assert actions == {
+        "playbooks/quarantine_client.yml",
+        "playbooks/release_locks.yml",
+        "playbooks/tarpit.yml",
+    }
 
 
 @pytest.mark.parametrize("replay", REPLAYS, ids=lambda p: p.name)

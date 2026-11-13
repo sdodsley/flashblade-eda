@@ -1,0 +1,187 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Renew an expiring self-signed certificate. Called by the posture rulebook
+# (certs_auto_renew true) with target_array, certificate (one name, or the
+# event's expiring_certs list of {name, days_left}), certs_renew_days,
+# fb_api_version and alert_log; or by hand:
+#   ansible-playbook -i inventory/local-lab.yml playbooks/renew_certificate.yml \
+#       -e target_array=fb-a -e certificate=management -e certs_renew_days=365 -e alert_log=$PWD/alerts.log
+# Only a certificate the array issued to itself is renewed (certificate_type
+# array, issued_by equal to issued_to): everpure.flashblade.purefb_certs
+# with generate true re-issues it for certs_renew_days with a new key and
+# the common name, subject alternative names and subject fields read from
+# /certificates, so nothing about its identity changes but the dates. A
+# CA-issued or external certificate is recorded as needing a human: the
+# array cannot renew what somebody else signed. The names are checked
+# against the array's listing, so a name the posture event carried but the
+# array no longer has is recorded, not fatal.
+- name: Renew expiring self-signed certificates
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    # one name, a list of names or the event's list of {name, days_left}
+    - name: Take the certificate names out of the argument
+      ansible.builtin.set_fact:
+        cert_names: >-
+          {%- set out = [] -%}
+          {%- for c in ([certificate] if certificate is string else certificate) -%}
+          {%- set _ = out.append((c.name if c is mapping else c) | string) -%}
+          {%- endfor -%}
+          {{ out | unique | list }}
+
+    # names become query strings and module arguments; the days are sent to
+    # the array
+    - name: Refuse a name that is not plain or a validity that is not a count of days
+      ansible.builtin.assert:
+        that:
+          - cert_names | length > 0
+          - cert_names | reject('match', '^[A-Za-z0-9][A-Za-z0-9_.-]*$') | list | length == 0
+          - certs_renew_days | int > 0
+        fail_msg: >-
+          certificate {{ certificate | string | truncate(120) }} must name one or more certificates and
+          certs_renew_days {{ certs_renew_days | default('') | string | truncate(10) }} be a positive count of days
+
+    - name: Read the array's certificates
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "certificates"
+        fb_rest_ignore_errors: true
+
+    - name: Sort the named certificates into self-signed, foreign and unknown
+      ansible.builtin.set_fact:
+        certs_now: "{{ fb_rest_json['items'] | default([]) | selectattr('name', 'in', cert_names) | list }}"
+        read_error: "{{ fb_rest_error | trim }}"
+
+    # issued_by == issued_to cannot be written as one selectattr test, so
+    # the comparison is spelled out per certificate
+    - name: Keep the self-signed array certificates and the rest
+      ansible.builtin.set_fact:
+        self_signed: >-
+          {%- set out = [] -%}
+          {%- for c in certs_now -%}
+          {%- if (c.certificate_type | default('')) == 'array' and (c.issued_by | default('', true) | length) > 0
+                 and (c.issued_by | default('', true)) == (c.issued_to | default('', true)) -%}
+          {%- set _ = out.append(c) -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+        foreign: >-
+          {%- set out = [] -%}
+          {%- for c in certs_now -%}
+          {%- if not ((c.certificate_type | default('')) == 'array' and (c.issued_by | default('', true) | length) > 0
+                      and (c.issued_by | default('', true)) == (c.issued_to | default('', true))) -%}
+          {%- set _ = out.append(c.name) -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+        unknown: "{{ cert_names | difference(certs_now | map(attribute='name') | list) }}"
+
+    # generate makes a new key and re-issues even when nothing else differs;
+    # the subject fields travel so the identity stays what it was
+    - name: Re-issue each self-signed certificate for the renewal period
+      everpure.flashblade.purefb_certs:
+        fb_url: "{{ fb_url }}"
+        api_token: "{{ api_token }}"
+        disable_warnings: true
+        name: "{{ item.name }}"
+        generate: true
+        days: "{{ certs_renew_days | int }}"
+        common_name: "{{ item.common_name | default(omit, true) }}"
+        subject_alternative_names: "{{ item.subject_alternative_names if (item.subject_alternative_names | default([], true) | length) > 0 else omit }}"
+        country: "{{ item.country | default(omit, true) }}"
+        province: "{{ item.state | default(omit, true) }}"
+        locality: "{{ item.locality | default(omit, true) }}"
+        organization: "{{ item.organization | default(omit, true) }}"
+        org_unit: "{{ item.organizational_unit | default(omit, true) }}"
+        email: "{{ item.email | default(omit, true) }}"
+        state: present
+      loop: "{{ self_signed }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: renew_results
+      ignore_errors: true
+
+    - name: Read the certificates again for the new dates
+      when: self_signed | length > 0
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "certificates"
+        fb_rest_ignore_errors: true
+
+    - name: Note what was renewed, what failed and the new expiry of each
+      ansible.builtin.set_fact:
+        renewed: >-
+          {{ renew_results.results | default([]) | selectattr('changed', 'defined') | selectattr('changed')
+             | map(attribute='item') | map(attribute='name') | list }}
+        renew_errors: >-
+          {%- set out = [] -%}
+          {%- for r in renew_results.results | default([]) -%}
+          {%- if r.failed | default(false) -%}{%- set _ = out.append(r.item.name ~ ': ' ~ (r.msg | default('failed') | string | truncate(160))) -%}{%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+        valid_to: >-
+          {%- set out = {} -%}
+          {%- for c in (fb_rest_json['items'] | default([])) if c.name in cert_names -%}
+          {%- set _ = out.update({c.name: c.valid_to | default('')}) -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        outcome: >-
+          {{ (('renewed ' ~ (renewed | join(', ')) ~ ' for ' ~ certs_renew_days ~ ' days') if (renewed | length) > 0 else '')
+             ~ (('; needs a human (not self-signed by the array): ' ~ (foreign | join(', '))) if (foreign | length) > 0 else '')
+             ~ (('; not on the array: ' ~ (unknown | join(', ')) ~ (' (' ~ read_error ~ ')' if read_error else '')) if (unknown | length) > 0 else '')
+             ~ (('; refused: ' ~ (renew_errors | join('; '))) if (renew_errors | length) > 0 else '')
+             ~ ('nothing to renew' if (renewed | length) == 0 and (foreign | length) == 0 and (unknown | length) == 0 and (renew_errors | length) == 0 else '') }}
+
+    - name: Record the renewal
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'certificate',
+              'severity': 'critical' if (renew_errors | length) > 0 else 'warning' if (foreign | length) > 0 or (unknown | length) > 0 else 'info',
+              'array': inventory_hostname, 'certificates': cert_names, 'renewed': renewed,
+              'needs_human': foreign, 'unknown': unknown, 'errors': renew_errors,
+              'days': certs_renew_days | int, 'valid_to': valid_to,
+              'outcome': outcome | trim, 'changed': (renewed | length) > 0} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the outcome
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} certificates {{ cert_names }}: {{ outcome | trim }}"
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'certificate': cert_names, 'renewed': renewed,
+              'needs_human': foreign, 'valid_to': valid_to, 'outcome': outcome | trim,
+              'changed': (renewed | length) > 0} }}
+      run_once: true
+      delegate_to: localhost

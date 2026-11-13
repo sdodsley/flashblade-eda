@@ -1,0 +1,65 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# DR drill: prove that a replica on the peer can be brought up. For every
+# entry in dr_drills ({array, file_system, peer, peer_file_system,
+# max_minutes}) the peer's copy of the file system is promoted (writable),
+# read, and demoted again, and a dr_drill record says whether that worked;
+# a drill that cannot find the link, cannot promote or cannot demote is
+# the signal that a DR plan has silently stopped working. Called by the
+# housekeeping rulebook every tick with dr_drills, dr_drill_hour,
+# dr_drill_discard, object_store, showback_prefix, fb_api_version and
+# alert_log: the drills run at dr_drill_hour (UTC) and once a day, because
+# tasks/dr_drill_one.yml leaves a marker object
+# <showback_prefix>dr/<date>-<file_system>.json in the source array's state
+# bucket; or by hand, any hour:
+#   ansible-playbook -i inventory/local-lab.yml playbooks/dr_drill.yml \
+#       -e @vars/local-lab.yml -e dr_drill_force=true -e alert_log=$PWD/alerts.log
+# This play runs on localhost: each drill resolves its peer's credentials
+# and reaches it through tasks/fb_rest.yml with that peer's URL and token,
+# the way capacity_request.yml reads an array it is not addressed to.
+- name: DR drills on the replication peers
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Refuse a drill list that is not a list, or an hour outside the day
+      ansible.builtin.assert:
+        that:
+          - dr_drills is not string
+          - dr_drill_hour | default(3) | int >= 0 and dr_drill_hour | default(3) | int <= 23
+        fail_msg: "dr_drills must be a list and dr_drill_hour {{ dr_drill_hour | default('') | string | truncate(10) }} an hour from 0 to 23"
+
+    - name: Pin the date and decide whether this is the drill hour
+      ansible.builtin.set_fact:
+        drill_date: "{{ now(utc=true).strftime('%Y-%m-%d') }}"
+        drill_due: "{{ (dr_drill_force | default(false) | bool) or (now(utc=true).hour | int) == (dr_drill_hour | default(3) | int) }}"
+        drills_done: []
+
+    - name: Note a tick outside the drill hour
+      when: not drill_due | bool
+      ansible.builtin.debug:
+        msg: "not the drill hour ({{ dr_drill_hour | default(3) }}:00 UTC); {{ dr_drills | length }} drill(s) wait"
+
+    - name: Run each drill on its peer
+      when: drill_due | bool
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/dr_drill_one.yml"
+      loop: "{{ dr_drills }}"
+      loop_control:
+        loop_var: drill
+        label: "{{ drill.array }}:{{ drill.file_system }} -> {{ drill.peer }}"
+
+    # Job artifacts for a workflow or orchestrator node that follows this one:
+    # one {array, peer, file_system, result, error} per drill (collected by
+    # dr_drill_one.yml) and how many failed.
+    - name: Publish the drills as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'drills': drills_done | default([]),
+              'failed_count': drills_done | default([]) | selectattr('result', 'equalto', 'failed') | list | length,
+              'due': drill_due | bool, 'date': drill_date} }}
+      run_once: true
+      delegate_to: localhost

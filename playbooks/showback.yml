@@ -1,0 +1,209 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The daily showback ledger: what every file system, bucket and object
+# store account occupies, written once a day to the array's own state
+# bucket as <showback_prefix><yyyy-mm-dd>/<array>.json {date, array,
+# file_systems[], buckets[], accounts[], totals}. Called by the housekeeping
+# rulebook every tick with target_array (every array in purefb_arrays,
+# comma-joined, so one run covers the fleet), object_store,
+# showback_bucket, showback_prefix, fb_api_version and alert_log; or by
+# hand for one array:
+#   ansible-playbook -i inventory/local-lab.yml playbooks/showback.yml \
+#       -e target_array=fb-a -e @vars/local-lab.yml -e alert_log=$PWD/alerts.log
+# Three reads (GET /file-systems, /buckets, /object-store-accounts, live
+# objects only) through tasks/fb_rest.yml; the ledger goes to the bucket
+# through tasks/s3_object.yml with the state key, and a ledger that already
+# exists for today is left alone, so a tick every hour writes one object a
+# day. An array without an object_store entry gets the totals in its record
+# and no object. The figures are the array's own space fields (virtual,
+# unique, snapshots; bytes), named as the array names them.
+- name: Write the daily showback ledger
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  vars:
+    store: "{{ (object_store | default({}))[inventory_hostname] | default({}) }}"
+    ledger_date: "{{ now(utc=true).strftime('%Y-%m-%d') }}"
+    ledger_bucket: "{{ showback_bucket | default('', true) or store.state_bucket | default('') }}"
+    ledger_key: "{{ showback_prefix | default('showback/') }}{{ ledger_date }}/{{ inventory_hostname }}.json"
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    # the rulebook names every array at once (a comma list), a hand run one
+    - name: Refuse a host the rulebook did not name, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname in (target_array | string | split(','))
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          {{ inventory_hostname }} is not in target_array {{ target_array | string | truncate(80) }},
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    # the bucket and the prefix become an object key
+    - name: Refuse a bucket name or a prefix that is not plain
+      ansible.builtin.assert:
+        that:
+          - (ledger_bucket | length) == 0 or ledger_bucket is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+          - showback_prefix | default('showback/') is match('^[A-Za-z0-9][A-Za-z0-9._/-]*/$')
+        fail_msg: >-
+          showback_bucket {{ ledger_bucket | string | truncate(80) }} must be a plain bucket name and
+          showback_prefix {{ showback_prefix | default('') | string | truncate(80) }} a plain prefix ending in /
+
+    - name: Decide whether the ledger can be written
+      ansible.builtin.set_fact:
+        store_known: "{{ inventory_hostname in (object_store | default({})) and (ledger_bucket | length) > 0 }}"
+        ledger_exists: false
+
+    - name: Look for today's ledger
+      when: store_known | bool
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/s3_object.yml"
+      vars:
+        s3_action: head
+        s3_bucket: "{{ ledger_bucket }}"
+        s3_key: "{{ ledger_key }}"
+        s3_identity: state
+        s3_store: "{{ store }}"
+
+    - name: Note whether today's ledger is already there
+      when: store_known | bool
+      ansible.builtin.set_fact:
+        ledger_exists: "{{ (s3_status | int) == 200 }}"
+
+    - name: Read the live file systems
+      when: not ledger_exists | bool
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "file-systems?destroyed=false"
+        fb_rest_ignore_errors: true
+
+    - name: Keep the file systems
+      ansible.builtin.set_fact:
+        fs_items: "{{ (fb_rest_json['items'] | default([])) if not ledger_exists | bool else [] }}"
+        fs_error: "{{ (fb_rest_error | trim) if not ledger_exists | bool else '' }}"
+
+    - name: Read the live buckets
+      when: not ledger_exists | bool
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "buckets?destroyed=false"
+        fb_rest_ignore_errors: true
+
+    - name: Keep the buckets
+      ansible.builtin.set_fact:
+        bucket_items: "{{ (fb_rest_json['items'] | default([])) if not ledger_exists | bool else [] }}"
+        bucket_error: "{{ (fb_rest_error | trim) if not ledger_exists | bool else '' }}"
+
+    - name: Read the object store accounts
+      when: not ledger_exists | bool
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "object-store-accounts"
+        fb_rest_ignore_errors: true
+
+    - name: Keep the accounts
+      ansible.builtin.set_fact:
+        account_items: "{{ (fb_rest_json['items'] | default([])) if not ledger_exists | bool else [] }}"
+        account_error: "{{ (fb_rest_error | trim) if not ledger_exists | bool else '' }}"
+
+    # the figures are the array's own space fields, in bytes; a field the
+    # array did not return counts as 0 so one missing value never empties
+    # the ledger
+    - name: Build the ledger
+      ansible.builtin.set_fact:
+        ledger: >-
+          {%- set fs = [] -%}
+          {%- for f in fs_items -%}
+          {%- set _ = fs.append({'name': f.name, 'provisioned': f.provisioned | default(0, true) | int,
+                                 'virtual': f.space.virtual | default(0, true) | int, 'unique': f.space.unique | default(0, true) | int,
+                                 'snapshots': f.space.snapshots | default(0, true) | int,
+                                 'hard_limit_enabled': f.hard_limit_enabled | default(false) | bool,
+                                 'qos_policy': f.qos_policy.name | default('', true)}) -%}
+          {%- endfor -%}
+          {%- set bk = [] -%}
+          {%- for b in bucket_items -%}
+          {%- set _ = bk.append({'name': b.name, 'account': b.account.name | default('', true),
+                                 'virtual': b.space.virtual | default(0, true) | int, 'unique': b.space.unique | default(0, true) | int,
+                                 'object_count': b.object_count | default(0, true) | int,
+                                 'quota_limit': b.quota_limit | default(0, true) | int,
+                                 'hard_limit_enabled': b.hard_limit_enabled | default(false) | bool}) -%}
+          {%- endfor -%}
+          {%- set ac = [] -%}
+          {%- for a in account_items -%}
+          {%- set _ = ac.append({'name': a.name, 'virtual': a.space.virtual | default(0, true) | int,
+                                 'unique': a.space.unique | default(0, true) | int,
+                                 'object_count': a.object_count | default(0, true) | int,
+                                 'quota_limit': a.quota_limit | default(0, true) | int}) -%}
+          {%- endfor -%}
+          {{ {'date': ledger_date, 'array': inventory_hostname, 'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'),
+              'file_systems': fs, 'buckets': bk, 'accounts': ac,
+              'totals': {'file_systems': fs | length, 'buckets': bk | length, 'accounts': ac | length,
+                         'fs_provisioned_bytes': fs | map(attribute='provisioned') | sum,
+                         'fs_virtual_bytes': fs | map(attribute='virtual') | sum,
+                         'fs_unique_bytes': fs | map(attribute='unique') | sum,
+                         'bucket_virtual_bytes': bk | map(attribute='virtual') | sum,
+                         'bucket_unique_bytes': bk | map(attribute='unique') | sum,
+                         'bucket_objects': bk | map(attribute='object_count') | sum},
+              'read_errors': [fs_error, bucket_error, account_error] | reject('equalto', '') | list} }}
+
+    - name: Write the ledger to the state bucket
+      when: store_known | bool and not ledger_exists | bool
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/s3_object.yml"
+      vars:
+        s3_action: put
+        s3_bucket: "{{ ledger_bucket }}"
+        s3_key: "{{ ledger_key }}"
+        s3_body: "{{ ledger | to_nice_json }}"
+        s3_identity: state
+        s3_store: "{{ store }}"
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        written: "{{ store_known | bool and not ledger_exists | bool and (s3_status | int) == 200 }}"
+        outcome: >-
+          {{ ('ledger for ' ~ ledger_date ~ ' already written; left alone') if ledger_exists | bool
+             else ('ledger not written: ' ~ inventory_hostname ~ ' has no object_store entry or state bucket') if not store_known | bool
+             else ('ledger written to s3://' ~ ledger_bucket ~ '/' ~ ledger_key) if (s3_status | int) == 200
+             else ('ledger put refused: ' ~ (s3_error | default('') | trim)) }}
+
+    - name: Record the ledger
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'showback', 'severity': 'info',
+              'array': inventory_hostname, 'date': ledger_date, 'bucket': ledger_bucket,
+              'object_key': ledger_key if store_known | bool else '', 'written': written | bool,
+              'already_written': ledger_exists | bool, 'totals': ledger.totals | default({}),
+              'read_errors': ledger.read_errors | default([]), 'outcome': outcome | trim,
+              'changed': written | bool} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the outcome
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} showback {{ ledger_date }}: {{ ledger.totals | default({}) }} :: {{ outcome | trim }}"
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the ledger as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'date': ledger_date, 'object_key': ledger_key if store_known | bool else '',
+              'file_systems': ledger.totals.file_systems | default(0), 'buckets': ledger.totals.buckets | default(0),
+              'written': written | bool, 'outcome': outcome | trim, 'changed': written | bool} }}
+      run_once: true
+      delegate_to: localhost

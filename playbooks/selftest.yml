@@ -1,0 +1,280 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Self-test: is what the rulebooks depend on still there? Called by the
+# housekeeping rulebook every tick with target_array (every array in
+# purefb_arrays, comma-joined, so one run covers the fleet), object_store,
+# selftest_checks, audit_baseline, prometheus_url, telemetry_target_name,
+# telemetry_endpoint, fb_api_version and alert_log; or by hand for one
+# array:
+#   ansible-playbook -i inventory/local-lab.yml playbooks/selftest.yml \
+#       -e target_array=fb-a -e @vars/local-lab.yml -e alert_log=$PWD/alerts.log
+# The checks (selftest_checks picks them):
+#   rest        GET /arrays answers through tasks/fb_rest.yml
+#   s3          the state bucket answers: a get of the object-audit cursor
+#               copy (cursors/object_audit/<array>.json) with the state key
+#               is ok at 200 or 404, failed when the endpoint or the key is
+#               refused; skipped for an array without an object_store entry
+#   audit       the audit_baseline policy is enabled, has members and every
+#               baseline bucket carries a filter
+#   telemetry   the telemetry target exists and is enabled (REST 2.21);
+#               skipped while telemetry_endpoint is empty and on an array
+#               whose REST does not serve 2.21
+#   prometheus  <prometheus_url>/-/ready answers 200; skipped while empty
+# Nothing is changed. One selftest record per array, critical when a check
+# failed, info otherwise, with every check's result in it.
+- name: Self-test the automation's dependencies
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  vars:
+    store: "{{ (object_store | default({}))[inventory_hostname] | default({}) }}"
+    checks: "{{ selftest_checks | default(['rest', 's3', 'audit', 'telemetry', 'prometheus']) }}"
+    telemetry_api_version: "2.21"
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    # the rulebook names every array at once (a comma list), a hand run one
+    - name: Refuse a host the rulebook did not name, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname in (target_array | string | split(','))
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          {{ inventory_hostname }} is not in target_array {{ target_array | string | truncate(80) }},
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    # names go into query strings; the URL is fetched
+    - name: Refuse a check list, a target name, a baseline or a Prometheus URL that is not what the checks expect
+      ansible.builtin.assert:
+        that:
+          - checks is not string
+          - checks | difference(['rest', 's3', 'audit', 'telemetry', 'prometheus']) | length == 0
+          - telemetry_target_name | default('eda-prom') is match('^[A-Za-z0-9][A-Za-z0-9_.:-]*$')
+          - prometheus_url | default('') | string is match('^(https?://[A-Za-z0-9][A-Za-z0-9._:/-]*)?$')
+          - "'audit' not in checks or (audit_baseline is mapping and audit_baseline.policy | default('') is match('^[A-Za-z0-9][A-Za-z0-9._-]*$'))"
+        fail_msg: >-
+          selftest_checks must be a list out of rest, s3, audit, telemetry and prometheus, telemetry_target_name a
+          plain name, prometheus_url an http(s) URL or empty, and audit_baseline (for the audit check) a mapping with
+          a plain policy name
+
+    - name: Start with no results
+      ansible.builtin.set_fact:
+        results: {}
+
+    - name: Check that REST answers
+      when: "'rest' in checks"
+      block:
+        - name: Read the array
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+          vars:
+            fb_rest_method: GET
+            fb_rest_path: "arrays"
+            fb_rest_ignore_errors: true
+
+        - name: Keep the rest result
+          ansible.builtin.set_fact:
+            results: >-
+              {{ results | combine({'rest': {'ok': (fb_rest_status | int) == 200, 'skipped': false,
+                                             'detail': ('Purity//FB ' ~ ((fb_rest_json['items'] | default([{}]))[0].version | default('?')))
+                                                       if (fb_rest_status | int) == 200 else (fb_rest_status ~ ' ' ~ fb_rest_error | trim)}}) }}
+
+    - name: Check that the state bucket answers
+      when: "'s3' in checks"
+      block:
+        - name: Read the object-audit cursor copy
+          when: inventory_hostname in (object_store | default({})) and store.state_bucket is defined
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/tasks/s3_object.yml"
+          vars:
+            s3_action: get
+            s3_bucket: "{{ store.state_bucket }}"
+            s3_key: "cursors/object_audit/{{ inventory_hostname }}.json"
+            s3_identity: state
+            s3_store: "{{ store }}"
+
+        # 404 is a bucket that answers without a cursor yet; 0 is no answer
+        - name: Keep the s3 result
+          ansible.builtin.set_fact:
+            results: >-
+              {{ results | combine({'s3': {'ok': (s3_status | default(0) | int) in [200, 404],
+                                           'skipped': false,
+                                           'detail': ('cursor present' if (s3_status | default(0) | int) == 200
+                                                      else 'bucket answers, no cursor yet' if (s3_status | default(0) | int) == 404
+                                                      else (s3_status | default(0) | string) ~ ' ' ~ (s3_error | default('') | trim))}
+                                    if inventory_hostname in (object_store | default({})) and store.state_bucket is defined
+                                    else {'ok': true, 'skipped': true, 'detail': 'no object_store entry for this array'}}) }}
+
+    - name: Check the audit configuration
+      when: "'audit' in checks"
+      block:
+        - name: Read the audit policy
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+          vars:
+            fb_rest_method: GET
+            fb_rest_path: "audit-object-store-policies?names={{ audit_baseline.policy }}"
+            fb_rest_api_version: "2.20"  # the object-audit endpoints arrived with REST 2.20
+            fb_rest_ignore_errors: true
+
+        - name: Keep the policy
+          ansible.builtin.set_fact:
+            audit_policy: "{{ ((fb_rest_json['items'] if 'items' in fb_rest_json else []) + [{}])[0] }}"
+            audit_policy_error: "{{ fb_rest_error | trim }}"
+
+        - name: Read the policy's members
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+          vars:
+            fb_rest_method: GET
+            fb_rest_path: "audit-object-store-policies/members?policy_names={{ audit_baseline.policy }}"
+            fb_rest_api_version: "2.20"  # the object-audit endpoints arrived with REST 2.20
+            fb_rest_ignore_errors: true
+
+        - name: Keep the members
+          ansible.builtin.set_fact:
+            audit_members: "{{ (fb_rest_json['items'] if 'items' in fb_rest_json else []) | map(attribute='member.name') | list }}"
+
+        # one listing for every bucket: the filters are checked per
+        # baseline bucket below
+        - name: Read every bucket audit filter
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+          vars:
+            fb_rest_method: GET
+            fb_rest_path: "buckets/audit-filters"
+            fb_rest_api_version: "2.20"  # the object-audit endpoints arrived with REST 2.20
+            fb_rest_ignore_errors: true
+
+        - name: Keep the buckets that carry a filter
+          ansible.builtin.set_fact:
+            filtered_buckets: "{{ (fb_rest_json['items'] if 'items' in fb_rest_json else []) | selectattr('bucket.name', 'defined') | map(attribute='bucket.name') | unique | list }}"
+
+        - name: Keep the audit result
+          ansible.builtin.set_fact:
+            audit_missing_filters: "{{ audit_baseline.buckets | default([]) | difference(filtered_buckets) }}"
+            audit_ok: >-
+              {{ audit_policy.name is defined and (audit_policy.enabled | default(false) | bool)
+                 and (audit_members | length) > 0
+                 and (audit_baseline.buckets | default([]) | difference(filtered_buckets) | length) == 0 }}
+
+        - name: Describe the audit result
+          ansible.builtin.set_fact:
+            results: >-
+              {{ results | combine({'audit': {'ok': audit_ok | bool, 'skipped': false,
+                                              'detail': ('policy ' ~ audit_baseline.policy ~ ' not found: ' ~ audit_policy_error) if audit_policy.name is not defined
+                                                        else ('policy ' ~ audit_baseline.policy ~ ' enabled=' ~ (audit_policy.enabled | default(false))
+                                                              ~ ' members=' ~ (audit_members | join(','))
+                                                              ~ ((' buckets without a filter: ' ~ (audit_missing_filters | join(','))) if (audit_missing_filters | length) > 0 else ''))}}) }}
+
+    - name: Check the telemetry target
+      when: "'telemetry' in checks"
+      block:
+        # the versions list needs no token; telemetry needs REST 2.21
+        - name: Ask the management address for its API versions
+          when: telemetry_endpoint | default('') | length > 0
+          ansible.builtin.uri:
+            url: >-
+              {{ fb_url | string | regex_replace('/+$', '') | regex_replace('^(?!https?://)', 'https://') }}/api/api_version
+            method: GET
+            return_content: true
+            validate_certs: "{{ fb_validate_certs | default(false) | bool }}"
+            timeout: 20
+          register: version_probe
+          failed_when: false
+
+        - name: Decide whether this array can hold a telemetry target
+          ansible.builtin.set_fact:
+            telemetry_wanted: >-
+              {{ (telemetry_endpoint | default('') | length) > 0
+                 and telemetry_api_version in (version_probe.json.versions | default([])) }}
+
+        - name: Read the telemetry target
+          when: telemetry_wanted | bool
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+          vars:
+            fb_rest_method: GET
+            fb_rest_path: "telemetry-targets?names={{ telemetry_target_name | default('eda-prom') }}"
+            fb_rest_api_version: "{{ telemetry_api_version }}"
+            fb_rest_ignore_errors: true
+
+        - name: Keep the telemetry result
+          ansible.builtin.set_fact:
+            results: >-
+              {{ results | combine({'telemetry': {'ok': true, 'skipped': true, 'detail': 'telemetry_endpoint is empty'}
+                                    if (telemetry_endpoint | default('') | length) == 0
+                                    else {'ok': true, 'skipped': true, 'detail': 'the array does not serve REST ' ~ telemetry_api_version}
+                                    if not telemetry_wanted | bool
+                                    else {'ok': (fb_rest_status | int) == 200 and ((fb_rest_json['items'] | default([{}]))[0].enabled | default(false) | bool),
+                                          'skipped': false,
+                                          'detail': ('target ' ~ (telemetry_target_name | default('eda-prom')) ~ ' enabled=' ~ ((fb_rest_json['items'] | default([{}]))[0].enabled | default(false))
+                                                     ~ ' endpoint=' ~ ((fb_rest_json['items'] | default([{}]))[0].endpoint | default(''))) if (fb_rest_status | int) == 200
+                                                    else (fb_rest_status ~ ' ' ~ (fb_rest_error | trim))}}) }}
+
+    - name: Check the Prometheus receiver
+      when: "'prometheus' in checks"
+      block:
+        - name: Ask Prometheus whether it is ready
+          when: prometheus_url | default('') | length > 0
+          ansible.builtin.uri:
+            url: "{{ prometheus_url }}/-/ready"
+            method: GET
+            return_content: true
+            timeout: 20
+          register: prometheus_probe
+          failed_when: false
+
+        - name: Keep the prometheus result
+          ansible.builtin.set_fact:
+            results: >-
+              {{ results | combine({'prometheus': {'ok': true, 'skipped': true, 'detail': 'prometheus_url is empty'}
+                                    if (prometheus_url | default('') | length) == 0
+                                    else {'ok': (prometheus_probe.status | default(0) | int) == 200, 'skipped': false,
+                                          'detail': prometheus_url ~ '/-/ready ' ~ (prometheus_probe.status | default(0) | string)}}) }}
+
+    - name: Count the failures
+      ansible.builtin.set_fact:
+        failed: >-
+          {%- set out = [] -%}
+          {%- for name, r in results.items() if not r.ok -%}{%- set _ = out.append(name) -%}{%- endfor -%}
+          {{ out }}
+        skipped: >-
+          {%- set out = [] -%}
+          {%- for name, r in results.items() if r.skipped -%}{%- set _ = out.append(name) -%}{%- endfor -%}
+          {{ out }}
+
+    - name: Record the self-test
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'selftest',
+              'severity': 'critical' if (failed | length) > 0 else 'info',
+              'array': inventory_hostname, 'checks': results, 'failed': failed, 'skipped': skipped,
+              'outcome': ('failed: ' ~ (failed | join(', '))) if (failed | length) > 0 else 'all checks passed',
+              'changed': false} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the self-test
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} selftest: {{ 'FAILED ' ~ (failed | join(', ')) if (failed | length) > 0 else 'ok' }}
+          {{ ('(skipped ' ~ (skipped | join(', ')) ~ ')') if (skipped | length) > 0 else '' }} :: {{ results }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the self-test as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'checks': results, 'failed': failed, 'skipped': skipped,
+              'changed': false} }}
+      run_once: true
+      delegate_to: localhost

@@ -1,0 +1,68 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Recorded-shape telemetry events for replay through ansible.eda.generic
+# against the containment rules: one NFS client holding 90 % of the array's
+# ops for three polls while the array's write latency is 2.6 times the same
+# half hour last week, the file system it writes to holding the same share
+# with no QoS policy, and a second file system that carries the eda-tarpit
+# policy and has been quiet for ten polls. REPLAY_ARRAY and REPLAY_CLIENT
+# (the client's address as the array reports it; the lab VM is exported on
+# eda-demo-quota through the legacy rule string) are substituted with sed
+# when the test builds its vars file. The tarpit lift on eda-dr-demo finds
+# no policy on the array and records that.
+fixture_events:
+  - purefb_client_performance:
+      array: "REPLAY_ARRAY"
+      client: "REPLAY_CLIENT"
+      client_port: "893"
+      protocol: nfs
+      reads_per_sec: 1200.0
+      writes_per_sec: 38500.0
+      others_per_sec: 300.0
+      read_bytes_per_sec: 9830400.0
+      write_bytes_per_sec: 4200000000.0
+      usec_per_read_op: 410.0
+      usec_per_write_op: 2900.0
+      usec_per_other_op: 150.0
+      ops_share_pct: 90.4
+      high_share_polls: 3
+      normal_polls: 0
+      array_usec_per_write_op: 2700.0
+      array_write_latency_ratio: 2.6
+      baseline_known: true
+  - purefb_fs_performance:
+      array: "REPLAY_ARRAY"
+      file_system: eda-demo-quota
+      reads_per_sec: 1200.0
+      writes_per_sec: 38200.0
+      others_per_sec: 280.0
+      read_bytes_per_sec: 9830400.0
+      write_bytes_per_sec: 4150000000.0
+      usec_per_read_op: 400.0
+      usec_per_write_op: 2850.0
+      usec_per_other_op: 140.0
+      ops_share_pct: 91.0
+      qos_policy: ""
+      eda_capped: false
+      eda_tarpit: false
+      high_share_polls: 3
+      normal_polls: 0
+  - purefb_fs_performance:
+      array: "REPLAY_ARRAY"
+      file_system: eda-dr-demo
+      reads_per_sec: 12.0
+      writes_per_sec: 40.0
+      others_per_sec: 3.0
+      read_bytes_per_sec: 98304.0
+      write_bytes_per_sec: 1310720.0
+      usec_per_read_op: 380.0
+      usec_per_write_op: 900.0
+      usec_per_other_op: 120.0
+      ops_share_pct: 1.8
+      qos_policy: eda-tarpit
+      eda_capped: false
+      eda_tarpit: true
+      high_share_polls: 0
+      normal_polls: 10

@@ -1,0 +1,73 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Alertmanager webhook alerts for replay through ansible.eda.generic, in
+# the shape ansible.eda.alertmanager hands them on (one event per alert,
+# the alert under event.alert with status, labels, annotations and the
+# timestamps): a telemetry silence for one policy, a capacity threshold,
+# and a latency alert resolving. The labels are what
+# prometheus/flashblade.rules.yml sets: severity, domain, policy and the
+# fixed array_name copied from the device_name resource attribute.
+# REPLAY_ARRAY is substituted with sed when the test builds its vars file;
+# telemetry_check.yml runs against that array and capacity_request.yml
+# writes a request for it.
+fixture_events:
+  - alert:
+      status: firing
+      labels:
+        alertname: FlashBladeTelemetrySilent
+        severity: critical
+        domain: telemetry
+        policy: device_perf_metrics
+        array_name: "REPLAY_ARRAY"
+        device_name: "REPLAY_ARRAY"
+      annotations:
+        summary: "REPLAY_ARRAY: no device_perf_metrics sample (storage_device_iops) for 10 minutes"
+        description: "The array stopped pushing the policy's metrics, or the receiver stopped taking them."
+      startsAt: "2026-11-13T09:12:00.000Z"
+      endsAt: "0001-01-01T00:00:00Z"
+      generatorURL: "http://prometheus.example.com:9090/graph?g0.expr=absent_over_time"
+      fingerprint: "6f1a2b3c4d5e6f70"
+    meta:
+      source:
+        name: ansible.eda.alertmanager
+        type: ansible.eda.alertmanager
+  - alert:
+      status: firing
+      labels:
+        alertname: FlashBladeCapacityHigh
+        severity: warning
+        domain: capacity
+        array_name: "REPLAY_ARRAY"
+        device_name: "REPLAY_ARRAY"
+      annotations:
+        summary: "REPLAY_ARRAY is 91.2% full"
+        value: "91.2"
+      startsAt: "2026-11-13T09:00:00.000Z"
+      endsAt: "0001-01-01T00:00:00Z"
+      generatorURL: "http://prometheus.example.com:9090/graph?g0.expr=storage_device_space_bytes"
+      fingerprint: "7a2b3c4d5e6f7081"
+    meta:
+      source:
+        name: ansible.eda.alertmanager
+        type: ansible.eda.alertmanager
+  - alert:
+      status: resolved
+      labels:
+        alertname: FlashBladeLatencyHigh
+        severity: warning
+        domain: performance
+        array_name: "REPLAY_ARRAY"
+        device_name: "REPLAY_ARRAY"
+      annotations:
+        summary: "REPLAY_ARRAY latency above 20 ms for 10 minutes"
+        value: "23410"
+      startsAt: "2026-11-13T08:30:00.000Z"
+      endsAt: "2026-11-13T09:05:00.000Z"
+      generatorURL: "http://prometheus.example.com:9090/graph?g0.expr=storage_device_latency_us"
+      fingerprint: "8b3c4d5e6f708192"
+    meta:
+      source:
+        name: ansible.eda.alertmanager
+        type: ansible.eda.alertmanager

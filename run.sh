@@ -12,11 +12,13 @@
 #                    (default <repo>/venv; otherwise ansible-rulebook on PATH)
 #   FBEDA_VARS       vars file (default vars/local-lab.yml)
 #   FBEDA_INVENTORY  inventory file (default inventory/local-lab.yml)
-#   APPROVAL_TOKEN, GIT_WEBHOOK_SECRET
-#                    webhook secrets for capacity.yml, maintenance.yml and
-#                    change_control.yml; each one that is set is passed with
-#                    --env-vars, an unset one is not (ansible-rulebook rejects
-#                    a name it cannot find)
+#   APPROVAL_TOKEN   bearer token for the capacity.yml, maintenance.yml and
+#                    contain.yml webhooks
+#   GIT_WEBHOOK_SECRET
+#                    HMAC secret for the change_control.yml webhook; each
+#                    secret that is set is passed with --env-vars, an unset
+#                    one is not (ansible-rulebook rejects a name it cannot
+#                    find)
 #   AO_CLIENT_ID, AO_CLIENT_SECRET
 #                    automation orchestrator service account for the
 #                    orchestrator handoff (playbooks/orchestrator_post.yml);

@@ -1,0 +1,329 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Make one NFS client read-only on the file systems it is exported to, or
+# release it. Called by the containment rulebook (ir_auto_contain true) and
+# by its approvals webhook with target_array, client (an address),
+# file_system (one name, or "" for every live file system whose export
+# names the client), action (quarantine | release), reason,
+# contain_exclude_clients, contain_exclude_file_systems, fb_api_version and
+# alert_log; or by hand:
+#   ansible-playbook -i inventory/local-lab.yml playbooks/quarantine_client.yml \
+#       -e target_array=fb-a -e client=192.0.2.10 -e file_system=eda-demo-quota \
+#       -e action=quarantine -e alert_log=$PWD/alerts.log
+# A file system exports NFS one of two ways, and the state lives in the
+# export itself, so a restart of the rulebook needs no memory:
+#   legacy rule string  "<client>(rw,no_root_squash) *(ro)": the client's
+#                       entry is rewritten rw -> ro (release: ro -> rw)
+#                       with PATCH /file-systems nfs.rules after re-reading
+#                       the string; the other entries are kept as they were
+#   export policy       a rule `client <ip> permission ro access root-squash`
+#                       is inserted before the policy's first rule (the
+#                       first match wins), release deletes that rule (found
+#                       by client == ip and permission ro)
+# Never a block: the client keeps reading, and nothing is written to a
+# client that is not named by the export. Refused and recorded: an address
+# in contain_exclude_clients, any address of this array's own interfaces
+# or of its replication peers. File systems matching a glob in
+# contain_exclude_file_systems (the Manila-managed shares by default) are
+# left alone. The writes are applied one by one and the exports are then
+# read back, so the record says what the array holds now, not what was
+# sent; a client whose only entry was ro before a quarantine is released
+# to rw, which is why the record keeps the rule strings before and after.
+# One quarantine record is written whatever happened: critical for a
+# quarantine that touched something, warning for a release or a refusal.
+- name: Quarantine a client read-only, or release it
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    # the address goes into rule strings and rule bodies, the name into
+    # query strings
+    - name: Refuse an unknown action, a client that is not an address, or a file system name that is not plain
+      ansible.builtin.assert:
+        that:
+          - action in ['quarantine', 'release']
+          - client | string is match('^[0-9A-Fa-f.:]+$')
+          - (file_system | default('') | length) == 0 or file_system is match('^[A-Za-z0-9][A-Za-z0-9_.:-]*$')
+        fail_msg: >-
+          action {{ action | string | truncate(20) }} must be quarantine or release, client
+          {{ client | string | truncate(60) }} an IPv4 or IPv6 address and file_system
+          {{ file_system | default('') | string | truncate(80) }} a plain name or empty
+
+    - name: Read the array's own interface addresses
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "network-interfaces"
+        fb_rest_ignore_errors: true
+
+    - name: Keep the addresses
+      ansible.builtin.set_fact:
+        own_addresses: "{{ fb_rest_json['items'] | default([]) | selectattr('address', 'defined') | map(attribute='address') | select('string') | list }}"
+
+    - name: Read the replication peers' addresses
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "array-connections"
+        fb_rest_ignore_errors: true
+
+    - name: Keep the peer addresses
+      ansible.builtin.set_fact:
+        peer_addresses: >-
+          {%- set out = [] -%}
+          {%- for c in (fb_rest_json['items'] | default([])) -%}
+          {%- if c.management_address | default('', true) -%}{%- set _ = out.append(c.management_address) -%}{%- endif -%}
+          {%- for a in (c.replication_addresses | default([], true)) -%}{%- set _ = out.append(a) -%}{%- endfor -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Decide whether the client may be touched at all
+      ansible.builtin.set_fact:
+        refusal: >-
+          {{ 'client is in contain_exclude_clients' if client in (contain_exclude_clients | default([]))
+             else 'client is an address of this array' if client in own_addresses
+             else 'client is a replication peer address' if client in peer_addresses
+             else '' }}
+
+    - name: Read the live file systems
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "file-systems?destroyed=false"
+        fb_rest_ignore_errors: true
+
+    - name: Keep the file systems
+      ansible.builtin.set_fact:
+        file_systems_now: "{{ fb_rest_json['items'] | default([]) }}"
+        file_systems_error: "{{ fb_rest_error | trim }}"
+
+    - name: Read every export policy rule
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "nfs-export-policies/rules"
+        fb_rest_ignore_errors: true
+
+    - name: Keep the rules
+      ansible.builtin.set_fact:
+        rules_now: "{{ fb_rest_json['items'] | default([]) }}"
+
+    # contain_exclude_file_systems holds shell globs; they become one
+    # anchored regex, as grow_fs.yml does with fs_grow_exclude
+    - name: Build the exclusion pattern
+      ansible.builtin.set_fact:
+        exclude_globs: "{{ contain_exclude_file_systems | default([]) }}"
+        exclude_regex: >-
+          {{ '^(' ~ (contain_exclude_file_systems | default([]) | map('regex_escape') | map('replace', '\*', '.*') | join('|')) ~ ')$' }}
+
+    # one plan entry per file system to act on: the export form it uses,
+    # the client's legacy entry rewritten, or the policy rule to add or to
+    # delete; change_needed is false when the export already says what the
+    # action wants
+    - name: Work out what each file system needs
+      ansible.builtin.set_fact:
+        plan: >-
+          {%- set out = [] -%}
+          {%- set entry_pattern = '^' ~ ((client ~ '(') | regex_escape) -%}
+          {%- for f in file_systems_now -%}
+          {%- set legacy = f.nfs.rules | default('', true) | string -%}
+          {%- set policy = f.nfs.export_policy.name | default('', true) | string -%}
+          {%- set entries = legacy.split() | select('match', entry_pattern) | list -%}
+          {%- set entry = entries[0] if (entries | length) > 0 else '' -%}
+          {%- set policy_rules = (rules_now | selectattr('policy.name', 'defined') | selectattr('policy.name', 'equalto', policy) | sort(attribute='index') | list) if policy else [] -%}
+          {%- set client_rules = policy_rules | selectattr('client', 'equalto', client) | list -%}
+          {%- set ro_rules = client_rules | selectattr('permission', 'equalto', 'ro') | list -%}
+          {%- set names_client = (entry | length) > 0 or (client_rules | length) > 0 -%}
+          {%- set chosen = (f.name == file_system) if (file_system | default('') | length) > 0 else names_client -%}
+          {%- if chosen -%}
+          {%- set excluded = (exclude_globs | length) > 0 and f.name is match(exclude_regex) -%}
+          {%- set new_opts = [] -%}
+          {%- if entry -%}
+          {%- for o in entry[(client | length) + 1:-1].split(',') -%}
+          {%- set t = o | trim -%}
+          {%- set _ = new_opts.append('ro' if (t == 'rw' and action == 'quarantine') else 'rw' if (t == 'ro' and action == 'release') else t) -%}
+          {%- endfor -%}
+          {%- endif -%}
+          {%- set new_entry = (client ~ '(' ~ (new_opts | join(',')) ~ ')') if entry else '' -%}
+          {%- set tokens = [] -%}
+          {%- for t in legacy.split() -%}{%- set _ = tokens.append(new_entry if t == entry else t) -%}{%- endfor -%}
+          {%- set mode = 'policy' if policy else 'legacy' -%}
+          {%- if mode == 'legacy' -%}
+          {%- set needed = (entry | length) > 0 and new_entry != entry -%}
+          {%- elif action == 'quarantine' -%}
+          {%- set needed = (ro_rules | length) == 0 -%}
+          {%- else -%}
+          {%- set needed = (ro_rules | length) > 0 -%}
+          {%- endif -%}
+          {%- set _ = out.append({'name': f.name, 'mode': mode, 'policy': policy, 'excluded': excluded,
+                                  'named': names_client, 'legacy_before': legacy, 'legacy_after': tokens | join(' '),
+                                  'first_rule': (policy_rules[0].name if (policy_rules | length) > 0 else ''),
+                                  'ro_rule': (ro_rules[0].name if (ro_rules | length) > 0 else ''),
+                                  'change_needed': needed and not excluded}) -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Refuse an explicit file system the array does not know
+      when: (file_system | default('') | length) > 0 and (refusal | trim | length) == 0
+      ansible.builtin.assert:
+        that:
+          - plan | length == 1
+        fail_msg: "{{ file_system }} on {{ inventory_hostname }}: {{ file_systems_error if file_systems_error else 'not found or destroyed' }}; nothing changed"
+
+    # each change is one request; the outcome is read back below rather
+    # than kept per request, so what is recorded is what the array holds
+    - name: Lay the changes out as requests
+      ansible.builtin.set_fact:
+        requests: >-
+          {%- set out = [] -%}
+          {%- if (refusal | trim | length) == 0 -%}
+          {%- for p in plan if p.change_needed -%}
+          {%- if p.mode == 'legacy' -%}
+          {%- set _ = out.append({'name': p.name, 'method': 'PATCH', 'path': 'file-systems?names=' ~ p.name,
+                                  'body': {'nfs': {'rules': p.legacy_after}}}) -%}
+          {%- elif action == 'quarantine' -%}
+          {%- set _ = out.append({'name': p.name, 'method': 'POST',
+                                  'path': 'nfs-export-policies/rules?policy_names=' ~ p.policy ~ (('&before_rule_name=' ~ p.first_rule) if p.first_rule else ''),
+                                  'body': {'client': client, 'permission': 'ro', 'access': 'root-squash'}}) -%}
+          {%- else -%}
+          {%- set _ = out.append({'name': p.name, 'method': 'DELETE', 'path': 'nfs-export-policies/rules?names=' ~ p.ro_rule, 'body': {}}) -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {%- endif -%}
+          {{ out }}
+
+    - name: Apply each change
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      loop: "{{ requests }}"
+      loop_control:
+        label: "{{ item.method }} {{ item.path }}"
+      vars:
+        fb_rest_method: "{{ item.method }}"
+        fb_rest_path: "{{ item.path }}"
+        fb_rest_body: "{{ item.body if (item.body | length) > 0 else omit }}"
+        fb_rest_ignore_errors: true
+
+    - name: Read the file systems back
+      when: requests | length > 0
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "file-systems?destroyed=false"
+        fb_rest_ignore_errors: true
+
+    - name: Keep the file systems after the change
+      ansible.builtin.set_fact:
+        file_systems_after: "{{ (fb_rest_json['items'] | default([])) if requests | length > 0 else file_systems_now }}"
+
+    - name: Read the rules back
+      when: requests | length > 0
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "nfs-export-policies/rules"
+        fb_rest_ignore_errors: true
+
+    - name: Keep the rules after the change
+      ansible.builtin.set_fact:
+        rules_after: "{{ (fb_rest_json['items'] | default([])) if requests | length > 0 else rules_now }}"
+
+    # the desired state, read back: the client's legacy entry carries ro
+    # (quarantine) or rw (release); a ro rule for the client exists
+    # (quarantine) or does not (release)
+    - name: Check each file system against what the action wanted
+      ansible.builtin.set_fact:
+        results: >-
+          {%- set out = [] -%}
+          {%- set entry_pattern = '^' ~ ((client ~ '(') | regex_escape) -%}
+          {%- for p in plan -%}
+          {%- set f = file_systems_after | selectattr('name', 'equalto', p.name) | list -%}
+          {%- set legacy = (f[0].nfs.rules | default('', true) | string) if (f | length) > 0 else '' -%}
+          {%- set entries = legacy.split() | select('match', entry_pattern) | list -%}
+          {%- set entry = entries[0] if (entries | length) > 0 else '' -%}
+          {%- set opts = entry[(client | length) + 1:-1].split(',') if entry else [] -%}
+          {%- set ro_rules = rules_after | selectattr('policy.name', 'defined') | selectattr('policy.name', 'equalto', p.policy)
+                             | selectattr('client', 'equalto', client) | selectattr('permission', 'equalto', 'ro') | list -%}
+          {%- if p.mode == 'legacy' -%}
+          {%- set desired = ('ro' in opts) if action == 'quarantine' else ('rw' in opts or not entry) -%}
+          {%- else -%}
+          {%- set desired = ((ro_rules | length) > 0) if action == 'quarantine' else ((ro_rules | length) == 0) -%}
+          {%- endif -%}
+          {%- set state = 'excluded' if p.excluded else 'refused' if (refusal | trim | length) > 0
+                          else 'changed' if (p.change_needed and desired) else 'failed' if p.change_needed
+                          else 'not named' if (p.mode == 'legacy' and not entry) else 'unchanged' -%}
+          {%- set _ = out.append({'name': p.name, 'mode': p.mode, 'policy': p.policy, 'state': state,
+                                  'legacy_before': p.legacy_before, 'legacy_after': legacy,
+                                  'rule': (ro_rules[0].name if (ro_rules | length) > 0 else p.ro_rule)}) -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        touched: "{{ results | selectattr('state', 'equalto', 'changed') | map(attribute='name') | list }}"
+        failed: "{{ results | selectattr('state', 'equalto', 'failed') | map(attribute='name') | list }}"
+        excluded: "{{ results | selectattr('state', 'equalto', 'excluded') | map(attribute='name') | list }}"
+        unchanged: "{{ results | selectattr('state', 'in', ['unchanged', 'not named']) | map(attribute='name') | list }}"
+
+    - name: Settle the outcome text
+      ansible.builtin.set_fact:
+        outcome: >-
+          {{ ('refused: ' ~ refusal | trim) if (refusal | trim | length) > 0
+             else ('no live file system exports to ' ~ client ~ (': ' ~ file_systems_error if file_systems_error else '')) if (plan | length) == 0
+             else (action ~ 'd ' ~ (touched | join(', ')) if (touched | length) > 0 else 'nothing changed')
+                  ~ ((' (' ~ action ~ ' refused by the array on ' ~ (failed | join(', ')) ~ ')') if (failed | length) > 0 else '')
+                  ~ (('; excluded ' ~ (excluded | join(', '))) if (excluded | length) > 0 else '')
+                  ~ (('; already as wanted ' ~ (unchanged | join(', '))) if (unchanged | length) > 0 else '') }}
+
+    - name: Record the action
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'quarantine',
+              'severity': 'critical' if action == 'quarantine' and (touched | length) > 0 else 'warning',
+              'array': inventory_hostname, 'client': client, 'action': action,
+              'file_system': file_system | default(''), 'file_systems': touched, 'failed': failed,
+              'excluded': excluded, 'unchanged': unchanged, 'exports': results,
+              'refusal': refusal | trim, 'reason': reason | default('') | trim,
+              'outcome': outcome | trim, 'changed': (touched | length) > 0} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the action
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ action }} {{ client }} :: {{ outcome | trim }} :: {{ reason | default('') | trim }}"
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'client': client, 'action': action, 'file_systems': touched,
+              'changed_count': touched | length, 'outcome': outcome | trim, 'changed': (touched | length) > 0} }}
+      run_once: true
+      delegate_to: localhost

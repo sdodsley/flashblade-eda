@@ -1,0 +1,86 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Replay Alertmanager alerts through the Alertmanager rules without a
+# Prometheus receiver: a telemetry silence, a capacity threshold and a
+# latency alert resolving, in the shape ansible.eda.alertmanager hands on.
+#   { cat vars/local-lab.yml; sed "/^---$/d; /^#/d; s/REPLAY_ARRAY/<array>/" tests/fixtures/alertmanager.yml; } \
+#     > tests/out/vars_replay.yml
+#   FBEDA_VARS=tests/out/vars_replay.yml ./run.sh tests/replay_alertmanager.yml
+# Expected: a telemetry_check record from telemetry_check.yml (verdict
+# pipeline on the lab, where the target does not exist and no receiver
+# answers; array when the management address is down), a capacity_request
+# record with a request file for the array, and an info notification for
+# the resolved alert. The rules are copies of the ones in
+# extensions/eda/rulebooks/alertmanager.yml, throttles included;
+# tests/unit/test_rulebooks.py fails if a copy drifts.
+- name: FlashBlade via Alertmanager (replayed fixtures)
+  hosts: all
+
+  sources:
+    - ansible.eda.generic:
+        payload: "{{ fixture_events }}"
+        loop_count: 1
+        delay: 1
+
+  rules:
+    - name: Telemetry silent - check the pipeline
+      condition: >-
+        event.alert.status == "firing" and
+        event.alert.labels.alertname == "FlashBladeTelemetrySilent" and
+        event.alert.labels.array_name is defined
+      throttle:
+        once_within: 30 minutes
+        group_by_attributes:
+          - event.alert.labels.array_name
+          - event.alert.labels.policy
+      action:
+        run_playbook:
+          name: playbooks/telemetry_check.yml
+          extra_vars:
+            target_array: "{{ event.alert.labels.array_name }}"
+            alert: "{{ event.alert.labels.alertname }}"
+            policy: "{{ event.alert.labels.policy | default('') }}"
+            started_at: "{{ event.alert.startsAt | default('') }}"
+            telemetry_target_name: "{{ telemetry_target_name }}"
+            prometheus_url: "{{ prometheus_url }}"
+            fb_api_version: "{{ fb_api_version }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Capacity threshold - approval request
+      condition: >-
+        event.alert.status == "firing" and
+        event.alert.labels.alertname == "FlashBladeCapacityHigh"
+      throttle:
+        once_within: 24 hours
+        group_by_attributes:
+          - event.alert.labels.array_name
+      action:
+        run_playbook:
+          name: playbooks/capacity_request.yml
+          extra_vars:
+            at_risk_array: "{{ event.alert.labels.array_name }}"
+            # the rules file puts the bare percentage in annotations.value;
+            # summary is the sentence for humans
+            used_pct: "{{ event.alert.annotations.value | default('') }}"
+            used_bytes: ""
+            capacity_bytes: ""
+            request_dir: "{{ request_dir }}"
+            s3_requests_enabled: "{{ s3_requests_enabled }}"
+            object_store: "{{ object_store }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Resolved - log
+      condition: event.alert.status == "resolved"
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: info
+            subject: >-
+              resolved: {{ event.alert.labels.alertname | default('') }}
+              on {{ event.alert.labels.array_name | default('') }}
+            detail: "{{ event.alert.annotations.summary | default('') }}"
+            target_array: "{{ event.alert.labels.array_name | default('') }}"
+            alert_log: "{{ alert_log }}"

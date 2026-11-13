@@ -250,6 +250,44 @@ syslog_hostnames: {}             # array name or syslog hostname -> inventory ar
 alertmanager_host: 0.0.0.0
 alertmanager_port: 5002
 
+# --- telemetry (telemetry_setup.yml, telemetry_check.yml, selftest.yml) -----
+# The array pushes its metrics over OTLP to a Prometheus 3.x OTLP receiver
+# (prometheus/README.md). playbooks/telemetry_setup.yml creates the target
+# and attaches it to the metric policies listed; telemetry_endpoint empty
+# leaves the telemetry checks inactive (selftest skips them). The endpoint
+# has no scheme: "<host>:<port>[/<path>]", e.g. prom.example.com:9090/api/v1/otlp;
+# the array opens a connection at creation and refuses an endpoint nothing
+# listens on. telemetry_source is the array network interface the push
+# leaves from (a data VIP name; the management interface is refused).
+telemetry_target_name: eda-prom
+telemetry_endpoint: ""
+telemetry_source: ""
+telemetry_transport: otlp-http-protobuf-without-tls   # a plain receiver; otlp-http-protobuf for TLS
+telemetry_policies:                 # the array's 12 built-in telemetry-metrics policies
+  - bucket_client_perf_metrics
+  - bucket_perf_metrics
+  - bucket_space_metrics
+  - device_client_perf_metrics
+  - device_connector_metrics
+  - device_perf_metrics
+  - device_replication_perf_metrics
+  - device_space_metrics
+  - device_state_metrics
+  - fs_perf_metrics
+  - fs_space_metrics
+  - obj_store_account_space_metrics
+# The silence rule in prometheus/flashblade.rules.yml fires when a policy's
+# first metric has been absent for twice its resolution or this many
+# minutes, whichever is larger (tools/telemetry_rules.py --silence-minutes).
+telemetry_silence_minutes: 10
+# The resource attribute Prometheus promotes as the array's name label; the
+# rules file copies it into a fixed array_name label the alertmanager
+# rulebook reads (tools/telemetry_rules.py --array-label).
+telemetry_array_label: device_name
+# The Prometheus server, http://host:9090; read by telemetry_check.yml (is
+# the receiver answering?) and selftest.yml (/-/ready). "" skips both.
+prometheus_url: ""
+
 # --- object audit (object_audit.yml) ----------------------------------------
 # The object-audit source tails the audit log bucket of each array listed
 # here over S3 (boto3). Every credential is the name of an environment
@@ -399,6 +437,86 @@ cert_warn_days: 30
 posture_auto_revert: false
 posture_exclude_file_systems:     # legacy NFS rules of these file systems may stay world-open
   - "share-*-manila"
+
+# --- replication and DR (replication.yml, housekeeping.yml) ------------------
+# The replication signal reads the array connections, the S3 targets and
+# every file system and bucket replica link each replication_interval. A
+# link whose status is not in replication_ok_statuses is unhealthy; one
+# whose lag is past replication_lag_warn_s is lagging; a streak of
+# replication_escalate_polls polls escalates to critical.
+replication_interval: 60          # production: 60-300
+replication_lag_warn_s: 900
+replication_ok_statuses:
+  - replicating
+  - idle
+  - connected
+  - healthy
+replication_escalate_polls: 5
+# A paused bucket replica link is resumed (purefb_bucket_replica paused
+# false) when true; pausing is a human act, so off by default and a paused
+# link is notified.
+replication_auto_resume: false
+# Scheduled DR drills (playbooks/dr_drill.yml, run by housekeeping.yml at
+# dr_drill_hour UTC once a day): on the peer, promote the replica of
+# file_system, read its space and export, demote it again. array and peer
+# are inventory arrays; peer_file_system defaults to file_system;
+# max_minutes bounds each wait. The link must exist already. A demote
+# discards data written since the promotion only when dr_drill_discard is
+# true (the drill writes nothing, so it stays false).
+dr_drills: []
+#  - array: fb-a
+#    file_system: eda-dr-demo
+#    peer: fb-b
+#    peer_file_system: eda-dr-demo
+#    max_minutes: 10
+dr_drill_hour: 3
+dr_drill_discard: false
+
+# --- containment (contain.yml) -----------------------------------------------
+# The brakes, each behind a switch and each reversible. A client holding
+# contain_min_share_pct of the array's ops for contain_consecutive_polls
+# while the array's write latency is baseline_latency_ratio times last
+# week's is made read-only (ir_auto_contain); a file system in that state
+# gets the eda-tarpit QoS policy at tarpit_ops_per_sec (ir_auto_tarpit),
+# lifted after contain_release_normal_polls normal polls. Addresses in
+# contain_exclude_clients (the automation's own hosts, backup servers) are
+# never quarantined; file systems matching contain_exclude_file_systems are
+# never touched. Releases, lock and session removal and manual tarpits
+# arrive on the locks_port webhook with a bearer APPROVAL_TOKEN:
+#   curl -X POST http://<eda host>:<locks_port>/endpoint \
+#        -H "Authorization: Bearer $APPROVAL_TOKEN" -H 'Content-Type: application/json' \
+#        -d '{"array": "fb-a", "action": "release", "client": "192.0.2.10", "approver": "jane"}'
+ir_auto_contain: false
+ir_auto_tarpit: false
+tarpit_ops_per_sec: 100           # the array's minimum for max_total_ops_per_sec
+contain_consecutive_polls: 3
+contain_min_share_pct: 60
+contain_release_normal_polls: 10
+contain_exclude_clients: []
+contain_exclude_file_systems:
+  - "share-*-manila"
+locks_port: 5004
+
+# --- housekeeping (housekeeping.yml) -----------------------------------------
+# One tick every housekeeping_interval seconds runs the selftest, the daily
+# showback ledger and the DR drills (each playbook decides by the hour and
+# the date whether there is anything to do).
+housekeeping_interval: 3600
+showback_enabled: true
+showback_bucket: eda-state        # the ledger goes to this bucket of each array's object store
+showback_prefix: showback/        # <prefix><yyyy-mm-dd>/<array>.json; drills mark <prefix>dr/<date>-<fs>.json
+# Which selftest checks run: rest (GET /arrays), s3 (the state bucket
+# answers), audit (the audit_baseline policy is enabled with members and
+# filters), telemetry (the target exists and is enabled; skipped while
+# telemetry_endpoint is empty), prometheus (<prometheus_url>/-/ready;
+# skipped while empty).
+selftest_checks: [rest, s3, audit, telemetry, prometheus]
+# Expiring certificates (posture.yml): with certs_auto_renew true a
+# self-signed array certificate within cert_warn_days of expiry is re-issued
+# for certs_renew_days with its current names (playbooks/renew_certificate.yml);
+# a CA-issued or external one is recorded as needing a human.
+certs_auto_renew: false
+certs_renew_days: 365
 
 # --- REST ----------------------------------------------------------------
 # REST version tasks/fb_rest.yml asks for where no collection module exists

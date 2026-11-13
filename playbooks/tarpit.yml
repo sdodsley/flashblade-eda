@@ -1,0 +1,192 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Tarpit a file system, or lift the tarpit. Called by the containment
+# rulebook with target_array, file_system, action (apply | lift),
+# tarpit_ops_per_sec, reason, fb_api_version and alert_log; or by hand:
+#   ansible-playbook -i inventory/local-lab.yml playbooks/tarpit.yml \
+#       -e target_array=fb-a -e file_system=eda-demo-quota -e action=apply \
+#       -e tarpit_ops_per_sec=100 -e alert_log=$PWD/alerts.log
+# The state is the policy name: one QoS policy eda-tarpit at
+# tarpit_ops_per_sec (the array's floor is 100 ops/s) is shared by every
+# tarpitted file system, created when missing and assigned by
+# sdodsley.flashblade_eda.purefb_qos; the plugin reports eda_tarpit for a
+# file system that carries it and an operator sees it in `purepolicy qos
+# list`. A file system that already carries a policy of its own is left
+# alone and recorded: a tarpit never replaces a limit a human set, and
+# client.yml's eda-cap-<fs> policies are not touched either. The lift clears
+# the assignment (PATCH /file-systems qos_policy with an empty name, the
+# form qos_lift.yml uses; a null policy is tried when the array refuses
+# that) and keeps the policy object for the next time. Both actions are
+# idempotent. QoS policies arrived with REST 2.17, so the requests ask for
+# that version whatever fb_api_version says.
+# verify: which clearing form the array accepts (the contract leaves it
+# open; the record names the one that worked).
+- name: Tarpit a file system or lift the tarpit
+  hosts: "{{ target_array }}"
+  gather_facts: false
+  vars:
+    policy_name: eda-tarpit
+    qos_api_version: "2.17"
+  tasks:
+    - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/resolve_array.yml"
+      vars:
+        resolve_array_name: "{{ inventory_hostname }}"
+
+    - name: Refuse a host pattern that is not exactly this array, or another array's credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == target_array
+          - credential_array is not defined or credential_array == inventory_hostname
+        fail_msg: >-
+          target_array {{ target_array | string | truncate(80) }} is a host pattern, not one inventory array,
+          or the attached credential ({{ credential_array | default('') }}) is for another array
+
+    - name: Refuse an unknown action, a name that is not plain, or a rate below the array's floor
+      ansible.builtin.assert:
+        that:
+          - action in ['apply', 'lift']
+          - file_system is match('^[A-Za-z0-9][A-Za-z0-9_.:-]*$')
+          - tarpit_ops_per_sec | int >= 100
+        fail_msg: >-
+          action {{ action | string | truncate(20) }} must be apply or lift, file_system
+          {{ file_system | string | truncate(80) }} a plain name and tarpit_ops_per_sec at least 100
+
+    - name: Read the file system
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+      vars:
+        fb_rest_method: GET
+        fb_rest_path: "file-systems?names={{ file_system }}"
+        fb_rest_api_version: "{{ qos_api_version }}"
+        fb_rest_ignore_errors: true
+
+    - name: Keep what the array said
+      ansible.builtin.set_fact:
+        before: "{{ (fb_rest_json['items'] | default([{}]))[0] | default({}) }}"
+        read_error: "{{ fb_rest_error | trim }}"
+
+    - name: Refuse a file system the array does not know
+      ansible.builtin.assert:
+        that:
+          - before.name is defined
+        fail_msg: "{{ file_system }} on {{ inventory_hostname }}: {{ read_error if read_error else 'not found' }}; nothing done"
+
+    - name: Note the policy it carries now
+      ansible.builtin.set_fact:
+        previous_policy: "{{ before.qos_policy.name | default('', true) }}"
+
+    - name: Decide what to do
+      ansible.builtin.set_fact:
+        already_tarpitted: "{{ previous_policy == policy_name }}"
+        has_own_policy: "{{ previous_policy | length > 0 and previous_policy != policy_name }}"
+        tarpit_changed: false
+        clear_form: ""
+        clear_error: ""
+
+    - name: Apply the tarpit
+      when: action == 'apply' and not already_tarpitted | bool and not has_own_policy | bool
+      block:
+        - name: Make sure the tarpit policy exists at the rate and is assigned to the file system
+          sdodsley.flashblade_eda.purefb_qos:
+            fb_url: "{{ fb_url }}"
+            api_token: "{{ api_token }}"
+            disable_warnings: true
+            api_version: "{{ qos_api_version }}"
+            name: "{{ policy_name }}"
+            max_total_ops_per_sec: "{{ tarpit_ops_per_sec | int }}"
+            enabled: true
+            file_systems:
+              - "{{ file_system }}"
+            state: present
+          register: qos_result
+          ignore_errors: true
+
+        - name: Keep the outcome
+          ansible.builtin.set_fact:
+            tarpit_changed: "{{ not (qos_result.failed | default(false)) }}"
+            apply_error: "{{ (qos_result.msg | default('') | string | truncate(200)) if qos_result.failed | default(false) else '' }}"
+
+    - name: Lift the tarpit
+      when: action == 'lift' and already_tarpitted | bool
+      block:
+        - name: Clear the policy assignment with an empty name
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+          vars:
+            fb_rest_method: PATCH
+            fb_rest_path: "file-systems?names={{ file_system }}"
+            fb_rest_body: "{{ {'qos_policy': {'name': ''}} }}"
+            fb_rest_api_version: "{{ qos_api_version }}"
+            fb_rest_ignore_errors: true
+
+        - name: Keep the first attempt
+          ansible.builtin.set_fact:
+            tarpit_changed: "{{ fb_rest_status | int == 200 }}"
+            clear_form: "{{ 'empty name' if fb_rest_status | int == 200 else '' }}"
+            clear_error: "{{ fb_rest_error | trim }}"
+
+        - name: Clear the policy assignment with a null policy
+          when: not tarpit_changed | bool
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/tasks/fb_rest.yml"
+          vars:
+            fb_rest_method: PATCH
+            fb_rest_path: "file-systems?names={{ file_system }}"
+            fb_rest_body: "{{ {'qos_policy': none} }}"
+            fb_rest_api_version: "{{ qos_api_version }}"
+            fb_rest_ignore_errors: true
+
+        - name: Keep the second attempt
+          when: not tarpit_changed | bool
+          ansible.builtin.set_fact:
+            tarpit_changed: "{{ fb_rest_status | int == 200 }}"
+            clear_form: "{{ 'null policy' if fb_rest_status | int == 200 else '' }}"
+            clear_error: "{{ clear_error ~ '; null policy: ' ~ (fb_rest_error | trim) }}"
+
+    - name: Describe the outcome
+      ansible.builtin.set_fact:
+        outcome: >-
+          {{ ('already tarpitted' if already_tarpitted | bool
+              else ('left alone: carries its own policy ' ~ previous_policy) if has_own_policy | bool
+              else 'tarpitted at ' ~ tarpit_ops_per_sec ~ ' ops/s' if tarpit_changed | bool
+              else 'refused by the array: ' ~ (apply_error | default('')))
+             if action == 'apply'
+             else ('not tarpitted' ~ ((': carries ' ~ previous_policy) if previous_policy else '') if not already_tarpitted | bool
+                   else ('lifted (' ~ clear_form ~ ')') if tarpit_changed | bool
+                   else 'clearing refused by the array: ' ~ clear_error) }}
+
+    - name: Record the action
+      ansible.builtin.lineinfile:
+        path: "{{ alert_log }}"
+        create: true
+        mode: "0600"
+        line: >-
+          {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 'tarpit',
+              'severity': 'warning' if action == 'apply' and tarpit_changed | bool else 'info',
+              'array': inventory_hostname, 'file_system': file_system, 'action': action,
+              'policy': policy_name, 'ops_per_sec': tarpit_ops_per_sec | int,
+              'previous_policy': previous_policy, 'clear_form': clear_form,
+              'reason': reason | default('') | trim, 'outcome': outcome | trim,
+              'changed': tarpit_changed | bool} | to_json }}
+      delegate_to: localhost
+
+    - name: Show the action
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} {{ file_system }}: tarpit {{ action }} :: {{ outcome | trim }} :: {{ reason | default('') | trim }}
+
+    # Job artifacts for a workflow or orchestrator node that follows this one.
+    - name: Publish the outcome as job artifacts
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data: >-
+          {{ {'array': inventory_hostname, 'file_system': file_system, 'action': action,
+              'policy': policy_name, 'previous_policy': previous_policy,
+              'outcome': outcome | trim, 'changed': tarpit_changed | bool} }}
+      run_once: true
+      delegate_to: localhost

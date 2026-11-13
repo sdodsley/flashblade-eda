@@ -1,0 +1,321 @@
+{
+  "continuation_token": null,
+  "total_item_count": 35,
+  "items": [
+    {
+      "name": "bucket_client_perf_metrics.1",
+      "policy": {
+        "name": "bucket_client_perf_metrics"
+      },
+      "index": 1,
+      "metric_name": "storage.device.bucket.client.latency_us",
+      "resolution": 600000
+    },
+    {
+      "name": "bucket_client_perf_metrics.2",
+      "policy": {
+        "name": "bucket_client_perf_metrics"
+      },
+      "index": 2,
+      "metric_name": "storage.device.bucket.client.op_count",
+      "resolution": 600000
+    },
+    {
+      "name": "bucket_perf_metrics.1",
+      "policy": {
+        "name": "bucket_perf_metrics"
+      },
+      "index": 1,
+      "metric_name": "storage.device.bucket.bw_bpo",
+      "resolution": 600000
+    },
+    {
+      "name": "bucket_perf_metrics.2",
+      "policy": {
+        "name": "bucket_perf_metrics"
+      },
+      "index": 2,
+      "metric_name": "storage.device.bucket.bw_bps",
+      "resolution": 600000
+    },
+    {
+      "name": "bucket_perf_metrics.3",
+      "policy": {
+        "name": "bucket_perf_metrics"
+      },
+      "index": 3,
+      "metric_name": "storage.device.bucket.iops",
+      "resolution": 600000
+    },
+    {
+      "name": "bucket_perf_metrics.4",
+      "policy": {
+        "name": "bucket_perf_metrics"
+      },
+      "index": 4,
+      "metric_name": "storage.device.bucket.latency_us",
+      "resolution": 600000
+    },
+    {
+      "name": "bucket_space_metrics.1",
+      "policy": {
+        "name": "bucket_space_metrics"
+      },
+      "index": 1,
+      "metric_name": "storage.device.bucket.obj_count",
+      "resolution": 600000
+    },
+    {
+      "name": "bucket_space_metrics.2",
+      "policy": {
+        "name": "bucket_space_metrics"
+      },
+      "index": 2,
+      "metric_name": "storage.device.bucket.space_bytes",
+      "resolution": 600000
+    },
+    {
+      "name": "bucket_space_metrics.3",
+      "policy": {
+        "name": "bucket_space_metrics"
+      },
+      "index": 3,
+      "metric_name": "storage.device.bucket.space_reduction",
+      "resolution": 600000
+    },
+    {
+      "name": "device_client_perf_metrics.1",
+      "policy": {
+        "name": "device_client_perf_metrics"
+      },
+      "index": 1,
+      "metric_name": "storage.device.client.bw_bpo",
+      "resolution": 600000
+    },
+    {
+      "name": "device_client_perf_metrics.2",
+      "policy": {
+        "name": "device_client_perf_metrics"
+      },
+      "index": 2,
+      "metric_name": "storage.device.client.bw_bps",
+      "resolution": 600000
+    },
+    {
+      "name": "device_client_perf_metrics.3",
+      "policy": {
+        "name": "device_client_perf_metrics"
+      },
+      "index": 3,
+      "metric_name": "storage.device.client.iops",
+      "resolution": 600000
+    },
+    {
+      "name": "device_client_perf_metrics.4",
+      "policy": {
+        "name": "device_client_perf_metrics"
+      },
+      "index": 4,
+      "metric_name": "storage.device.client.latency_us",
+      "resolution": 600000
+    },
+    {
+      "name": "device_connector_metrics.1",
+      "policy": {
+        "name": "device_connector_metrics"
+      },
+      "index": 1,
+      "metric_name": "storage.device.connector.bw_bps",
+      "resolution": 60000
+    },
+    {
+      "name": "device_connector_metrics.2",
+      "policy": {
+        "name": "device_connector_metrics"
+      },
+      "index": 2,
+      "metric_name": "storage.device.connector.bw_pps",
+      "resolution": 60000
+    },
+    {
+      "name": "device_connector_metrics.3",
+      "policy": {
+        "name": "device_connector_metrics"
+      },
+      "index": 3,
+      "metric_name": "storage.device.connector.err_ps",
+      "resolution": 60000
+    },
+    {
+      "name": "device_perf_metrics.1",
+      "policy": {
+        "name": "device_perf_metrics"
+      },
+      "index": 1,
+      "metric_name": "storage.device.bw_bpo",
+      "resolution": 60000
+    },
+    {
+      "name": "device_perf_metrics.2",
+      "policy": {
+        "name": "device_perf_metrics"
+      },
+      "index": 2,
+      "metric_name": "storage.device.bw_bps",
+      "resolution": 60000
+    },
+    {
+      "name": "device_perf_metrics.3",
+      "policy": {
+        "name": "device_perf_metrics"
+      },
+      "index": 3,
+      "metric_name": "storage.device.iops",
+      "resolution": 60000
+    },
+    {
+      "name": "device_perf_metrics.4",
+      "policy": {
+        "name": "device_perf_metrics"
+      },
+      "index": 4,
+      "metric_name": "storage.device.latency_us",
+      "resolution": 60000
+    },
+    {
+      "name": "device_replication_perf_metrics.1",
+      "policy": {
+        "name": "device_replication_perf_metrics"
+      },
+      "index": 1,
+      "metric_name": "storage.device.repl.bw_bps",
+      "resolution": 600000
+    },
+    {
+      "name": "device_space_metrics.1",
+      "policy": {
+        "name": "device_space_metrics"
+      },
+      "index": 1,
+      "metric_name": "storage.device.space_bytes",
+      "resolution": 60000
+    },
+    {
+      "name": "device_space_metrics.2",
+      "policy": {
+        "name": "device_space_metrics"
+      },
+      "index": 2,
+      "metric_name": "storage.device.space_reduction",
+      "resolution": 60000
+    },
+    {
+      "name": "device_state_metrics.1",
+      "policy": {
+        "name": "device_state_metrics"
+      },
+      "index": 1,
+      "metric_name": "storage.device.alerts",
+      "resolution": 600000
+    },
+    {
+      "name": "device_state_metrics.2",
+      "policy": {
+        "name": "device_state_metrics"
+      },
+      "index": 2,
+      "metric_name": "storage.device.health",
+      "resolution": 600000
+    },
+    {
+      "name": "device_state_metrics.3",
+      "policy": {
+        "name": "device_state_metrics"
+      },
+      "index": 3,
+      "metric_name": "storage.device.info",
+      "resolution": 600000
+    },
+    {
+      "name": "fs_perf_metrics.1",
+      "policy": {
+        "name": "fs_perf_metrics"
+      },
+      "index": 1,
+      "metric_name": "storage.device.fs.bw_bpo",
+      "resolution": 600000
+    },
+    {
+      "name": "fs_perf_metrics.2",
+      "policy": {
+        "name": "fs_perf_metrics"
+      },
+      "index": 2,
+      "metric_name": "storage.device.fs.bw_bps",
+      "resolution": 600000
+    },
+    {
+      "name": "fs_perf_metrics.3",
+      "policy": {
+        "name": "fs_perf_metrics"
+      },
+      "index": 3,
+      "metric_name": "storage.device.fs.iops",
+      "resolution": 600000
+    },
+    {
+      "name": "fs_perf_metrics.4",
+      "policy": {
+        "name": "fs_perf_metrics"
+      },
+      "index": 4,
+      "metric_name": "storage.device.fs.latency_us",
+      "resolution": 600000
+    },
+    {
+      "name": "fs_space_metrics.1",
+      "policy": {
+        "name": "fs_space_metrics"
+      },
+      "index": 1,
+      "metric_name": "storage.device.fs.space_bytes",
+      "resolution": 600000
+    },
+    {
+      "name": "fs_space_metrics.2",
+      "policy": {
+        "name": "fs_space_metrics"
+      },
+      "index": 2,
+      "metric_name": "storage.device.fs.space_reduction",
+      "resolution": 600000
+    },
+    {
+      "name": "obj_store_account_space_metrics.1",
+      "policy": {
+        "name": "obj_store_account_space_metrics"
+      },
+      "index": 1,
+      "metric_name": "storage.device.obj_store_account.obj_count",
+      "resolution": 600000
+    },
+    {
+      "name": "obj_store_account_space_metrics.2",
+      "policy": {
+        "name": "obj_store_account_space_metrics"
+      },
+      "index": 2,
+      "metric_name": "storage.device.obj_store_account.space_bytes",
+      "resolution": 600000
+    },
+    {
+      "name": "obj_store_account_space_metrics.3",
+      "policy": {
+        "name": "obj_store_account_space_metrics"
+      },
+      "index": 3,
+      "metric_name": "storage.device.obj_store_account.space_reduction",
+      "resolution": 600000
+    }
+  ]
+}
