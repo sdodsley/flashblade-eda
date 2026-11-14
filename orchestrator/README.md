@@ -12,11 +12,10 @@ launched as an AAP job template.
 
 Every definition follows the node schemas of the upstream orchestrator code
 at the tag Red Hat ships as the 2026.8 release (API 1.3.1), and
-`tools/ao_lint.py` checks them offline. The capacity route and the day-2
-file system growth are what the lab exit tests of
-[docs/VERIFICATION.md](../docs/VERIFICATION.md) ("Lab exit tests for part
-4") run on a live instance, from the EDA trigger or the API through the
-approval to the job; that document holds the results. The product add-on is
+`tools/ao_lint.py` checks them offline. The capacity route, the day-2 file
+system growth and the drill schedule are verified on a live instance
+("Verified on a live instance" below;
+[docs/VERIFICATION.md](../docs/VERIFICATION.md)). The product add-on is
 generally available for OpenShift-based Ansible Automation Platform 2.7
 only; no timeline is published for the containerized topology, and its API
 (1.3.1) is described as a technology preview that may change
@@ -384,29 +383,30 @@ last iteration. A `for_each` loop takes `items`, a `do_while` loop
 
 ## Verified on a live instance
 
-Three of the definitions ran on the upstream orchestrator code at the tag
-Red Hat ships as the 2026.8 release (API 1.3.1), beside the containerized
-platform of aap/README.md, after `tools/ao_sync.py` had validated, created
-and published all seven (a second run reports every one unchanged):
+On the upstream orchestrator code at the tag Red Hat ships as the 2026.8
+release (API 1.3.1), beside the containerized platform of aap/README.md,
+with all seven definitions validated, created and published by
+`tools/ao_sync.py` (a second run reports every one unchanged):
 
 - **Capacity.** A `purefb_capacity` event posted through **FlashBlade -
   orchestrator post** starts an execution; **FlashBlade - capacity request**
   runs with `credential_names` resolved to the event array's credential and
   publishes its artifacts. With nothing pending eradication the condition
   takes its `false` port and the no-candidates notify completes the
-  execution. With a destroyed file system on the array the request lists it,
-  the execution pauses at the approval (the Slack bot posts the card), the
-  approval decided from Slack resumes it, and **FlashBlade - capacity
-  reclaim** rebuilds the request from the artifacts and eradicates exactly
-  that file system (`result: done`).
+  execution. With a destroyed file system on the array the request lists
+  it, the execution pauses at the approval (the Slack bot posts the card),
+  the decision from Slack resumes it, and **FlashBlade - capacity reclaim**
+  rebuilds the request from the artifacts and eradicates exactly that file
+  system (`result: done`).
 - **Grow a file system.** Started from the API with the array, the file
-  system and `1536M`: the notify runs, the execution pauses at the approval,
-  the approval from Slack runs **FlashBlade - grow file system** (1.25 GiB
-  to 1.5 GiB, `outcome: grown`) and the closing notify reports `old_size`,
-  `new_size` and the job link.
+  system and the new size: the notify runs, the execution pauses at the
+  approval, the decision from Slack runs **FlashBlade - grow file system**
+  (`outcome: grown`) and the closing notify reports `old_size`, `new_size`
+  and the job link.
 - **Nightly DR drill.** Publishing the definition creates its schedule in
   the orchestrator's Temporal, next run at 03:00 UTC.
 
-Not run on the instance: the paused-link route, the LED, QoS cap and
-quarantine forms, and a bot instance of this project (the sibling's bot
-carried the cards). They stand on the unit tests and the linter.
+Not run on an instance: the paused-link route and the LED, QoS cap and
+quarantine forms, which stand on the unit tests and the linter, and a bot
+instance of this project (on a platform shared with the sibling, one bot
+pointed at both systems carries the cards; slack/README.md).

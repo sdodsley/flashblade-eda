@@ -39,9 +39,9 @@ no `/alerts/events` (alerts are diffed locally), one array-wide
 maintenance window instead of two kinds, and alert state is open or
 closed.
 
-## 2. What the lab proved
+## 2. What the lab shows
 
-A read-only probe of a FlashBlade//S200 on Purity//FB 4.6.4 (REST 2.21).
+A FlashBlade//S200 on Purity//FB 4.6.4 (REST 2.21).
 "Now" is demonstrable on that array; "later" needs a newer Purity//FB or a
 lab change; "blocked" is not possible there.
 
@@ -54,9 +54,9 @@ lab change; "blocked" is not possible there.
 | LLDP neighbours | now | `CH1.FM1.ETH1` to a Cisco Nexus switch port `Ethernet1/13`, switch management address exposed |
 | Space and performance history | now | 7 daily points with `resolution=86400000` by type; 6 half-hour performance points; per-protocol NFS metadata rates |
 | Per-client performance | now | `/arrays/clients/performance` answers (empty while idle; a load from the client VM fills it) |
-| Object audit to a log bucket | now | policy, log-target and filter endpoints answer; 43 S3 actions available for filters; part 2 created the account, the buckets, the policy, the log target and the filters and read the records back: NDJSON log objects, one per authority per rotation window, written seconds after the window closes ([HARDWARE_NOTES.md](HARDWARE_NOTES.md), "Object audit") |
-| OTLP telemetry push | now | REST 2.21 serves `/telemetry-targets` and 12 built-in metric policies with 35 rules; the SDK names these methods from FB_2_29, so the two telemetry modules of part 3 (`purefb_telemetry_target`, `purefb_telemetry_policy`) speak REST; the array opens a TCP connection to the endpoint when the target is created and refuses one nothing listens on |
-| Management syslog push | now | no syslog server configured yet; `purefb_syslog` creates one |
+| Object audit to a log bucket | now | policy, log-target and filter endpoints answer; 43 S3 actions available for filters; with the lab account, buckets, policy, log target and filters in place the records read back as NDJSON log objects, one per authority per rotation window, written seconds after the window closes ([HARDWARE_NOTES.md](HARDWARE_NOTES.md), "Object audit") |
+| OTLP telemetry push | now | REST 2.21 serves `/telemetry-targets` and 12 built-in metric policies with 35 rules; the SDK names these methods from FB_2_29, so the two telemetry modules (`purefb_telemetry_target`, `purefb_telemetry_policy`) speak REST; the array opens a TCP connection to the endpoint when the target is created and refuses one nothing listens on |
+| Management syslog push | now | a syslog server created with `purefb_syslog` delivers `purity.audit` lines to the listener within seconds |
 | Legal holds, QoS policies, Object Lock, public-access config | now | endpoints and models present on 2.21 |
 | SMB file-access audit | blocked | needs an AD-joined SMB file system with SACLs; the lab has no Active Directory join |
 | NFS file-access audit | later | Purity//FB 4.8.0 (control type `policy`); 4.6.4 cannot audit NFS and blocks NFS mounts on an SMB-audited file system |
@@ -64,8 +64,8 @@ lab change; "blocked" is not possible there.
 | Kafka object notifications | later | Purity//FB 4.10.a (REST 2.32), above the installed SDK ceiling of 2.30 |
 | Per-rule telemetry resolution | later | 4.8.6 |
 
-The only file system on the lab array is a Manila share on legacy NFS
-rules with no export policy, and the NFS client VM also hosts the
+The production file system on the lab array is a Manila share on legacy
+NFS rules with no export policy, and the NFS client VM also hosts the
 Prometheus OTLP receiver. Every export-policy, quarantine and lock demo
 uses a throwaway file system; nothing isolates the VM.
 
@@ -78,25 +78,25 @@ uses a throwaway file system; nothing isolates the VM.
 | Data-audit syslog | SMB 4.4/4.5 (SACL, AD); NFS 4.8.0 | seconds | a syslog server with services `[data-audit]`; an audit policy per file system (no module yet); rsyslog tap with 128 KB messages | `purefb_syslog` JSON branch |
 | Object-audit log bucket | 4.6.3 (REST 2.20) | one rotation (5 min on the lab) plus seconds | an account, a log bucket with Object Lock and quota headroom, a policy, a log target, prefix filters (the three modules under `plugins/modules/`), a read-only key | `purefb_object_audit` (boto3) |
 | Kafka notifications | 4.10.a (REST 2.32) | under 5 s normally | a Kafka log target and routing info | `ansible.eda.kafka` (needs aiokafka) |
-| OTLP to Prometheus to Alertmanager | 4.6.4; per-rule resolution 4.8.6 | 60 s for the device performance, space and connector policies, 10 min for the rest, plus rule evaluation | a telemetry target attached to the metric policies (`purefb_telemetry_target`, `purefb_telemetry_policy`, `telemetry_setup.yml`), Prometheus 3.x with the OTLP receiver and the resource attributes promoted, Alertmanager routed to the EDA listener (`prometheus/`) | `ansible.eda.alertmanager` (`alertmanager.yml`, part 3) |
+| OTLP to Prometheus to Alertmanager | 4.6.4; per-rule resolution 4.8.6 | 60 s for the device performance, space and connector policies, 10 min for the rest, plus rule evaluation | a telemetry target attached to the metric policies (`purefb_telemetry_target`, `purefb_telemetry_policy`, `telemetry_setup.yml`), Prometheus 3.x with the OTLP receiver and the resource attributes promoted, Alertmanager routed to the EDA listener (`prometheus/`) | `ansible.eda.alertmanager` (`alertmanager.yml`) |
 | SNMP | any | seconds | `purefb_snmp_mgr` | none in ansible.eda; adds nothing over syslog, not built |
 
 The diagram at the top of [README.md](../README.md) shows the paths;
 [The source plugins](../README.md#the-source-plugins) lists the signals,
-endpoints and events of the three plugins built so far.
+endpoints and events of the three plugins.
 
 ### Source plugins
 
 | Plugin | Signals and events | Reuse from flasharray-eda |
 | --- | --- | --- |
-| `purefb_events` | alerts (local diff, transitions initial / opened / updated / closed); audits (time cursor, `by_automation` from `automation_users` plus the `user_agent` prefix, `destructive` from the subcommand); sessions; health (hardware, blade progress and target, DFM drives, LAG speed against its ports, an LLDP neighbour cache refreshed only while healthy); telemetry (space by type with 7-day history, performance against the same half hour last week, per client, per file system and bucket, per-file-system quota usage); config; posture (part 2: public buckets, buckets outside every enabled audit policy, world-open export rules and legacy `nfs.rules`, keys older than `key_max_age_days`, certificates inside `cert_warn_days`, everyone-full-control share policies, each read optional so an array without the endpoint reports an empty list); replication (part 3: array connections, S3 targets, file-system and bucket replica links in one `purefb_replication` summary per poll, a `purefb_replica_link` per link with an issue and once on recovery with the streak and `escalate`, a `purefb_array_connection` on every status change). Every event but the telemetry ones carries `maintenance_active`, false where the endpoint is absent | the `purefa_events` skeleton as is: one asyncio task per signal, an Array class with a lock and a thread pool, poll-error streaks, the cached maintenance read, `request_timeout`, credentials from the environment |
+| `purefb_events` | alerts (local diff, transitions initial / opened / updated / closed); audits (time cursor, `by_automation` from `automation_users` plus the `user_agent` prefix, `destructive` from the subcommand); sessions; health (hardware, blade progress and target, DFM drives, LAG speed against its ports, an LLDP neighbour cache refreshed only while healthy); telemetry (space by type with 7-day history, performance against the same half hour last week, per client, per file system and bucket, per-file-system quota usage); config; posture (public buckets, buckets outside every enabled audit policy, world-open export rules and legacy `nfs.rules`, keys older than `key_max_age_days`, certificates inside `cert_warn_days`, everyone-full-control share policies, each read optional so an array without the endpoint reports an empty list); replication (array connections, S3 targets, file-system and bucket replica links in one `purefb_replication` summary per poll, a `purefb_replica_link` per link with an issue and once on recovery with the streak and `escalate`, a `purefb_array_connection` on every status change). Every event but the telemetry ones carries `maintenance_active`, false where the endpoint is absent | the `purefa_events` skeleton as is: one asyncio task per signal, an Array class with a lock and a thread pool, poll-error streaks, the cached maintenance read, `request_timeout`, credentials from the environment |
 | `purefb_syslog` | the FlashBlade layouts `purity.alert: <SEVERITY> <State> - <array>: <subject> [<code>]` and `purity.audit: ... User=, Location=, UI=, Command=, Subcommand=, Arguments=`; a JSON branch for data-audit records keyed on `pf` `fb` or `fa` (one parser for both platforms); sliding windows per (fs, user, client_ip) emitting `purefb_file_activity` on a mass delete or a rename storm (SMB audit now, NFS audit from 4.8.0) | transport, header regexes, allow-list and emitter; the parsers rewritten; the TCP line limit raised from 16 KB to 128 KB |
-| `purefb_object_audit` (part 2) | boto3 against the data VIP, `list_objects_v2` with `Prefix` and `StartAfter` on the log keys, whose lexical order is time order (`<array id>/<prefix>/<yyyy>/<mm>/<dd>/<HHMMSS>.A<authority>.<sequence>.log`), re-listing the last `late_windows` windows for late authorities; one `purefb_s3_event` per NDJSON record with the derived booleans (canary, landing, evidence, honey, approval, request, denied, delete, `by_automation`), one `purefb_s3_rollup` per log object (counts by event name, access key, source address and error code; the storm and mass-delete flags), one `purefb_audit_health` per poll (log age, quota, policy coverage); suffix, canary and honey matching in the plugin because bucket audit filters only take actions and prefixes; the cursor in a file and, optionally, in the state bucket | new; shares one event filter with `ansible.eda.kafka` so the rulebooks do not change at 4.10 |
+| `purefb_object_audit` | boto3 against the data VIP, `list_objects_v2` with `Prefix` and `StartAfter` on the log keys, whose lexical order is time order (`<array id>/<prefix>/<yyyy>/<mm>/<dd>/<HHMMSS>.A<authority>.<sequence>.log`), re-listing the last `late_windows` windows for late authorities; one `purefb_s3_event` per NDJSON record with the derived booleans (canary, landing, evidence, honey, approval, request, denied, delete, `by_automation`), one `purefb_s3_rollup` per log object (counts by event name, access key, source address and error code; the storm and mass-delete flags), one `purefb_audit_health` per poll (log age, quota, policy coverage); suffix, canary and honey matching in the plugin because bucket audit filters only take actions and prefixes; the cursor in a file and, optionally, in the state bucket | new; shares one event filter with `ansible.eda.kafka` so the rulebooks do not change at 4.10 |
 
 ## 4. Ideas by domain
 
-Each bullet names the rulebook or playbook that implements it, the part it
-belongs to, or marks it design intent.
+Each bullet names the rulebook or playbook that implements it, or marks it
+design intent.
 
 ### 4.1 Change control from the audit record
 
@@ -115,9 +115,8 @@ belongs to, or marks it design intent.
   (`destructive_subcommands`: destroy, eradicate, delete, remove,
   disconnect, demote) by a human is reported; the automation's own changes
   are logged.
-- Git webhook source: a signed push applies the baseline forward; the audit
-  stream reconciles backward. `apply_baseline.yml` is a later part; the
-  webhook ruleset is in place.
+- Git webhook source: a signed push applies the baseline forward
+  (`apply_baseline.yml`); the audit stream reconciles backward.
 - Poll-based drift as the fallback (`config_drift.yml`): NTP and DNS
   reapplied through `purefb_ntp` and `purefb_dns`; the management
   directory service, eradication (`manual_eradication`, an
@@ -126,7 +125,7 @@ belongs to, or marks it design intent.
   and a missing `data-audit` syslog target (`require_data_audit_syslog`)
   notified. The wider posture score (export, share and client rules,
   public buckets, key age, certificate expiry) is `posture.yml` on the
-  `posture` signal (part 2): a public bucket has its public access
+  `posture` signal: a public bucket has its public access
   blocked behind `posture_auto_revert` (`posture_revert.yml`), everything
   else notifies once a day per array.
 
@@ -144,7 +143,7 @@ belongs to, or marks it design intent.
   top growers from per-object space deltas across polls; `capacity.yml`
   compares used % with `capacity_risk_pct`.
 - There are no `/alerts/rules` on FlashBlade, so every threshold lives in
-  the vars file or in `prometheus/flashblade.rules.yml` (part 3); the
+  the vars file or in `prometheus/flashblade.rules.yml`; the
   array's own thresholds are the quota alerts (1101 at 80, 90 and 100 %).
 
 ### 4.3 Hardware events get hands and a switch port
@@ -209,8 +208,8 @@ belongs to, or marks it design intent.
   Pointing `quotas/settings` `contact` at a self-service queue so the
   array's own e-mail carries the link is design intent.
 - Snapshot sprawl and versioned buckets without a lifecycle rule as
-  reclaim candidates: a later part. What part 3 adds to capacity is the
-  ledger: `showback.yml` writes one object a day per array
+  reclaim candidates: roadmap. The ledger is capacity's record:
+  `showback.yml` writes one object a day per array
   (`<showback_prefix><date>/<array>.json`: every file system's virtual
   and provisioned space, every bucket's space, object count and quota,
   the accounts, the totals) to the state bucket, so a month of usage by
@@ -236,7 +235,7 @@ belongs to, or marks it design intent.
   is the state, read back as `eda_capped`.
 - The ordered export rule that downgrades one client to read-only, the
   `eda-tarpit` policy and the session and lock termination are
-  `contain.yml` (part 3). A client at `contain_min_share_pct` of the
+  `contain.yml`. A client at `contain_min_share_pct` of the
   array's ops for `contain_consecutive_polls` polls under the same
   latency condition is quarantined behind `ir_auto_contain`
   (`quarantine_client.yml`): on an export policy a rule `client <ip>
@@ -268,9 +267,9 @@ belongs to, or marks it design intent.
   baseline, API-token rotation and `clear_lock` behind approval are design
   intent; humans are never auto-unlocked.
 
-### 4.7 The data path (part 2 and later)
+### 4.7 The data path
 
-What part 2 verified on the lab array: the log objects are NDJSON, one
+What the lab array shows: the log objects are NDJSON, one
 object per authority (blade partition) per rotation window, written
 seconds after the window closes, nothing written for an idle window, and
 the keys sort in time order; 5 minutes is the shortest rotation the array
@@ -339,7 +338,7 @@ the booleans and the rulebook decides.
   pages at warning on the first failure of a streak, the others record
   theirs at info, and every rulebook pages at critical once a streak
   escalates.
-- Silence is the signal (part 3): with OTLP push there is no `up == 0`.
+- Silence is the signal: with OTLP push there is no `up == 0`.
   `tools/telemetry_rules.py` writes one `FlashBladeTelemetrySilent` rule
   per metric policy, `absent_over_time` of the policy's first metric over
   twice its resolution (or `telemetry_silence_minutes`, whichever is
@@ -351,7 +350,7 @@ the booleans and the rulebook decides.
   silent, critical), `receiver` (Prometheus is silent) or `healthy` (the
   test delivered, the silence was transient). `selftest.yml` repeats the
   cheap half of that every hour from `housekeeping.yml`.
-- Housekeeping on a tick (part 3): `housekeeping.yml` runs
+- Housekeeping on a tick: `housekeeping.yml` runs
   `selftest.yml` every `housekeeping_interval` (REST, the state bucket,
   the audit policy, the telemetry target, Prometheus; one record, critical
   when a check fails), `showback.yml` once a day (the ledger decides by
@@ -377,9 +376,9 @@ the booleans and the rulebook decides.
   `eda-cap-<fs>` and `eda-tarpit`; an export rule `client == <ip>,
   permission ro` meaning quarantined; a file system's `provisioned`;
   legal holds named `eda-ir-*`; the maintenance window itself.
-- Two buckets, not one (part 2). `eda-state` (versioning only, lifecycle
-  pruning) for the tail's cursor copy at `cursors/object_audit/<array>.json`
-  and, from part 3, the showback ledger under `showback/<date>/<array>.json`
+- Two buckets, not one. `eda-state` (versioning only, lifecycle
+  pruning) for the tail's cursor copy at `cursors/object_audit/<array>.json`,
+  the showback ledger under `showback/<date>/<array>.json`
   and the DR drill markers under `showback/dr/<date>-<file system>.json`;
   `eda-log` (versioning plus Object Lock, governance mode and 90-day
   retention for the prototype, 1 day on the lab, `retention_lock`
@@ -401,13 +400,13 @@ the booleans and the rulebook decides.
 - `automation_users` and `automation_agent`, so the audit-driven rules
   never react to the automation's own changes.
 - Every data-path write defaults to notify: `fs_auto_grow`,
-  `auto_raise_user_quota`, `client_actions_enabled`, `qos_auto_cap` in
-  part 1; `canary_auto_disable_key`, `anomaly_auto_disable_key`,
-  `audit_auto_reattach` and `posture_auto_revert` in part 2
-  (`legal_hold_on_arrival` defaults to on: a hold only adds protection and
-  the array audits it); `ir_auto_contain`, `ir_auto_tarpit`,
-  `replication_auto_resume` and `certs_auto_renew` in part 3;
-  `replication_auto_create` and `telemetry_adaptive` later. Lock breaking
+  `auto_raise_user_quota`, `client_actions_enabled`, `qos_auto_cap`,
+  `canary_auto_disable_key`, `anomaly_auto_disable_key`,
+  `audit_auto_reattach`, `posture_auto_revert` (`legal_hold_on_arrival`
+  defaults to on: a hold only adds protection and the array audits it),
+  `ir_auto_contain`, `ir_auto_tarpit`, `replication_auto_resume` and
+  `certs_auto_renew`; `replication_auto_create` and `telemetry_adaptive`
+  are roadmap. Lock breaking
   has no switch, only approval (the webhook on `locks_port`); the
   eradication module refuses to shorten the delay or re-enable manual
   eradication without `force`, and the lab only runs it in check mode.
@@ -436,10 +435,7 @@ options, `purefb_syslog services`, `purefb_bucket_replica paused`,
 public-access options, `purefb_fs promote`. To verify on an array:
 `purefb_policy` rule ordering with `before_rule_name`. The first eight
 rows of the table are built in this repository under `plugins/modules/`
-(the audit trio in part 2; `purefb_maintenance`, `purefb_telemetry_target`
-and `purefb_telemetry_policy`, `purefb_qos`, `purefb_fs_session`,
-`purefb_legal_hold`, `purefb_alert_flag` and `purefb_eradication` in
-part 3; Apache-2.0 here, the collection's licence on the move:
+(Apache-2.0 here, the collection's licence on the move:
 [PACKAGING.md](PACKAGING.md)) until the collection takes them; the file
 audit policies of 4.8, the quota settings, the software check and the
 lifecycle additions are not. The telemetry pair and the alert flag speak
@@ -461,16 +457,16 @@ no method for (clearing a policy from an object, removing a held entity).
 | `purefb_software_check` | `post_software_check` (names, versions), `get_software_check` | pre-upgrade gate |
 | `purefb_lifecycle` additions | delete-marker cleanup; tag-filtered rules and `keep_previous_versions_count` (2.29) | lifecycle as the reclaim; tag-on-arrival |
 
-## 8. Roadmap
+## 8. Scope
 
-| Part | Purity//FB | Scope | Exit tests |
+| Area | Purity//FB | Built | Verified by |
 | --- | --- | --- | --- |
-| PR 1 | 4.6.4 lab | scaffold; `purefb_events` with alerts, audits, sessions, health, telemetry and config; `purefb_syslog` management path; alerts, change_control, config_drift, health, capacity, quota_user, client, maintenance, sessions, syslog; notify, approvals and the orchestrator post reused | the seven tests in [VERIFICATION.md](VERIFICATION.md): a scratch 1 GiB file system filled to 860 MiB raises 1101 and `purefb_fs_quota` and is grown; a uid quota raises 1106; a GUI `purepolicy` change arrives with `user_interface GUI`; the LED on `CH1.FB1` with the LLDP line; fio in `purefb_client_performance`; a 1 h window flips `maintenance_active` |
-| PR 2 | 4.6.4 | built and lab-verified (part 2, five tests passed 2026-11-12): `purefb_object_audit`; the `posture` signal; the three audit modules under `plugins/modules/`; the two `eda` buckets; `object_audit.yml` (canary, honey, landing, lock_on_arrival, the S3 approval inbox, storms, the auditor guard) and `posture.yml` | the five tests in [VERIFICATION.md](VERIFICATION.md): one boto3 GET disables the key within one 5-minute rotation; an approval PutObject runs a proposed grow; a policy member removed as a human re-attaches and pages; the log bucket at 80 % pages (and the quota is raised when a ceiling is set); the cursor survives a restart |
-| PR 3 | 4.6.4 and the 4.5.6 peer | built and lab-verified (part 3, 2026-11-13: all nine tests passed, the telemetry test against a live OTLP receiver and the drill against the peer): the telemetry, maintenance, QoS, session and lock, legal hold, alert flag and eradication modules; the `replication` signal; OTLP into a Prometheus OTLP receiver, `prometheus/flashblade.rules.yml` generated from the policy listing by `tools/telemetry_rules.py`, the Alertmanager rulebook; `contain.yml` (quarantine, tarpit, the lock-release webhook), `replication.yml`, `housekeeping.yml` (selftest, showback, DR drills), the certificate renewal in `posture.yml` | the nine tests in [VERIFICATION.md](VERIFICATION.md): a telemetry target created, attached to the twelve policies and tested by the array, the silence rule firing against a live receiver; `eda-tarpit` at 100 ops/s throttles dd on the client VM, then lifted; the client VM read-only on `eda-demo-quota`, then released; the lag fixture escalates through `replay_replication.yml` and the live signal reports the real connection state; promote and demote `eda-dr-demo` on the peer (waits for the array connection to leave `connecting`); a window opened and closed by `purefb_maintenance`; an NLM lock from `flock` listed and released by `purefb_fs_session`; a legal hold placed and removed on `eda-dr-demo`; showback and selftest run by the housekeeping rulebook |
-| PR 4 | any; a containerized Ansible Automation Platform 2.7 with the automation orchestrator beside it | built and unit-tested (part 4, the platform port of the sibling): `aap/seed.yml` with the `FlashBlade API`, `FlashBlade fleet` and `FlashBlade object store` credential types, 35 job templates, the controller-tier capacity workflow and three schedules in place of the housekeeping tick; the execution environment and the decision environment; the fifteen platform rulebooks under `extensions/eda/rulebooks/platform/` from `tools/platform_rulebooks.py`; `tools/activation_audit.py`; the seven orchestrator definitions (`fb_capacity`, `fb_replication`, four day-2 forms, the scheduled drill) with `tools/ao_lint.py` and `tools/ao_sync.py`; the Slack approval bot | the ten tests in [VERIFICATION.md](VERIFICATION.md): `make check` with `lint-ao`; the seed from an empty organization, run twice; a job in the execution environment; fifteen activations from the decision environment; a config drift remediated through the fleet credential; a canary read disabling a key from the object-audit activation; the silence alert through the alertmanager activation; a human audit line through the syslog activation; the controller-tier workflow through its approval; the capacity route, a day-2 grow and the drill schedule on the orchestrator |
-| later | 4.8.x | NFS file audit, honeyfiles, inbox, storm windows, 128 KB frames; adaptive telemetry; tag-driven lifecycle | a honeyfile read from the NFS client snapshots the file system and kills the session within seconds |
-| later | 4.10.a | `ansible.eda.kafka` behind the shared CloudTrail event filter; the bucket tail stays as the record | canary latency under 5 s; `eventId` dedupe while both sources run |
+| Polling and management syslog | 4.6.4 | `purefb_events` with alerts, audits, sessions, health, telemetry and config; `purefb_syslog`'s management path; the alerts, change_control, config_drift, health, capacity, quota_user, client, maintenance, sessions and syslog rulebooks; notify, the approval paths and the orchestrator post reused from the sibling | seven lab exit tests in [VERIFICATION.md](VERIFICATION.md): the six signals live; a scratch file system filled past its quota raises 1101 and is grown; a uid quota raises 1106 and is raised; a human's NTP change is reconciled and a destroy notified from the audit log; the identify LED with the LLDP line; a client burst attributed to its address; a maintenance window flipping `maintenance_active` |
+| The object side | 4.6.4 (object audit from 4.6.3) | `purefb_object_audit`; the `posture` signal; the three audit modules; the two `eda` buckets; `object_audit.yml` (canary, honey, landing, lock on arrival, the S3 approval inbox, storms, the auditor guard) and `posture.yml` | five tests: one boto3 GET disables the key within one rotation; an approval PutObject runs a proposed grow; a policy member removed as a human is re-attached and paged; the log bucket at its warning threshold has its quota raised; the cursor survives a restart |
+| Telemetry, containment and replication | 4.6.4 and the 4.5.6 peer | the telemetry, maintenance, QoS, session and lock, legal hold, alert flag and eradication modules; the `replication` signal; OTLP into a Prometheus receiver with the rules generated by `tools/telemetry_rules.py` and the Alertmanager rulebook; `contain.yml` (quarantine, tarpit, the lock-release webhook); `replication.yml`; `housekeeping.yml` (selftest, showback, DR drills); the certificate renewal in `posture.yml` | nine tests: a telemetry target created, attached to the twelve policies and the silence rule firing on a live receiver; `eda-tarpit` throttling dd on the client VM, then lifted; the client VM read-only, then released; the lag fixture escalating while the live signal reports the real connection; a promote and demote on the peer; a window opened and closed by the module; an NLM lock listed and released; a legal hold placed and removed; showback and selftest |
+| The platform port | any; a containerized Ansible Automation Platform 2.7 with the automation orchestrator | `aap/seed.yml` with the `FlashBlade API`, `FlashBlade fleet` and `FlashBlade object store` credential types, 35 job templates, the controller-tier capacity workflow and three schedules in place of the housekeeping tick; the execution and decision environments; the fifteen platform rulebooks from `tools/platform_rulebooks.py`; `tools/activation_audit.py`; the seven orchestrator definitions with `tools/ao_lint.py` and `tools/ao_sync.py`; the Slack approval bot | ten tests: `make check`; the seed from an empty organization, run twice; a job in the execution environment; the activations from the decision environment; a config drift remediated through the fleet credential; a canary read disabling a key from the object-audit activation; the silence alert through the alertmanager activation; a human audit line through the syslog activation; the controller-tier workflow through its approval; the capacity route, a day-2 grow and the drill schedule on the orchestrator |
+| Roadmap | 4.8.x | NFS file audit, honeyfiles, inbox, storm windows, 128 KB frames; adaptive telemetry; tag-driven lifecycle | a honeyfile read from the NFS client snapshots the file system and kills the session within seconds |
+| Roadmap | 4.10.a | `ansible.eda.kafka` behind the shared CloudTrail event filter; the bucket tail stays as the record | canary latency under 5 s; `eventId` dedupe while both sources run |
 
 Making the riskiest demos safe: the canary key disable defaults to notify,
 with a 5-minute rotation, the plugin's reader key in a separate account
@@ -520,14 +516,15 @@ port (`aap/README.md`, [ORCHESTRATOR.md](ORCHESTRATOR.md),
 - The FB_2_21 client lacks the telemetry methods and Kafka sits above the
   SDK ceiling, so raw REST appears wherever versions gap; the decision
   environment must pin py-pure-client 1.98 or newer.
-- The lab is shared: Manila owns the only file system, the eradication
-  delay and the maintenance window are array-wide, the client VM hosts the
-  OTLP receiver, and the 4.5.6 peer has no LLDP, CSR or object audit. The array
-  connection to the peer created in part 3 has stayed `connecting` (the
-  replication VIPs differ in MTU, 9000 against 1500, and MTU is a subnet
-  property on 2.21), so the replica link and the DR drill wait on it; the
-  rulebook host sits behind NAT, so a Prometheus receiver must run on a
-  host the array reaches and Alertmanager posts back through an ssh tunnel.
+- The lab is shared: Manila owns the production file system, the
+  eradication delay and the maintenance window are array-wide, the client
+  VM hosts the OTLP receiver, and the 4.5.6 peer has no LLDP, CSR or
+  object audit. An array connection made with replication addresses stays
+  `connecting` on this pair; the one the drill uses was made with the
+  management address and the connection key alone
+  ([HARDWARE_NOTES.md](HARDWARE_NOTES.md), "Replication"). A rulebook host
+  behind NAT needs the receiver on a host the array reaches and
+  Alertmanager posting back through an ssh tunnel.
 - Compliance retention, a ratcheted retention lock and SafeMode need
   Support to undo; the eradication delay caps at 30 days.
 - Last-week baselines are idle on the lab and 14-day location baselines

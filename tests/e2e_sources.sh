@@ -23,7 +23,7 @@
 # playbooks/maintenance_window.yml, the identify LED on LED_COMPONENT lit by
 # the health replay and cleared. An interrupted run still undoes whatever
 # was still in place. Nothing is created, destroyed or resized: the quota,
-# grow and client steps of the PR 1 exit tests (docs/VERIFICATION.md) need a
+# grow and client steps of the lab exit tests (docs/VERIFICATION.md) need a
 # scratch file system and a load generator and are run by hand.
 set -u
 USAGE="usage: A=<array> LED_COMPONENT=<component, e.g. CH1.FB1> $0"

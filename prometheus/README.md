@@ -145,10 +145,10 @@ silence rule names its array in the selector and sets `array_name` from
 that; the rulebook turns `array_name` into `target_array` through the
 `telemetry_array_names` map in the vars file (device name to inventory
 name; an array missing from the map is addressed by the label as it is),
-because an array names itself in telemetry (`slc6-s200-n2-a19-33` on the
-lab) and not by its inventory name (`fb-a`). The per-client policies get
+because an array names itself in telemetry by its own host name and not
+by its inventory name (`fb-a`). The per-client policies get
 no silence rule: they push nothing while no client is active. The translated names, the `device_name` attribute and the
-space and performance labels were confirmed against a Prometheus 3.16
-receiver on 2026-11-13; the one `verify:` left is the health gauge's
+space and performance labels are confirmed against a Prometheus 3.16
+receiver; the one `verify:` left is the health gauge's
 enum (5 for every healthy component on 4.6.4, so any other value
 alerts). Regenerate after a Purity upgrade and compare.

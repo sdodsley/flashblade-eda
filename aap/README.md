@@ -416,21 +416,20 @@ decision environment image, with the `sdodsley.flashblade_eda` collection
 in it, is in the activation workers' store, and keep it there: a later run
 with the example default disables every running activation.
 
-Two things a busy platform host taught. An activation's start opens two
-websocket connections to the EDA controller (the workload, then the event
-stream), and when the controller is busy the gateway answers the second
-one 502: the start fails at once, and past the restart policy's limit the
-activation stays failed. Several activations starting or retrying together
-make it worse, since every attempt costs a container start and more
-websocket work. Bring them up one at a time, and restart (or disable and
-enable) a failed one until it reports running; `tools/activation_audit.py
---recreate` creates one activation at a time for the same reason. And the
-rulebook vars must name, in `automation_users`, the user the API tokens in
-the credentials belong to: every job the platform runs logs in to the
-array as that user, so with the name missing the sessions rulebook sees a
-human login for every job and launches a job for each, and the change
-control rulebook treats the platform's own writes as human changes. The
-human of the lab tests is then a second array user.
+Two rules for a busy platform host. Bring the activations up one at a
+time: an activation's start opens two websocket connections to the EDA
+controller (the workload, then the event stream), a busy controller makes
+the gateway answer the second one 502, the start fails at once, and past
+the restart policy's limit the activation stays failed; several starting
+or retrying together make it worse, since every attempt costs a container
+start and more websocket work, so restart (or disable and enable) a failed
+one until it reports running, and `tools/activation_audit.py --recreate`
+creates one activation at a time for the same reason. And name, in the
+rulebook vars' `automation_users`, the user the API tokens in the
+credentials belong to: every job the platform runs logs in to the array
+as that user, so with the name missing the sessions rulebook sees a human
+login for every job and launches a job for each, and the change control
+rulebook treats the platform's own writes as human changes.
 
 ## Checking the activations
 

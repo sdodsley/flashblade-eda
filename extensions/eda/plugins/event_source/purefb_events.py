@@ -1749,7 +1749,7 @@ def _performance_events(arr, state, args):
             )
             continue
         for v in rows:
-            # the row is named <address>:<port> (lab: 10.21.200.129:893); the
+            # the row is named <address>:<port> (for example 192.0.2.10:893); the
             # address is the inventory key, the port is kept beside it
             client, client_port = _split_client(v.get("name"))
             key = f"client:{protocol}:{client}"

@@ -2,10 +2,9 @@
 
 Facts about the array, the SDK, the collection, ansible-rulebook and the
 state model that shape the code, grouped by topic; [README.md](../README.md)
-carries the short form. Array facts are from a read-only probe of a
-FlashBlade//S200 on Purity//FB 4.6.4 (REST 2.21) unless stated; a legacy
-FlashBlade on 4.5.6 (REST 2.17) is the replication peer of part 3
-("Replication" below).
+carries the short form. Array facts are from a FlashBlade//S200 on
+Purity//FB 4.6.4 (REST 2.21) unless stated; a legacy FlashBlade on 4.5.6
+(REST 2.17) is its replication peer ("Replication" below).
 
 ## REST API
 
@@ -71,7 +70,7 @@ FlashBlade on 4.5.6 (REST 2.17) is the replication peer of part 3
   extends it. The window suppresses every alert except 1016, 1026, 1101,
   1102, 1103, 1104, 1106, 1107, 1108, 1109, 1110, 1123 and 1130. There is
   no "environment" window. The gate reads false where the endpoint is
-  absent. `purefb_maintenance` (part 3) wraps the post and the delete,
+  absent. `purefb_maintenance` wraps the post and the delete,
   takes the timeout in hours and, with `extend`, deletes and re-posts an
   existing window with the new timeout.
 - `/arrays`: `banner`, `default_inbound_tls_policy`,
@@ -96,7 +95,7 @@ FlashBlade on 4.5.6 (REST 2.17) is the replication peer of part 3
   `protocol=nfs` works; `/arrays/nfs-specific-performance` adds
   per-op-class metadata rates and latencies.
 - `/arrays/clients/performance` is per client connection: the row `name` is
-  `<address>:<port>` (lab: `10.21.200.129:893`), so the plugin splits it into
+  `<address>:<port>` (for example `192.0.2.10:893`), so the plugin splits it into
   `client` and `client_port`; the figures are a lagged sample (a 4 s dd burst
   showed on `/file-systems/performance` first) and the list is empty while
   the array is idle. `sort=writes_per_sec-` and `limit` give the top N;
@@ -105,9 +104,9 @@ FlashBlade on 4.5.6 (REST 2.17) is the replication peer of part 3
   has two of four bays populated per blade: 20 such rows) and `/drives` lists
   the same bays as DFMs with status `unclaimed`, so the defaults of both
   `hardware_ignore_status` and `drive_ignore_status` include it.
-- `/arrays/clients/performance` answered "Service temporarily unavailable" once
-  in an hour of polling while every other read succeeded; the plugin logs it
-  and skips the client rows for that poll instead of failing the signal.
+- `/arrays/clients/performance` can answer "Service temporarily unavailable"
+  while every other read succeeds; the plugin logs it and skips the client
+  rows for that poll instead of failing the signal.
 - Some alerts (1112 on the lab) bump `updated` every minute without any other
   change; the alert diff keys on state, severity, flag and summary, not on
   `updated`.
@@ -164,9 +163,9 @@ FlashBlade on 4.5.6 (REST 2.17) is the replication peer of part 3
   `<ts> <fm-host> purity.audit: - Adding audit entry. GUID=<guid>, ID=<n>,
   Time=<yyyy-mm-dd hh:mm:ss.ffffff>, User=<user>, Location=<ip>,
   UI=CLI|GUI|REST, Command=<cmd>, Subcommand=<sub>, Arguments=<args>`.
-  RFC 3164 by default; RFC 5424 is a tunable. verify: the exact lines the
-  lab array sends once a syslog server exists; the layouts above are from
-  the FlashBlade Admin Guide 4.8.1.
+  RFC 3164 by default; RFC 5424 is a tunable. The `purity.audit` layout is
+  confirmed from a live syslog server; the `purity.alert` and `purity.test`
+  layouts are from the FlashBlade Admin Guide 4.8.1.
 - Alert 1139 "Message Drop for Remote Syslog (Audit Related)" fires when a
   target drops data-audit messages; it is suppressed during a maintenance
   window, as is 1140.
@@ -188,8 +187,8 @@ FlashBlade on 4.5.6 (REST 2.17) is the replication peer of part 3
 
 ## Object audit
 
-Verified in part 2 on the lab array (Purity//FB 4.6.4, REST 2.21,
-py-pure-client 1.98.0); everything below exists from REST 2.20
+Verified on the lab array (Purity//FB 4.6.4, REST 2.21, py-pure-client
+1.98.0); everything below exists from REST 2.20
 (Purity//FB 4.6.3). The lab object store, which the vars and env examples
 assume:
 
@@ -333,35 +332,35 @@ The log objects, read back from `eda-log` after traffic from `eda-app`:
 
 ## Telemetry
 
-Probed in part 3 on the lab array (Purity//FB 4.6.4, REST 2.21). The
+Probed on the lab array (Purity//FB 4.6.4, REST 2.21). The
 FB_2_21 client has no telemetry methods, so `purefb_telemetry_target`,
 `purefb_telemetry_policy`, `telemetry_check.yml` and
 `tools/telemetry_rules.py` speak REST.
 
-- Verified against a live receiver on 2026-11-13: the array POSTs to the
+- Verified against a live Prometheus 3.16 receiver: the array POSTs to the
   endpoint path exactly as given, so a Prometheus 3.x OTLP receiver needs
   `<host>:9090/api/v1/otlp/v1/metrics` (`/api/v1/otlp` alone answers 404 and
   nothing is stored); the first 60 s policies showed up within two minutes.
-  `GET /telemetry-targets/test` answered 400 with no body even while the
-  pushes were landing, so a 400 there does not mean the path is broken;
+  `GET /telemetry-targets/test` answers 400 with no body even while the
+  pushes land, so a 400 there does not mean the path is broken;
   `telemetry_check.yml` therefore weighs the receiver's own answer too. The
   resource attributes arrive as labels `device_name` and `device_id`; the
   series carry `storage_type` (all, file, object), `space_type` (capacity,
   total_physical, total_provisioned, available_provisioned, unique, virtual,
   snapshots, shared, destroyed, destroyed_virtual), `op`, `proto`,
   `resource_type`, `entity_name`, `err` and `transfer`. Two things the
-  live stream showed about rules: the per-client policies
+  live stream shows about rules: the per-client policies
   (`device_client_perf_metrics`, `bucket_client_perf_metrics`) push
   nothing while no client is active, so an `absent_over_time` on them
   fires on an idle array and the generator gives them no silence rule; and
   `storage_device_connector_err_ps` reports a steady `other` and `total`
   count on the lab's uplinks (16/s on CH1.FM1.ETH1 and ETH4) that is not a
   fault, so the connector rule counts only the named error kinds. The
-  array names itself in telemetry (`device_name` slc6-s200-n2-a19-33), not
+  array names itself in telemetry (`device_name` is its own host name), not
   by its inventory name, so `alertmanager.yml` maps the label through
   `telemetry_array_names`; without the map a playbook addressed to the
   device name finds no host and runs against nothing.
-- Targets: `GET /telemetry-targets` (none on the lab before part 3).
+- Targets: `GET /telemetry-targets`.
   `POST /telemetry-targets?names=<n>` body `{"endpoint":
   "<host>:<port>[/<path>]", "transport": "otlp-http-protobuf" |
   "otlp-http-protobuf-without-tls", "source": {"name": "<network
@@ -379,10 +378,11 @@ FB_2_21 client has no telemetry methods, so `purefb_telemetry_target`,
   `endpoint`, `transport`, `source{name}`, `enabled`, `api_token`,
   `ca_certificate`, `ca_certificate_group`, `client_certificate`,
   `resource_attributes`.
-- `GET /telemetry-targets/test?names=<n>` answered 400 with an empty body
-  against a port that is not an OTLP receiver; the success shape (the
-  design says the array delivers `dummy_metric_milliseconds`) is to be
-  recorded once a receiver exists. The module's `test` option returns
+- `GET /telemetry-targets/test?names=<n>` answers 400 with an empty body,
+  against a port that is not an OTLP receiver and against a receiver that
+  is storing the pushes alike, so no success shape has been seen (the
+  design says the array delivers `dummy_metric_milliseconds`). The
+  module's `test` option returns
   `{status, ok, body}` and `telemetry_check.yml` treats anything but 200
   as a failed test.
 - Policies: `GET /telemetry-metrics-policies` lists 12 built-in policies
@@ -419,7 +419,7 @@ FB_2_21 client has no telemetry methods, so `purefb_telemetry_target`,
   UnderscoreEscapingWithSuffixes`) a dotted name becomes underscores,
   `storage_device_iops`, and the resource attributes (the device name
   among them) become labels when `otlp.promote_all_resource_attributes`
-  is true. Confirmed on a Prometheus 3.16 receiver on 2026-11-13: the array
+  is true. Confirmed on a Prometheus 3.16 receiver: the array
   name arrives as `device_name` (with `device_id`), which is the generator's
   default `--array-label`; every generated rule copies it into a fixed
   `array_name` label (a rulebook condition cannot index a label by a
@@ -441,9 +441,8 @@ FB_2_21 client has no telemetry methods, so `purefb_telemetry_target`,
 The lab pair: `fb-a`, the FlashBlade//S200 on Purity//FB 4.6.4 (REST
 2.21), and `fb-b`, a legacy FlashBlade on 4.5.6 (REST 2.17).
 
-- An array connection `fb-a` to `fb-b` was created in part 3 with
-  `everpure.flashblade.purefb_connect` (`target_repl` the peer's
-  replication address). `GET /array-connections` item `{id,
+- The array connection `fb-a` to `fb-b` is made with
+  `everpure.flashblade.purefb_connect`. `GET /array-connections` item `{id,
   management_address, replication_addresses[], version, status,
   remote{name, id}, type "async-replication", os, encrypted,
   throttle{default_limit, window_limit, window{start, end}},
@@ -452,15 +451,14 @@ The lab pair: `fb-a`, the FlashBlade//S200 on Purity//FB 4.6.4 (REST
   `management_address` null and `replication_addresses` `[]` while
   connecting. A connection created with `replication_addresses` (the
   module's `target_repl`, the CLI's `--replication-address`) between two
-  arrays with no NAT between them stayed `connecting` for hours on the lab
-  with "Internal error." on the object path, in both directions, although
-  the replication VIPs ping each other at 9000 bytes and the peer's expired
-  certificate had been replaced; created again with the management address
-  and the connection key alone it was `partially_connected` in 15 s and
-  `connected` in a minute (knowledge base KB0034025 describes exactly
-  this). A replica link appeared `idle` on both sides within 15 s of the
-  POST and the peer's copy reads `promotion_status demoted, writable
-  false`; a promote (`PATCH /file-systems requested_promotion_state
+  arrays with no NAT between them stays `connecting` with "Internal
+  error." on the object path, in both directions, although the
+  replication VIPs reach each other at 9000 bytes; created with the
+  management address and the connection key alone it is
+  `partially_connected` in 15 s and `connected` in a minute (knowledge
+  base KB0034025 describes this). A replica link appears `idle` on both
+  sides within 15 s of the POST and the peer's copy reads
+  `promotion_status demoted, writable false`; a promote (`PATCH /file-systems requested_promotion_state
   promoted`) completes within a minute, and the demote on the 4.5.6 peer
   needs `discard_non_snapshotted_data=true` ("Demoting a file system
   will restore the file system from the latest snapshot because creating
@@ -483,10 +481,13 @@ The lab pair: `fb-a`, the FlashBlade//S200 on Purity//FB 4.6.4 (REST
   without an endpoint yields an empty list; `replication_ok_statuses`
   (default replicating, idle, connected, healthy) decides what counts as
   unhealthy and `replication_lag_warn_s` what counts as lagging.
-- A scratch file system `eda-dr-demo` (1 GiB, NFSv3, the legacy rule for
-  the client VM) exists on `fb-a`; its replica link (`POST
-  /file-system-replica-links?local_file_system_names=eda-dr-demo&remote_names=<peer>&remote_file_system_names=eda-dr-demo`)
-  waits for the connection.
+- Two scratch file systems on `fb-a` serve the tests: `eda-dr-demo` (1 GiB,
+  NFSv3, the legacy rule for the client VM) carries the legal hold, and
+  `eda-dr-link` is the replicated one (`POST
+  /file-system-replica-links?local_file_system_names=eda-dr-link&remote_names=<peer>&remote_file_system_names=eda-dr-link`).
+  A file system that has ever carried a legal hold cannot be linked
+  ("File system with legal holds applied does not support replication"),
+  which is why there are two.
 - Promotion: `PATCH /file-systems?names=<fs> {"requested_promotion_state":
   "promoted" | "demoted"}` (`FileSystemPatch.requested_promotion_state`;
   `purefb_fs` has `promote` and `discard_snaps`); `promotion_status` reads
@@ -501,13 +502,13 @@ The lab pair: `fb-a`, the FlashBlade//S200 on Purity//FB 4.6.4 (REST
   `replication_resume.yml` reads them from `GET
   /bucket-replica-links?local_bucket_names=<bucket>` first.
 - Alert 1112 (object replication connection requires attention) is the
-  array's own view of the same state; four were open on the lab before
-  part 3.
+  array's own view of the same state; four are open on the lab.
 
 ## Containment and holds
 
 QoS, sessions and locks, export rules, legal holds, the alert flag, the
-eradication config and certificates, as part 3 reads and writes them.
+eradication config and certificates, as the modules and playbooks read
+and write them.
 
 - QoS (REST 2.21; SDK `post/patch/delete/get_qos_policies` with keyword
   `policy` and model `flashblade.QosPolicy(max_total_ops_per_sec=,
@@ -520,30 +521,28 @@ eradication config and certificates, as part 3 reads and writes them.
   command `purepolicy`, subcommand `qos create`, `qos setattr`, `qos
   delete`. Assignment is `PATCH /file-systems?names=<fs> {"qos_policy":
   {"name": "<p>"}}` (`FileSystemPatch.qos_policy`, the `qos_cap.yml`
-  path of part 1) and the same on `/buckets`. Clearing is unverified:
-  `purefb_qos` tries `{"qos_policy": {"name": ""}}` and then
-  `{"qos_policy": null}`, and the lab run records which one the array
-  accepted. `state: absent` clears the policy from every object that
+  path) and the same on `/buckets`. Clearing is `{"qos_policy": {"name":
+  ""}}`, the empty-name form, which the array accepts; `purefb_qos` tries
+  it first and `{"qos_policy": null}` second. `state: absent` clears the policy from every object that
   carries it (read from `/file-systems` and `/buckets` `qos_policy.name`)
   before deleting it.
 - Sessions and locks: `GET /file-systems/sessions` (optional
   `protocols=nfs|smb`), `GET /file-systems/locks` and `GET
   /file-systems/open-files?protocols=smb` exist on 2.21 (`nfs` is
-  "Unsupported protocols" for open files); both lists were empty on the
-  idle lab, so the item fields are unverified and `purefb_fs_session`
-  reads them with `.get`. Documented fields (Purity//FB REST reference):
+  "Unsupported protocols" for open files). Documented fields (Purity//FB
+  REST reference), which `purefb_fs_session` reads with `.get`:
   session `{name, client, user, protocol, port, opens, time_idle,
   authentication, connection_time}`; lock `{name, client,
   file_system{name}, path, inode, protocol, access_type, created,
   range{start, end}, source, status}`. SDK
   `get/delete_file_systems_sessions(names=, client_names=, user_names=,
   protocols=, disruptive=)` and `get/delete_file_systems_locks(names=,
-  file_system_names=, client_names=, paths=, inodes=, recursive=)`. The
-  lab's NFS client (`10.21.200.129`) mounts `eda-demo-quota` over NFSv3,
-  so there are no NFSv4 sessions to list; an NLM lock taken with `flock`
-  on the mount is what `/file-systems/locks` should show. The module
-  lists first, removes only what matched, reports the names and changes
-  nothing in check mode.
+  file_system_names=, client_names=, paths=, inodes=, recursive=)`. An
+  NLM lock taken with `flock` on an NFSv3 mount shows under
+  `/file-systems/locks` with the client's address, `source` (the file
+  system) and `path`; an NFSv3 client has no session rows, since the
+  sessions are NFSv4 and SMB. The module lists first, removes only what
+  matched, reports the names and changes nothing in check mode.
 - NFS exports take two forms. An export policy (`nfs.export_policy{name}`)
   has ordered rules under `/nfs-export-policies/rules`: item `{name
   "<policy>.<n>", policy{name}, index, client, permission rw|ro, access
@@ -553,7 +552,7 @@ eradication config and certificates, as part 3 reads and writes them.
   rule=flashblade.NfsExportPolicyRuleInPolicy(client=, permission=,
   access=), before_rule_name=<rule>)` and
   `delete_nfs_export_policies_rules(names=[rule])`. The legacy form is
-  the `nfs.rules` string, `"10.21.200.129(rw,no_root_squash)"`, several
+  the `nfs.rules` string, `"192.0.2.10(rw,no_root_squash)"`, several
   entries separated by a space, written with `PATCH
   /file-systems?names=<fs> {"nfs": {"rules": "..."}}` or `purefb_fs
   nfs_rules`. `quarantine_client.yml` handles both: a rule `client <ip>
@@ -564,8 +563,8 @@ eradication config and certificates, as part 3 reads and writes them.
   systems `eda-demo-quota` and `eda-dr-demo` use the legacy string with
   the one client, which is what the quarantine test exercises; the
   default export policy `all` has rule `all.1` `* rw no-squash`.
-- Legal holds (REST 2.17 and later): `GET /legal-holds` (one hold existed
-  on the lab before part 3), item `{name, id, description, realms}`; SDK
+- Legal holds (REST 2.17 and later): `GET /legal-holds`, item `{name, id,
+  description, realms}`; SDK
   `post_legal_holds(names=, hold=flashblade.LegalHold(description=))`,
   `delete_legal_holds(names=)`; held entities `GET
   /legal-holds/held-entities`, item `{legal_hold{name},
@@ -573,27 +572,26 @@ eradication config and certificates, as part 3 reads and writes them.
   `post_legal_holds_held_entities(names=[hold], file_system_names=[fs],
   paths=[path], recursive=)`. A held entity is released with `PATCH
   /legal-holds/held-entities?names=<hold>&file_system_names=<fs>&paths=<path>&released=true`
-  (SDK `patch_legal_holds_held_entities(..., released=True)`; verified on
-  the lab: a DELETE answers 405, a PATCH without `released` says 'Patch
-  on held entities requires "released"=true', a directory needs
-  `recursive=true` on the release as on the hold ("Can't apply or release
-  legal holds to directories without the recursive flag"), a hold
-  still in use cannot be deleted, and a hold applied or released moments
-  ago stays in use for several seconds, so the module retries the delete
-  for up to 30 s). The object-side hold of part 2
-  (`put_object_legal_hold` over S3) is a different mechanism.
-- The alert flag (verified in part 1, and the module on 2026-11-13: flag,
-  flag again unchanged, unflag on the open 1140 alert): `PATCH
-  /alerts?names=<n> {"flagged": true | false}`; `purefb_alert_flag` wraps
-  it and returns `{name, code, flagged}`.
+  (SDK `patch_legal_holds_held_entities(..., released=True)`): a DELETE
+  answers 405, a PATCH without `released` says 'Patch on held entities
+  requires "released"=true', a directory needs `recursive=true` on the
+  release as on the hold ("Can't apply or release legal holds to
+  directories without the recursive flag"), a hold still in use cannot be
+  deleted, and a hold applied or released moments ago stays in use for
+  several seconds, so the module retries the delete for up to 30 s. The
+  object-side hold (`put_object_legal_hold` over S3) is a different
+  mechanism.
+- The alert flag: `PATCH /alerts?names=<n> {"flagged": true | false}`;
+  `purefb_alert_flag` wraps it and returns `{name, code, flagged}`
+  (verified on an open alert: flag, a second flag unchanged, unflag).
 - Eradication config: `/arrays` carries `eradication_config
   {eradication_delay (ms), manual_eradication}` (`all-enabled` on the
   lab; the other values are `all-disabled` and `partially-enabled`); the
   write is `PATCH /arrays {"eradication_config": {...}}` (SDK
   `patch_arrays(array=flashblade.Array(eradication_config=flashblade.ArrayEradicationConfig(...)))`),
-  unverified (the module ran in check mode on the lab on 2026-11-13: no
-  change at the array's own values, a longer delay reported as a change;
-  nothing was written). `purefb_eradication` takes the delay in whole days
+  unverified: the module runs in check mode only on the lab (no change at
+  the array's own values, a longer delay reported as a change) and never
+  writes there. `purefb_eradication` takes the delay in whole days
   (1 to 30) and treats the setting as a ratchet: it refuses to shorten the
   delay or re-enable manual eradication unless `force` is true.
 - Certificates: `/certificates` item `{name, certificate_type
@@ -633,15 +631,15 @@ eradication config and certificates, as part 3 reads and writes them.
 - No module exists in 1.29.0 for maintenance windows, QoS policies, alert
   flagging, session or lock termination, audit policies, log targets,
   telemetry targets or legal holds ([DESIGN.md](DESIGN.md), "Collection
-  gaps"); parts 2 and 3 add the eleven under `plugins/modules/` of this
-  repository, `playbooks/tasks/fb_rest.yml` covers the raw calls that
+  gaps"); the eleven under `plugins/modules/` of this repository fill
+  those gaps, `playbooks/tasks/fb_rest.yml` covers the raw calls that
   remain (the user quota reads, the export string rewrite, the promotion
   state, the telemetry test), and `tasks/s3_object.yml` does the object
   legal hold over S3 (`put_object_legal_hold`). Only `purefb_realm` has
   a QoS option in 1.29.0.
-- Part 2 adds `purefb_log_target`, `purefb_audit_policy` and
-  `purefb_bucket_audit_filter` under `plugins/modules/` of this
-  repository, in the collection's style (DOCUMENTATION, EXAMPLES, RETURN,
+- `purefb_log_target`, `purefb_audit_policy` and
+  `purefb_bucket_audit_filter` are written in the collection's style
+  (DOCUMENTATION, EXAMPLES, RETURN,
   check mode, idempotent, the collection's `module_utils.purefb` for
   `get_system` and `purefb_argument_spec`), on the SDK models
   `LogTargetsObjectStorePost` / `LogTargetsObjectStore` (`Reference`,
@@ -653,7 +651,7 @@ eradication config and certificates, as part 3 reads and writes them.
   recreates a filter that differs, because the array has no PATCH for
   them; `purefb_audit_policy` makes the member set exactly `buckets` and
   removes the members before an absent policy.
-- Part 3 adds eight more in the same style, all with check mode and
+- The other eight are in the same style, all with check mode and
   idempotent: `purefb_telemetry_target` (REST: `name`, `endpoint` as
   `host:port[/path]`, `transport`, `source`, `enabled`, `policies` to
   attach to, `test`, `state`; returns `target` and, with `test`, the
@@ -677,12 +675,12 @@ eradication config and certificates, as part 3 reads and writes them.
   modules carry a small helper that logs in with the token, uses the
   session header and logs out in a `finally`, and never puts the token in
   a message.
-- Already sufficient for part 2: `purefb_s3user state=keystate key_name=
-  enable_key=` (the re-enable after a canary test), `purefb_bucket`
-  (quota, hard limit, Object Lock options, `block_public_access`,
-  `block_new_public_policies`), `purefb_s3acc`; and for part 3:
+- Collection modules that suffice as they are: `purefb_s3user
+  state=keystate key_name= enable_key=` (the re-enable after a canary
+  test), `purefb_bucket` (quota, hard limit, Object Lock options,
+  `block_public_access`, `block_new_public_policies`), `purefb_s3acc`,
   `purefb_bucket_replica paused` (the resume), `purefb_certs generate`
-  (the renewal), `purefb_connect` (the lab's array connection),
+  (the renewal), `purefb_connect` (the array connection),
   `purefb_fs promote` (the drill uses the REST field directly so that it
   can poll `promotion_status`).
 - Known array behaviours from the collection's QA suite: snapshot policies
@@ -893,7 +891,7 @@ seed, the two images and the activations are written around;
   `eda_tarpit`), a quarantined client is its `ro` export rule or legacy
   entry, a handled alert is `flagged`, the approval request is a
   file under `request_dir`, the maintenance window is itself the state.
-- Part 3 adds two kinds of object in the state bucket, both written with
+- Two more kinds of object live in the state bucket, both written with
   the state key through `tasks/s3_object.yml`: the showback ledger
   `<showback_prefix><yyyy-mm-dd>/<array>.json` (skipped when it exists,
   so one run a day) and the DR drill marker
@@ -918,20 +916,15 @@ seed, the two images and the activations are written around;
   fire on lowered thresholds under a fio load from the client VM, which
   also hosts the OTLP receiver.
 - Replication end to end beyond one link: the array connection to the
-  4.5.6 peer came up once created without replication addresses
-  ("Replication" above) and carries the `eda-dr-link` file system link;
-  a file system that has ever had a legal hold applied cannot be linked
-  ("File system with legal holds applied does not support replication",
-  which is why the drill uses a second scratch file system); bucket links
-  and a lagging or paused link are replayed only; the peer has no LLDP,
-  CSR or object audit.
-- The OTLP path beyond one receiver: a Prometheus 3.16 receiver ran as
-  plain processes on the client VM and the rulebook host reached its
-  Alertmanager over an ssh reverse tunnel ("Telemetry" above has what it
-  showed); a TLS receiver (`otlp-http-protobuf` with a CA certificate
-  group), a Datadog or Dynatrace target, and a success body from
-  `GET /telemetry-targets/test` (it answered 400 even while pushes landed)
-  were not seen.
+  4.5.6 peer carries the `eda-dr-link` file system link and nothing else;
+  bucket links and a lagging or paused link are replayed only; the peer
+  has no LLDP, CSR or object audit.
+- The OTLP path beyond one receiver: a Prometheus 3.16 receiver as plain
+  processes on the client VM, its Alertmanager reaching the rulebook host
+  over an ssh reverse tunnel; a TLS receiver (`otlp-http-protobuf` with a
+  CA certificate group), a Datadog or Dynatrace target and a success body
+  from `GET /telemetry-targets/test` (400 even while pushes land) are not
+  seen.
 - Object-audit latency below one rotation: 5 minutes is the floor the
   array accepts for `log_rotate`, and a disabled key is seen by its next
   request, not by the one that tripped the canary.

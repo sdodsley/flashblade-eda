@@ -13,55 +13,18 @@ no external monitoring stack are required. It is the sibling of
 its plugin skeleton, rulebook conventions, approval paths and notify
 playbook.
 
-Status: a prototype, not a supported product. This first part (the REST
-pull plugin, the management syslog listener and ten rulebooks) is verified
-against Purity//FB 4.6.4 (REST 2.21) on a FlashBlade//S200 with
-py-pure-client 1.98.0: the seven lab exit tests (all six signals live, a
-file system grown on alert 1101, a user quota raised on 1106, a human's
-NTP change reconciled and a destroy notified from the audit log, the
-identify LED lit by a replayed blade fault, a client burst attributed to
-its address, a maintenance window gating the rules) have passed; the
-syslog listener is unit-tested only until a syslog server points at it.
-The second part, the object side (`purefb_object_audit` tailing the
-object-audit log bucket with boto3, the `posture` signal, three modules
-for the audit configuration, the `object_audit.yml` and `posture.yml`
-rulebooks and seven playbooks), is built against the same array's object
-store and has passed its five lab exit tests (a canary read disabling the
-key within one rotation, an approval object growing a file system, a human
-detach re-attached in seconds, the log bucket at 85 % of its quota raised,
-the cursor surviving a restart). The third part, telemetry, containment
-and replication (eight more modules under `plugins/modules/`, the
-`replication` signal, the `alertmanager.yml`, `replication.yml`,
-`contain.yml` and `housekeeping.yml` rulebooks, a certificate renewal in
-`posture.yml`, ten playbooks, the Prometheus rule generator and the OTLP
-receiver material under `prometheus/`), is built and unit-tested; its nine
-lab exit tests (a telemetry target created, attached to the twelve metric
-policies and tested by the array; the tarpit QoS policy throttling the
-client VM, then lifted; the client VM quarantined read-only and released;
-the lag fixture escalating while the live replication signal reports the
-real connection state; a promote and demote on the peer; a maintenance
-window opened and closed by the module; an NLM lock listed and released; a
-legal hold placed and removed; showback and selftest run by the
-housekeeping rulebook) are listed in
-[docs/VERIFICATION.md](docs/VERIFICATION.md) and all nine passed on
-2026-11-13, the telemetry one against a Prometheus OTLP receiver on the
-client VM and the drill against the 4.5.6 peer. The fourth part, the
-platform port of the sibling project (the Ansible Automation Platform
-seed and its two images, the generated platform rulebooks, the
-orchestrator definitions and tools, the Slack approval bot), has passed
-its ten lab exit tests on a containerized Ansible Automation Platform 2.7
-with the automation orchestrator beside it: the seed and its second run,
-the execution and decision environments, the polling, object-audit,
-Alertmanager and syslog paths through activations, the controller-tier
-approval and the orchestrator's capacity, grow and drill definitions,
-with the approvals decided from Slack. On that shared host the
-activations ran a few at a time, inside the controller's running cap
-([docs/VERIFICATION.md](docs/VERIFICATION.md)).
+Status: a prototype, not a supported product, at version 0.1. Everything
+in the tree is built, unit-tested and verified on a FlashBlade//S200
+running Purity//FB 4.6.4 (REST 2.21), its Purity//FB 4.5.6 replication
+peer and a containerized Ansible Automation Platform 2.7 with the
+automation orchestrator beside it; the lab exit tests, their results and
+what the lab cannot show are in
+[docs/VERIFICATION.md](docs/VERIFICATION.md).
 
-The transports the design uses; four are built (REST and management
-syslog in part 1, the object-audit tail in part 2, OTLP push into a
-Prometheus receiver and Alertmanager in part 3), Kafka is the roadmap at
-the end of this page:
+The transports the design uses. Four are built: REST pull, management
+syslog, the object-audit tail and OTLP push into a Prometheus receiver
+with Alertmanager; Kafka waits for Purity//FB 4.10 (the roadmap at the end
+of this page):
 
 ```mermaid
 flowchart LR
@@ -377,9 +340,9 @@ active), plus `FlashBladeHealthNotOk`, `FlashBladeCriticalAlertOpen`,
 `FlashBladeConnectorErrors` and `FlashBladeReplicationStalled`; every
 alert carries an `array_name` label copied from the `device_name`
 resource attribute Prometheus promotes, because a rulebook condition
-cannot index a label by a variable name. An array names itself there
-(`slc6-s200-n2-a19-33`, not `fb-a`), so `telemetry_array_names` in the
-vars file maps the device name to the inventory name. Alertmanager posts
+cannot index a label by a variable name. An array names itself there by
+its own host name, not `fb-a`, so `telemetry_array_names` in the vars
+file maps the device name to the inventory name. Alertmanager posts
 the alerts to `ansible.eda.alertmanager` and `alertmanager.yml` runs the
 same playbooks as the pull path. With push there is no `up == 0`: silence is the signal,
 and `telemetry_check.yml` decides whether the array, the receiver or the
@@ -399,7 +362,7 @@ its `flagged` bit set; a quarantined client is its export-policy rule
 `client == <ip>, permission ro` or its legacy `nfs.rules` entry turned
 `ro`; the approval request is a file under
 `request_dir`; the maintenance window is itself the state. The two `eda`
-buckets of the design exist from the second part, in the account `eda`:
+buckets of the design live in the account `eda`:
 `eda-state` (versioning only) holds the tail's cursor copy at
 `cursors/object_audit/<array>.json`, a cursor rewritten every poll being
 the reason it is not Object-Locked, the daily showback ledger under
@@ -677,7 +640,7 @@ listing and is compared with a golden rule file; static checks validate every ru
 against ansible-rulebook's own schema, require every lowercase variable a
 rulebook references to be documented in `vars/example.yml` and every
 playbook a rule runs to exist, and check the notify playbook and the
-`set_stats` artifacts; for the platform port, `test_platform_rulebooks.py`
+`set_stats` artifacts; `test_platform_rulebooks.py`
 compares the generator's output with the committed files under
 `extensions/eda/rulebooks/platform/`, checks that `housekeeping.yml`
 produces none, that every template a platform rule launches is listed in
@@ -705,8 +668,8 @@ push, the `lint-ao` step after the lint.
 blade and a LAG fault, days to full, a client's share, for the object
 side a canary hit, a landing marker, an evidence put, a denied-storm
 rollup and a quota health event, a posture event with every finding
-kind through `tests/replay_posture.yml`, for part 3 a connection down, a
-paused bucket link, a lagging link that escalates and a recovery through
+kind through `tests/replay_posture.yml`, a connection down, a paused
+bucket link, a lagging link that escalates and a recovery through
 `tests/replay_replication.yml`, a `FlashBladeTelemetrySilent` firing, a
 `FlashBladeCapacityHigh` firing and a resolved alert in Alertmanager's
 shape through `tests/replay_alertmanager.yml`, and a client hog, a
@@ -731,54 +694,20 @@ file system and a load generator and are listed, with their state, in
 
 ## Roadmap
 
-Three parts on the 4.6.4 lab and the platform port, then what newer
-Purity//FB releases unlock.
-The reasoning is in [docs/DESIGN.md](docs/DESIGN.md).
+What is built runs on Purity//FB 4.6.4; what follows needs a newer
+release or further work. The reasoning is in
+[docs/DESIGN.md](docs/DESIGN.md).
 
-- **PR 2, the object side: built (part 2).** `purefb_object_audit` tails
-  the log bucket; the `posture` signal; the three audit modules
-  (`purefb_log_target`, `purefb_audit_policy`,
-  `purefb_bucket_audit_filter`) under `plugins/modules/` until the
-  collection takes them; the two `eda` buckets; `object_audit.yml`
-  (canary, honey, landing, lock on arrival, the S3 approval inbox, denied
-  and error storms, mass delete, the auditor guard for quota, stale log,
-  coverage and a human's detach) and `posture.yml`; the five lab exit
-  tests are in [docs/VERIFICATION.md](docs/VERIFICATION.md).
-- **PR 3, telemetry, containment and replication: built (part 3).**
-  Eight modules (`purefb_telemetry_target`, `purefb_telemetry_policy`,
-  `purefb_maintenance`, `purefb_qos`, `purefb_fs_session`,
-  `purefb_legal_hold`, `purefb_alert_flag`, `purefb_eradication`); the
-  `replication` signal; OTLP push into a Prometheus OTLP receiver with
-  `prometheus/flashblade.rules.yml` generated from the array's own policy
-  listing by `tools/telemetry_rules.py` and the Alertmanager rulebook;
-  `contain.yml` (the client downgraded to read-only in its export rule,
-  the `eda-tarpit` QoS policy, and the lock and session release behind
-  the approval webhook, folded into the same rulebook); `replication.yml`
-  (array connections, S3 targets, file system and bucket replica links);
-  `housekeeping.yml` with the hourly selftest, the daily showback ledger
-  written to the state bucket and the DR drill that promotes and demotes
-  a replica on the peer; the self-signed certificate renewal in
-  `posture.yml`. The nine lab exit tests are listed in
-  [docs/VERIFICATION.md](docs/VERIFICATION.md); all nine passed on
-  2026-11-13, the silence rule against a live receiver and the drill
-  against the peer.
-- **PR 4, the platform port: verified on the platform (part 4).** `aap/seed.yml` and the
-  two images (`aap/Containerfile.ee`, `decision-environment/`); the
-  fifteen platform rulebooks generated by `tools/platform_rulebooks.py`,
-  with three controller schedules in place of the housekeeping tick; the
-  `FlashBlade object store` credential and one object-audit activation per
-  array; the seven orchestrator definitions (the capacity and paused-link
-  routes, four day-2 forms, the scheduled drill) with `tools/ao_lint.py`
-  and `tools/ao_sync.py`; the Slack approval bot and
-  `tools/activation_audit.py`. The ten lab exit tests are listed in
-  [docs/VERIFICATION.md](docs/VERIFICATION.md).
-- **Next:** the Purity//FB 4.8 and 4.10 items below.
 - **Purity//FB 4.8.0:** NFS file-access audit, which makes honeyfiles, an
   inbox folder and per-user access storms observable over the data-audit
   syslog. **4.8.6:** per-rule telemetry resolution, so collections can be
   raised during an incident. **4.10:** object notifications to Kafka;
   `ansible.eda.kafka` takes the bucket tail's place behind the same event
   filter, and the canary latency drops from one log rotation to seconds.
+- Reclaim candidates beyond pending eradication: snapshot sprawl and
+  versioned buckets without a lifecycle rule.
+- The eleven modules moving into `everpure.flashblade`
+  ([docs/PACKAGING.md](docs/PACKAGING.md)).
 
 ## Related
 

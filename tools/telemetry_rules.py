@@ -141,7 +141,7 @@ HEADER = """\
 # site. FlashBladeCapacityHigh puts the bare percentage in annotations.value
 # for the rulebook; summary is the sentence for humans.
 #
-# Verified against a Prometheus 3.16 OTLP receiver on 2026-11-13: the metric
+# Confirmed against a Prometheus 3.16 OTLP receiver: the metric
 # names are the listing's dotted names with underscores (storage.device.iops
 # -> storage_device_iops, the UnderscoreEscapingWithSuffixes strategy, no
 # unit suffix); @LABEL@ is the resource attribute that names the array,

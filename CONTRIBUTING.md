@@ -119,3 +119,17 @@ throttles included.
   `---`, if any) with `# Copyright 2026 Everpure, Inc.` and
   `# SPDX-License-Identifier: Apache-2.0`; a JSON file (`aap/files/`,
   `orchestrator/`, the fixtures) carries no header.
+
+## Documentation and release notes
+
+- The documents describe the tree as it stands, not how it got there: no
+  build parts, pull request numbers, dates or run narratives. A fact learnt
+  on an array goes into `docs/HARDWARE_NOTES.md` as a fact, and a test in
+  `docs/VERIFICATION.md` states what was exercised and what the array did,
+  in a few lines, with anything it did not reach under "Not verified".
+- A release note in `CHANGELOG.md` is one short paragraph naming the
+  release and its scope, then at most a dozen bullets of one or two lines,
+  one per user-visible change; the detail lives in the documents it links
+  to. The GitHub release carries the same text and nothing more.
+- A commit message is a one-line subject and one short paragraph of cause
+  and effect.

@@ -6,18 +6,17 @@ the bridge playbook, its mock and its tests. The workflow definitions that
 consume the events are orchestrator/capacity_reclaim_approval.json and
 orchestrator/replication_paused_approval.json (orchestrator/README.md).
 
-Verified: the bridge runs against `tests/mock_orchestrator.py` from the
-unit test (`tests/unit/test_orchestrator_bridge.py`: token, post, 202 with
-an execution id, the `flashblade-eda/1` envelope for a capacity event and
-for a paused replica link, 401, 403, an unreachable orchestrator, an
-oversize event, missing credentials), and `tests/replay_capacity.yml`
-replays one event through the real capacity rules with
-`orchestrator_enabled` true against the mock. The bridge also ran against
-a live orchestrator, from the trigger through the approval to the reclaim
-job ("On a live orchestrator" below; [VERIFICATION.md](VERIFICATION.md)
-records the run). The contract comes from the upstream Syntara
-documentation and the 1.3.1 API; what no run has exercised is listed under
-"Limitations".
+Verified: the bridge against `tests/mock_orchestrator.py` from the unit
+test (`tests/unit/test_orchestrator_bridge.py`: token, post, 202 with an
+execution id, the `flashblade-eda/1` envelope for a capacity event and for
+a paused replica link, 401, 403, an unreachable orchestrator, an oversize
+event, missing credentials); `tests/replay_capacity.yml` replaying one
+event through the real capacity rules with `orchestrator_enabled` true
+against the mock; and the capacity route end to end on a live
+orchestrator, from the trigger through the approval to the reclaim job
+("On a live orchestrator" below; [VERIFICATION.md](VERIFICATION.md)). The
+contract comes from the upstream Syntara documentation and the 1.3.1 API;
+what no run exercises is listed under "Limitations".
 
 Availability: Red Hat ships the automation orchestrator as an add-on to
 Ansible Automation Platform 2.7 for OpenShift-based deployments only. No
@@ -233,8 +232,8 @@ extra var (aap/README.md). On a containerized platform a job's execution
 environment reaches an orchestrator on the same host only as
 `https://host.containers.internal:<port>`; the host's own address and
 loopback both point back at the container. That is the URL the credential
-carries. A capacity event handed over this way, through the template,
-reached the orchestrator and ran its workflow ("On a live orchestrator").
+carries. A capacity event handed over through the template runs its
+workflow this way ("On a live orchestrator").
 
 ## The alert-log record
 
@@ -324,30 +323,29 @@ a minute.
 
 ## On a live orchestrator
 
-The capacity route ran end to end on the upstream orchestrator code at the
-tag Red Hat ships as the 2026.8 release (API 1.3.1), beside the
-containerized platform of aap/README.md: the service account and its
+The capacity route is verified end to end on the upstream orchestrator
+code at the tag Red Hat ships as the 2026.8 release (API 1.3.1), beside
+the containerized platform of aap/README.md: a service account with a
 client credential, an `Ansible Automation Platform` credential and an
-`ansible_automation_platform` integration, `orchestrator/*.json` validated,
-created and published by `tools/ao_sync.py` (a second run reports every
-definition unchanged); a `purefb_capacity` event handed over by
-**FlashBlade - orchestrator post** (token, post, 202, one
-`orchestrator_post` record with the execution id); the execution running
-**FlashBlade - capacity request** with `credential_names` resolved to the
-event array's credential. Posted with nothing pending eradication, the
-request published `candidate_count` 0, the condition took its `false` port
-and the no-candidates notify completed the execution. Posted again with a
-destroyed file system on the array, the request listed it, the execution
-paused at the approval, the Slack bot's card carried the decision back and
-**FlashBlade - capacity reclaim** rebuilt the request from the artifacts
-and eradicated that one file system (`result: done`, nothing refused).
-`day2_grow_fs`, started from the API, ran through its approval to the grow
-job and the closing notify, and publishing the DR drill definition created
-its schedule (orchestrator/README.md, "Verified on a live instance").
-The orchestrator contract the definitions rely on (the unwrapped body,
-typed `${...}` values, artifacts and `job_url`, approver resolution, the
-publish-with-body versioning) is listed in orchestrator/README.md, "The
-orchestrator's contract".
+`ansible_automation_platform` integration; `orchestrator/*.json`
+validated, created and published by `tools/ao_sync.py` (a second run
+reports every definition unchanged); a `purefb_capacity` event handed
+over by **FlashBlade - orchestrator post** (token, post, 202, one
+`orchestrator_post` record with the execution id); **FlashBlade - capacity
+request** running with `credential_names` resolved to the event array's
+credential. With nothing pending eradication the request publishes
+`candidate_count` 0, the condition takes its `false` port and the
+no-candidates notify completes the execution; with a destroyed file system
+on the array the request lists it, the execution pauses at the approval,
+the Slack bot's card carries the decision back and **FlashBlade - capacity
+reclaim** rebuilds the request from the artifacts and eradicates that one
+file system (`result: done`, nothing refused). `day2_grow_fs` runs from
+the API through its approval to the grow job and the closing notify, and
+publishing the DR drill definition creates its schedule
+(orchestrator/README.md, "Verified on a live instance"). The contract the
+definitions rely on (the unwrapped body, typed `${...}` values, artifacts
+and `job_url`, approver resolution, the publish-with-body versioning) is
+in orchestrator/README.md, "The orchestrator's contract".
 
 ## Limitations
 

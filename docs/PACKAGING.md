@@ -40,13 +40,12 @@ for a FQCN. The dependencies are declared in `galaxy.yml`: `ansible.eda`
 install -r`.
 
 `plugins/modules/` is collection content too: the eleven modules the
-collection has no equivalent for yet. Three came with the object side (log
-targets, audit policies and their members, bucket audit filters:
-`purefb_log_target`, `purefb_audit_policy`, `purefb_bucket_audit_filter`)
-and eight with part 3 (`purefb_telemetry_target`, `purefb_telemetry_policy`,
-`purefb_maintenance`, `purefb_qos`, `purefb_fs_session`,
-`purefb_legal_hold`, `purefb_alert_flag`, `purefb_eradication`). A
-playbook names them `sdodsley.flashblade_eda.<module>`, with the same
+collection has no equivalent for yet (`purefb_log_target`,
+`purefb_audit_policy` and `purefb_bucket_audit_filter` for the
+object-audit configuration; `purefb_telemetry_target`,
+`purefb_telemetry_policy`, `purefb_maintenance`, `purefb_qos`,
+`purefb_fs_session`, `purefb_legal_hold`, `purefb_alert_flag` and
+`purefb_eradication`). A playbook names them `sdodsley.flashblade_eda.<module>`, with the same
 `fb_url`, `api_token` and `disable_warnings` options as the collection's
 own modules, because they import `get_system` and `purefb_argument_spec`
 from the `everpure.flashblade` module_utils; that collection has to be
