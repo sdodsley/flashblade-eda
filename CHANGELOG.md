@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `aap/seed.yml` enforces `aap_eda_activations_enabled` on the FlashBlade
+  activations only: the EDA controller ignores the listing's
+  `name__startswith` filter, so a run on a controller shared with another
+  project disabled that project's activations as well. The seed now picks
+  its activations out by name.
+
 ## 0.1.0 (2026-11-13)
 
 The first four parts of flashblade-eda: Event-Driven Ansible for Everpure

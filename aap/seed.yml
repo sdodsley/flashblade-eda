@@ -1000,7 +1000,11 @@
           Authorization: "Bearer {{ aap_token }}"
         validate_certs: "{{ aap_validate_certs }}"
         status_code: [200, 202, 204]
-      loop: "{{ all_activations.json.results }}"
+      # The listing's name__startswith filter is not applied by the EDA
+      # controller (every activation comes back), so the FlashBlade ones are
+      # picked out here: the flag must never touch another project's
+      # activations on a shared controller.
+      loop: "{{ all_activations.json.results | selectattr('name', 'match', '^FlashBlade rulebook - ') | list }}"
       loop_control:
         label: "{{ item.name }}"
         # fifteen activations starting in the same second contend for the EDA

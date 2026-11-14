@@ -827,6 +827,11 @@ seed, the two images and the activations are written around;
   room for two of these, so the fifteen FlashBlade rulebooks run on such a
   host in rotation, or the cap is raised and the host sized for it (each
   activation is a container of about 200 MB and a few percent of a core).
+- The activations listing does not apply `name__startswith`: it returns
+  every activation on the controller whatever the filter says. A seed
+  that enforces its enabled flag over that answer sweeps another
+  project's activations too; the FlashBlade seed picks its own out by
+  name before it enables or disables anything.
 - Reading an activation's detail is not free: the serializer walks its
   instances, and an activation that has restarted thirty times answers
   slowly. A script that polls details every few seconds across a dozen

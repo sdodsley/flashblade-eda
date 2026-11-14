@@ -782,6 +782,23 @@ def test_seed_workflow_runs_request_approval_reclaim(repo_root):
             assert target.get("name") == "FlashBlade - notify", edge
 
 
+def test_seed_enforces_the_enabled_flag_on_flashblade_activations_only(repo_root):
+    """The EDA controller ignores the listing's name__startswith filter, so
+    the task that enables or disables activations must pick the FlashBlade
+    ones out by name; on a shared controller the flag must never touch
+    another project's activations."""
+    tasks = [task for tasks in _all_task_lists(_seed(repo_root)) for task in tasks]
+    enforce = [
+        t
+        for t in tasks
+        if isinstance(t, dict)
+        and str(t.get("name", "")).startswith("Enforce the enabled flag")
+    ]
+    assert len(enforce) == 1, "one enforcement task"
+    loop = enforce[0]["loop"]
+    assert "selectattr('name', 'match', '^FlashBlade rulebook - ')" in loop, loop
+
+
 def test_seed_activations_come_from_the_platform_rulebooks(repo_root):
     """The seed makes one activation per file of the platform rulebook
     directory, named FlashBlade rulebook - <name>, pinned to
