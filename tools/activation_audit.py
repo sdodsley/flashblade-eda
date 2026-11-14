@@ -218,7 +218,9 @@ class Client:
                     raw = response.read()
                     status = response.status
             except urllib.error.HTTPError as exc:
-                if exc.code in (500, 502, 503, 504) and attempt + 1 < retries:
+                # the gateway answers 403 as well as 5xx while the platform is
+                # busy; all are tried again
+                if exc.code in (403, 500, 502, 503, 504) and attempt + 1 < retries:
                     time.sleep(RETRY_SLEEP_SECONDS)
                     continue
                 try:

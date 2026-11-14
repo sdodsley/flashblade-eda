@@ -382,17 +382,31 @@ orchestrator treats as the feedback edge; `complete` continues after the
 last iteration. A `for_each` loop takes `items`, a `do_while` loop
 `condition`, both `max_iterations`.
 
-## On a live instance
+## Verified on a live instance
 
-The lab exit tests of [docs/VERIFICATION.md](../docs/VERIFICATION.md)
-("Lab exit tests for part 4") run three of the definitions on a live
-orchestrator beside a containerized platform, and that document records
-the outcome: the capacity route from an event posted through **FlashBlade -
-orchestrator post** (or from the capacity activation with
-`orchestrator_enabled` true) through the request job, the approval and the
-reclaim job to a completed execution; `day2_grow_fs` started from the API
-through its approval to the grow job and the closing notify; and the DR
-drill definition's publish creating its schedule. What those runs do not
-cover (the paused-link route, the LED, QoS cap and quarantine forms, and an
-approval decided from Slack by a bot instance of this project) stands on
-the unit tests and the linter.
+Three of the definitions ran on the upstream orchestrator code at the tag
+Red Hat ships as the 2026.8 release (API 1.3.1), beside the containerized
+platform of aap/README.md, after `tools/ao_sync.py` had validated, created
+and published all seven (a second run reports every one unchanged):
+
+- **Capacity.** A `purefb_capacity` event posted through **FlashBlade -
+  orchestrator post** starts an execution; **FlashBlade - capacity request**
+  runs with `credential_names` resolved to the event array's credential and
+  publishes its artifacts. With nothing pending eradication the condition
+  takes its `false` port and the no-candidates notify completes the
+  execution. With a destroyed file system on the array the request lists it,
+  the execution pauses at the approval (the Slack bot posts the card), the
+  approval decided from Slack resumes it, and **FlashBlade - capacity
+  reclaim** rebuilds the request from the artifacts and eradicates exactly
+  that file system (`result: done`).
+- **Grow a file system.** Started from the API with the array, the file
+  system and `1536M`: the notify runs, the execution pauses at the approval,
+  the approval from Slack runs **FlashBlade - grow file system** (1.25 GiB
+  to 1.5 GiB, `outcome: grown`) and the closing notify reports `old_size`,
+  `new_size` and the job link.
+- **Nightly DR drill.** Publishing the definition creates its schedule in
+  the orchestrator's Temporal, next run at 03:00 UTC.
+
+Not run on the instance: the paused-link route, the LED, QoS cap and
+quarantine forms, and a bot instance of this project (the sibling's bot
+carried the cards). They stand on the unit tests and the linter.

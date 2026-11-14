@@ -811,10 +811,27 @@ seed, the two images and the activations are written around;
   asks for pages of 50 and retries the call; `tools/activation_audit.py`
   pages by 50 and waits ten seconds between its eight attempts; a hand
   check reads one activation at a time.
-- A restarted activation whose websocket handshake the gateway answers
-  502 (the EDA websocket service busy with other starts) fails at once
-  and, past its restart limit, stays failed: restart it again until it
-  reports running, one activation at a time.
+- An activation's worker opens two websockets to the EDA controller (the
+  workload, then the event stream) and ansible-rulebook 1.3.2 gives up on
+  any handshake status but 403: a 502 from the gateway, which the busy
+  EDA websocket service produces when its accept takes longer than
+  daphne's five-second connect timeout, ends the start at once, and
+  past the restart policy's limit the activation stays failed. Restart
+  it (or disable and enable it) until it reports running, one activation
+  at a time, with the platform otherwise quiet.
+- The EDA controller runs at most `MAX_RUNNING_ACTIVATIONS` activations
+  at a time (12 by default; the installer variable
+  `eda_max_running_activations` sets it). One past the cap sits in
+  `pending` with "wait for a worker". On a host shared with another
+  project's activations the cap is shared too: ten of the sibling's leave
+  room for two of these, so the fifteen FlashBlade rulebooks run on such a
+  host in rotation, or the cap is raised and the host sized for it (each
+  activation is a container of about 200 MB and a few percent of a core).
+- Reading an activation's detail is not free: the serializer walks its
+  instances, and an activation that has restarted thirty times answers
+  slowly. A script that polls details every few seconds across a dozen
+  activations kept both gunicorn workers of the EDA API at full CPU and
+  pushed the listing past its timeout; polling once a minute did not.
 - `ansible.eda.rulebook_activation` cannot modify an activation; the
   enabled flag is the one thing a seed can still set, so the seed enforces
   it on every run and a site keeps it true once the activations run. An

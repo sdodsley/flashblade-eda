@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-11-13)
 
 The first four parts of flashblade-eda: Event-Driven Ansible for Everpure
 FlashBlade, a prototype and the sibling of flasharray-eda. Written against
@@ -12,7 +12,9 @@ nine of its lab exit tests, the telemetry one against a live Prometheus
 OTLP receiver and the DR drill against the 4.5.6 peer; part 4 (the platform
 port of the sibling: the platform seed and its two images, the platform
 rulebooks, the orchestrator definitions and tools, the Slack approval bot)
-is built and unit-tested. The tests are listed in
+has passed its ten lab exit tests on a containerized Ansible Automation
+Platform 2.7 with the automation orchestrator beside it, the approvals
+decided from Slack. The tests are listed in
 [docs/VERIFICATION.md](docs/VERIFICATION.md), the array facts in
 [docs/HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md) and the design in
 [docs/DESIGN.md](docs/DESIGN.md).
