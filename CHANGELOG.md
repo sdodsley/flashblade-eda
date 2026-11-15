@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `tools/activation_audit.py` rides out a busy gateway: transient answers
+  (5xx, 403, a dropped connection on a read) are retried for two minutes,
+  the activation list is read in pages of twenty, the wait for the list
+  after a delete lasts the name-release window, and `--recreate --enable`
+  creates the new activation enabled whatever flag the old one carried.
+  The seed's activation listings retry a 403 as they do a 5xx.
+
 ## 0.1.1 (2026-11-14)
 
 - The documentation describes the tree as it stands: the verification

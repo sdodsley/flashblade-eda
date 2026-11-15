@@ -447,7 +447,7 @@ would render today:
 ```
 export AAP_TOKEN=...            # a platform token with EDA read (and write for --recreate)
 python tools/activation_audit.py --url https://<gateway> --vars vars/<site>.yml \
-    [--organization FlashBlade] [--allow KEY]... [--recreate] [--insecure] [--json]
+    [--organization FlashBlade] [--allow KEY]... [--recreate [--enable]] [--insecure] [--json]
 ```
 
 It prints one line per activation: `ok`, or the keys whose values differ,
@@ -460,9 +460,13 @@ anything is wrong; on a platform seeded with the default
 and the audit exits 1 until they are enabled. `--recreate` deletes each
 activation whose vars differ from the expected ones and creates it again
 with those vars and the same project, rulebook, decision environment,
-credentials, policies and enabled flag, waiting for it to run; a
-placeholder-only, disabled or stopped activation is reported, not
-recreated, and nothing is recreated while the expected vars themselves
+credentials, policies and enabled flag (`--enable` creates it enabled
+whatever flag the old one carried, for the activations a sweep switched
+off), waiting for it to run; the gateway's transient answers (5xx, 403, a
+dropped connection on a read) are retried for two minutes and the list is
+read in pages of twenty; a placeholder-only, disabled or stopped
+activation is reported, not recreated, and nothing is recreated while the
+expected vars themselves
 still carry a placeholder (fix the site file first). Each delete and create
 is printed as it happens, old id and new id, because the Rule Audit rows
 stay under the old id. Run it after the seed and after any change to the

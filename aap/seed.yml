@@ -952,7 +952,7 @@
           Authorization: "Bearer {{ aap_token }}"
         validate_certs: "{{ aap_validate_certs }}"
         return_content: true
-        status_code: [200, 500, 502, 503, 504]
+        status_code: [200, 403, 500, 502, 503, 504]
       register: existing_activations
       until: existing_activations.status == 200
       retries: 8
@@ -985,7 +985,7 @@
           Authorization: "Bearer {{ aap_token }}"
         validate_certs: "{{ aap_validate_certs }}"
         return_content: true
-        status_code: [200, 500, 502, 503, 504]
+        status_code: [200, 403, 500, 502, 503, 504]
       register: all_activations
       until: all_activations.status == 200
       retries: 8
