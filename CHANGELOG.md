@@ -7,7 +7,8 @@
   the activation list is read in pages of twenty, the wait for the list
   after a delete lasts the name-release window, and `--recreate --enable`
   creates the new activation enabled whatever flag the old one carried.
-  The seed's activation listings retry a 403 as they do a 5xx.
+  The seed's activation listings retry a 403 as they do a 5xx, and the
+  seed stops when a listing has a further page, since it reads one page.
 
 ## 0.1.1 (2026-11-14)
 

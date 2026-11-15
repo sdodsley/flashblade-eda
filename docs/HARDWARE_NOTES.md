@@ -806,7 +806,8 @@ seed, the two images and the activations are written around;
   controller's slowest call: with twenty activations and their monitors
   busy, its worker exceeds the gunicorn timeout and the gateway answers
   500 or 503, while a single activation's detail still answers. The seed
-  asks for pages of 50 and retries the call (a 403 like a 5xx);
+  asks for one page of 50, retries the call (a 403 like a 5xx) and stops
+  when the listing has a further page, since it never follows `next`;
   `tools/activation_audit.py` reads pages of 20 and retries a transient
   answer (5xx, 403, a dropped connection on a read) for about two minutes;
   a hand check reads one activation at a time.

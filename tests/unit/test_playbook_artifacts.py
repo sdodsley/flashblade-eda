@@ -799,6 +799,40 @@ def test_seed_enforces_the_enabled_flag_on_flashblade_activations_only(repo_root
     assert "selectattr('name', 'match', '^FlashBlade rulebook - ')" in loop, loop
 
 
+def test_seed_refuses_an_activations_listing_with_a_further_page(repo_root):
+    """The seed reads each activations listing as one page and never
+    follows "next"; an assert on each listing's `next` stands before the
+    create and before the enabled-flag enforcement, so a controller with
+    more activations than one page holds stops the seed instead of having
+    it miss some."""
+    tasks = [task for tasks in _all_task_lists(_seed(repo_root)) for task in tasks]
+    tasks = [t for t in tasks if isinstance(t, dict)]
+
+    def index_of(prefix):
+        hits = [
+            i for i, t in enumerate(tasks) if str(t.get("name", "")).startswith(prefix)
+        ]
+        assert len(hits) == 1, prefix
+        return hits[0]
+
+    create = index_of("One rulebook activation per platform rulebook")
+    enforce = index_of("Enforce the enabled flag")
+    guards = [
+        (i, t)
+        for i, t in enumerate(tasks)
+        if str(t.get("name", "")).startswith("The activations listing fits one page")
+    ]
+    assert len(guards) == 2, "one guard per listing"
+    registers = {}
+    for i, task in guards:
+        body = task["ansible.builtin.assert"]
+        (condition,) = body["that"]
+        assert ".json.next" in condition and "is none" in condition, condition
+        registers[condition.split(".json.next")[0].strip("( ")] = i
+    assert registers["existing_activations"] < create
+    assert create < registers["all_activations"] < enforce
+
+
 def test_seed_activations_come_from_the_platform_rulebooks(repo_root):
     """The seed makes one activation per file of the platform rulebook
     directory, named FlashBlade rulebook - <name>, pinned to
