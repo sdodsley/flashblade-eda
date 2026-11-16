@@ -822,6 +822,13 @@ seed, the two images and the activations are written around;
   past the restart policy's limit the activation stays failed. Restart
   it (or disable and enable it) until it reports running, one activation
   at a time, with the platform otherwise quiet.
+- A reboot of the platform host brings the platform back but not every
+  activation. The activation worker, once up again, restarts the
+  activations the shutdown ended and those starts succeed as soon as the
+  websocket service is ready; an activation that had already reached its
+  restart policy's limit is only marked failed ("exited with code 143 ...
+  has reached the maximum number of restarts") and stays so until it is
+  restarted by id, one at a time as above.
 - The EDA controller runs at most `MAX_RUNNING_ACTIVATIONS` activations
   at a time (12 by default; the installer variable
   `eda_max_running_activations` sets it). One past the cap sits in
