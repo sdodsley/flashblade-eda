@@ -942,34 +942,34 @@
     # ansible.eda.rulebook_activation cannot update an activation and, in
     # 2.13, creates it enabled whatever `enabled` says; so existing ones are
     # skipped and the enabled flag is enforced through the API afterwards.
-    # The listing is the controller's slowest call: under load its worker
-    # times out and the gateway answers 5xx, so the call asks for small
-    # pages and is retried until it answers 200.
+    # The EDA controller's activations listing takes about ten seconds
+    # whatever the page size and, timed out at the gateway, gets the EDA API
+    # ejected for every reader for a while; its name filter is a
+    # case-insensitive substring match and the only filter it applies. So
+    # every activation this seed owns is read by its full name, one short
+    # request each, matched exactly here, and the list is never asked for.
+    - name: The activation names this seed owns
+      ansible.builtin.set_fact:
+        flashblade_activation_names: "{{ query('ansible.builtin.fileglob', playbook_dir ~ '/../extensions/eda/rulebooks/platform/*.yml') | map('basename') | map('splitext') | map('first') | map('regex_replace', '^', 'FlashBlade rulebook - ') | sort }}"
+
     - name: Activations that already exist
       ansible.builtin.uri:
-        url: "{{ aap_hostname }}/api/eda/v1/activations/?page_size=50&name__startswith=FlashBlade%20rulebook%20-"
+        url: "{{ aap_hostname }}/api/eda/v1/activations/?page_size=200&name={{ item | urlencode }}"
         headers:
           Authorization: "Bearer {{ aap_token }}"
         validate_certs: "{{ aap_validate_certs }}"
         return_content: true
         status_code: [200, 403, 500, 502, 503, 504]
-      register: existing_activations
-      until: existing_activations.status == 200
+      register: existing_lookups
+      until: existing_lookups.status == 200
       retries: 8
       delay: 10
+      loop: "{{ flashblade_activation_names }}"
       no_log: true
 
-    # The listing is read as one page and "next" is never followed, so a
-    # controller with more activations than the page holds stops the seed
-    # here rather than having it miss some and create duplicates.
-    - name: The activations listing fits one page before creating
-      ansible.builtin.assert:
-        that:
-          - (existing_activations.json.next | default(none)) is none
-        fail_msg: >-
-          the activations listing has a further page: the seed reads one page
-          of 50 and would miss activations, so it stops before creating any
-        quiet: true
+    - name: The names that already have an activation (exact matches only)
+      ansible.builtin.set_fact:
+        existing_activation_names: "{{ existing_lookups.results | map(attribute='json.results') | flatten | map(attribute='name') | select('in', flashblade_activation_names) | list }}"
 
     # The EDA controller names a rulebook by its path relative to the
     # project's extensions/eda/rulebooks directory, hence platform/<file>.
@@ -987,31 +987,29 @@
         restart_policy: "{{ aap_eda_restart_policy }}"
         log_level: "{{ aap_eda_log_level }}"
         state: present
-      when: ('FlashBlade rulebook - ' ~ (item | splitext | first)) not in (existing_activations.json.results | map(attribute='name') | list)
+      when: ('FlashBlade rulebook - ' ~ (item | splitext | first)) not in existing_activation_names
       loop: "{{ query('ansible.builtin.fileglob', playbook_dir ~ '/../extensions/eda/rulebooks/platform/*.yml') | map('basename') | sort }}"
 
     - name: Activations as they stand
       ansible.builtin.uri:
-        url: "{{ aap_hostname }}/api/eda/v1/activations/?page_size=50&name__startswith=FlashBlade%20rulebook%20-"
+        url: "{{ aap_hostname }}/api/eda/v1/activations/?page_size=200&name={{ item | urlencode }}"
         headers:
           Authorization: "Bearer {{ aap_token }}"
         validate_certs: "{{ aap_validate_certs }}"
         return_content: true
         status_code: [200, 403, 500, 502, 503, 504]
-      register: all_activations
-      until: all_activations.status == 200
+      register: all_lookups
+      until: all_lookups.status == 200
       retries: 8
       delay: 10
+      loop: "{{ flashblade_activation_names }}"
       no_log: true
 
-    - name: The activations listing fits one page before enforcing the flag
-      ansible.builtin.assert:
-        that:
-          - (all_activations.json.next | default(none)) is none
-        fail_msg: >-
-          the activations listing has a further page: the seed reads one page
-          of 50 and would enforce the enabled flag on part of the fleet only
-        quiet: true
+    # Exact names only, one entry per id: the flag must never touch another
+    # project's activations on a shared controller.
+    - name: The seed's activations, matched exactly
+      ansible.builtin.set_fact:
+        flashblade_activations: "{{ all_lookups.results | map(attribute='json.results') | flatten | selectattr('name', 'in', flashblade_activation_names) | unique(attribute='id') | list }}"
 
     - name: Enforce the enabled flag on every FlashBlade activation
       ansible.builtin.uri:
@@ -1021,11 +1019,7 @@
           Authorization: "Bearer {{ aap_token }}"
         validate_certs: "{{ aap_validate_certs }}"
         status_code: [200, 202, 204]
-      # The listing's name__startswith filter is not applied by the EDA
-      # controller (every activation comes back), so the FlashBlade ones are
-      # picked out here: the flag must never touch another project's
-      # activations on a shared controller.
-      loop: "{{ all_activations.json.results | selectattr('name', 'match', '^FlashBlade rulebook - ') | list }}"
+      loop: "{{ flashblade_activations }}"
       loop_control:
         label: "{{ item.name }}"
         # fifteen activations starting in the same second contend for the EDA

@@ -7,8 +7,12 @@
   the activation list is read in pages of twenty, the wait for the list
   after a delete lasts the name-release window, and `--recreate --enable`
   creates the new activation enabled whatever flag the old one carried.
-  The seed's activation listings retry a 403 as they do a 5xx, and the
-  seed stops when a listing has a further page, since it reads one page.
+- The seed and the audit read each activation by its full name, one
+  request per platform rulebook, and never list: the EDA controller's
+  listing takes ten seconds whatever the page size and a timeout gets the
+  EDA API ejected at the gateway for every reader; its `name` filter is a
+  substring match, so the exact match is made client-side. The audit
+  reports a platform rulebook whose activation is missing.
 
 ## 0.1.1 (2026-11-14)
 

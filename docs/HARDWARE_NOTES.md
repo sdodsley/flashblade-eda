@@ -803,14 +803,17 @@ seed, the two images and the activations are written around;
   enables them ten seconds apart and the on-failure restart policy carries
   the rest.
 - The activations listing (`GET /api/eda/v1/activations/`) is the EDA
-  controller's slowest call: with twenty activations and their monitors
-  busy, its worker exceeds the gunicorn timeout and the gateway answers
-  500 or 503, while a single activation's detail still answers. The seed
-  asks for one page of 50, retries the call (a 403 like a 5xx) and stops
-  when the listing has a further page, since it never follows `next`;
-  `tools/activation_audit.py` reads pages of 20 and retries a transient
-  answer (5xx, 403, a dropped connection on a read) for about two minutes;
-  a hand check reads one activation at a time.
+  controller's slowest call: on the lab it takes nine to eleven seconds
+  whatever the page size (page 5 and page 20 alike, with twenty-five
+  activations, a few thousand audit rows and two API workers), right at
+  the gateway's limit, and when the gateway times it out it ejects the EDA
+  API upstream for a while, so every reader gets 503 for the next seconds
+  to minutes. A read filtered by `name=` or a single activation's detail
+  answers in about a second. The seed and `tools/activation_audit.py`
+  therefore read each activation they own by its full name, one request
+  per platform rulebook file, and never list; both retry a transient
+  answer (5xx, 403, and on a read a dropped connection) for about two
+  minutes.
 - An activation's worker opens two websockets to the EDA controller (the
   workload, then the event stream) and ansible-rulebook 1.3.2 gives up on
   any handshake status but 403: a 502 from the gateway, which the busy
@@ -827,11 +830,14 @@ seed, the two images and the activations are written around;
   room for two of these, so the fifteen FlashBlade rulebooks run on such a
   host in rotation, or the cap is raised and the host sized for it (each
   activation is a container of about 200 MB and a few percent of a core).
-- The activations listing does not apply `name__startswith`: it returns
-  every activation on the controller whatever the filter says. A seed
-  that enforces its enabled flag over that answer sweeps another
-  project's activations too; the FlashBlade seed picks its own out by
-  name before it enables or disables anything.
+- The listing's `name=` filter is a case-insensitive substring match
+  (`icontains`) and the only filter the API applies; `name__startswith`
+  and `search` are ignored and return every activation. A reader keeps
+  the exact match itself (a query for `alerts` also answers `alerts
+  copy`), and a seed that enforces its enabled flag over an unfiltered
+  answer sweeps another project's activations too, which is why the
+  FlashBlade seed matches names exactly before it enables or disables
+  anything.
 - The EDA API is the first platform service to fail on a host short of
   memory. With the host deep in swap, gunicorn kills the API's workers
   ("WORKER TIMEOUT ... Perhaps out of memory?") and the gateway answers

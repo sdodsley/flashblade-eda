@@ -783,54 +783,52 @@ def test_seed_workflow_runs_request_approval_reclaim(repo_root):
 
 
 def test_seed_enforces_the_enabled_flag_on_flashblade_activations_only(repo_root):
-    """The EDA controller ignores the listing's name__startswith filter, so
-    the task that enables or disables activations must pick the FlashBlade
-    ones out by name; on a shared controller the flag must never touch
-    another project's activations."""
-    tasks = [task for tasks in _all_task_lists(_seed(repo_root)) for task in tasks]
-    enforce = [
-        t
-        for t in tasks
-        if isinstance(t, dict)
-        and str(t.get("name", "")).startswith("Enforce the enabled flag")
-    ]
-    assert len(enforce) == 1, "one enforcement task"
-    loop = enforce[0]["loop"]
-    assert "selectattr('name', 'match', '^FlashBlade rulebook - ')" in loop, loop
-
-
-def test_seed_refuses_an_activations_listing_with_a_further_page(repo_root):
-    """The seed reads each activations listing as one page and never
-    follows "next"; an assert on each listing's `next` stands before the
-    create and before the enabled-flag enforcement, so a controller with
-    more activations than one page holds stops the seed instead of having
-    it miss some."""
+    """The EDA controller's name filter is a substring match and the only
+    filter it applies, so the activations the flag is enforced on are read
+    by their full names and matched exactly; on a shared controller the flag
+    must never touch another project's activations."""
     tasks = [task for tasks in _all_task_lists(_seed(repo_root)) for task in tasks]
     tasks = [t for t in tasks if isinstance(t, dict)]
-
-    def index_of(prefix):
-        hits = [
-            i for i, t in enumerate(tasks) if str(t.get("name", "")).startswith(prefix)
-        ]
-        assert len(hits) == 1, prefix
-        return hits[0]
-
-    create = index_of("One rulebook activation per platform rulebook")
-    enforce = index_of("Enforce the enabled flag")
-    guards = [
-        (i, t)
-        for i, t in enumerate(tasks)
-        if str(t.get("name", "")).startswith("The activations listing fits one page")
+    (enforce,) = [
+        t
+        for t in tasks
+        if str(t.get("name", "")).startswith("Enforce the enabled flag")
     ]
-    assert len(guards) == 2, "one guard per listing"
-    registers = {}
-    for i, task in guards:
-        body = task["ansible.builtin.assert"]
-        (condition,) = body["that"]
-        assert ".json.next" in condition and "is none" in condition, condition
-        registers[condition.split(".json.next")[0].strip("( ")] = i
-    assert registers["existing_activations"] < create
-    assert create < registers["all_activations"] < enforce
+    assert enforce["loop"].strip() == "{{ flashblade_activations }}"
+    (matched,) = [
+        t for t in tasks if t.get("name") == "The seed's activations, matched exactly"
+    ]
+    expression = matched["ansible.builtin.set_fact"]["flashblade_activations"]
+    assert "selectattr('name', 'in', flashblade_activation_names)" in expression
+    assert "unique(attribute='id')" in expression
+
+
+def test_seed_reads_activations_by_exact_name_and_never_lists(repo_root):
+    """The activations listing takes ten seconds whatever the page size and
+    a timeout gets the EDA API ejected at the gateway for every reader, so
+    every read of the activations carries a name= filter and loops over the
+    names the seed owns; nothing lists."""
+    tasks = [task for tasks in _all_task_lists(_seed(repo_root)) for task in tasks]
+    tasks = [t for t in tasks if isinstance(t, dict)]
+    reads = [
+        t
+        for t in tasks
+        if "/api/eda/v1/activations/?"
+        in str(t.get("ansible.builtin.uri", {}).get("url", ""))
+    ]
+    assert len(reads) == 2, [t.get("name") for t in reads]
+    for task in reads:
+        url = task["ansible.builtin.uri"]["url"]
+        assert "name={{ item | urlencode }}" in url, url
+        assert "name__startswith" not in url and "search=" not in url
+        assert task["loop"].strip() == "{{ flashblade_activation_names }}"
+    (names,) = [
+        t for t in tasks if t.get("name") == "The activation names this seed owns"
+    ]
+    assert (
+        "extensions/eda/rulebooks/platform/*.yml"
+        in names["ansible.builtin.set_fact"]["flashblade_activation_names"]
+    )
 
 
 def test_seed_activations_come_from_the_platform_rulebooks(repo_root):

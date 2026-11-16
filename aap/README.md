@@ -463,8 +463,12 @@ with those vars and the same project, rulebook, decision environment,
 credentials, policies and enabled flag (`--enable` creates it enabled
 whatever flag the old one carried, for the activations a sweep switched
 off), waiting for it to run; the gateway's transient answers (5xx, 403, a
-dropped connection on a read) are retried for two minutes and the list is
-read in pages of twenty; a placeholder-only, disabled or stopped
+dropped connection on a read) are retried for two minutes, and every
+activation is read by its full name (one request per platform rulebook
+file; the controller's listing is never asked for, since it takes ten
+seconds and a timeout takes the EDA API away from every reader); a
+rulebook file without an activation is reported. A placeholder-only,
+disabled or stopped
 activation is reported, not recreated, and nothing is recreated while the
 expected vars themselves
 still carry a placeholder (fix the site file first). Each delete and create

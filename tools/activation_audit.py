@@ -21,10 +21,12 @@ them from the site vars file laid over vars/example.yml, minus the keys the
 attached credentials inject (purefb_arrays and config_arrays from the fleet
 credential, orchestrator_url from the orchestrator credential when it is
 attached), plus aap_organization. This tool renders the same thing from the
-same files and compares it with every activation named
-"FlashBlade rulebook - *": keys that differ, are missing or are extra, values
+same files and compares it with the activation of every platform rulebook
+("FlashBlade rulebook - <file stem>", read by its full name; the controller's
+list is never asked for): keys that differ, are missing or are extra, values
 that are still example placeholders (example.com, the documentation IP ranges,
-REPLACE_AT_), and activations that are disabled or not running. The exit
+REPLACE_AT_), activations that are disabled or not running, and names with
+no activation at all. The exit
 status is 1 when anything is wrong, so a schedule can run it. With
 --recreate each activation whose vars differ from the expected ones is
 deleted and created again with those vars and the same project, rulebook,
@@ -78,9 +80,13 @@ TIMEOUT_SECONDS = 60
 REQUEST_RETRIES = 24
 RETRY_SLEEP_SECONDS = 5
 TRANSIENT_STATUS = (403, 500, 502, 503, 504)
-# the activation list in small pages: one large page outlives the gateway's
-# worker timeout on a busy platform
-LIST_PAGE_SIZE = 20
+# The activations listing takes about ten seconds whatever the page size and,
+# timed out at the gateway, gets the EDA API ejected for every reader for a
+# while; a read filtered by name answers in about a second. The name filter is
+# a case-insensitive substring match and the only filter the API applies, so
+# the exact match is made here. One page holds every activation of one name.
+NAME_PAGE_SIZE = 200
+RULEBOOK_DIR = ROOT / "extensions" / "eda" / "rulebooks" / "platform"
 DELETE_WAIT_SECONDS = 120
 NAME_WAIT_SECONDS = 300
 NAME_TAKEN = "activation with this name already exists"
@@ -249,8 +255,15 @@ class Client:
                 ) from None
         raise AuditError(f"{method} {path}: gave up after {retries} attempts")
 
-    def list_activations(self):
-        return self.list_all(f"/api/eda/v1/activations/?page_size={LIST_PAGE_SIZE}")
+    def activations_named(self, name):
+        """The activations whose name is exactly `name` (the controller's
+        filter is a substring match, so `alerts` also answers `alerts copy`)."""
+        query = urllib.parse.urlencode({"page_size": NAME_PAGE_SIZE, "name": name})
+        return [
+            a
+            for a in self.list_all(f"/api/eda/v1/activations/?{query}")
+            if a.get("name") == name
+        ]
 
     def list_all(self, path):
         items = []
@@ -264,6 +277,11 @@ class Client:
                 nxt = nxt[nxt.index("/api/") :] if "/api/" in nxt else None
             path = nxt
         return items
+
+
+def expected_activation_names(rulebook_dir):
+    """One activation per platform rulebook file, named as the seed names it."""
+    return sorted(PREFIX + p.stem for p in pathlib.Path(rulebook_dir).glob("*.yml"))
 
 
 def _ref(detail, key):
@@ -323,39 +341,42 @@ def recreate(client, detail, extra_var_text, say, wait_seconds=360, enabled=None
         client.request("DELETE", f"/api/eda/v1/activations/{old_id}/")
     except AuditError as exc:
         # a delete the gateway answered with a 5xx may have been carried out, and
-        # its retry is then refused (404, or 409 while deleting): the list decides
+        # its retry is then refused (404, or 409 while deleting): the id decides
         delete_note = f" (the delete was answered {str(exc)[-100:]})"
-        say(f"the delete of {name} was answered {str(exc)[-100:]}; watching the list")
-    # the list decides whether the delete went through; while the gateway
-    # cannot be read the wait lasts the name-release window, so a busy
-    # platform does not leave the activation deleted and not recreated
+        say(f"the delete of {name} was answered {str(exc)[-100:]}; watching the id")
+    # the old id's detail decides whether the delete went through (404 once
+    # it has); while the gateway cannot be read the wait lasts the
+    # name-release window, so a busy platform does not leave the activation
+    # deleted and not recreated
     started = time.monotonic()
-    list_error = None
+    read_error = None
     gone = False
     while time.monotonic() - started < (
-        NAME_WAIT_SECONDS if list_error else DELETE_WAIT_SECONDS
+        NAME_WAIT_SECONDS if read_error else DELETE_WAIT_SECONDS
     ):
         time.sleep(5)
         try:
-            listed = client.list_activations()
+            client.request("GET", f"/api/eda/v1/activations/{old_id}/")
         except AuditError as exc:
-            list_error = exc
-            say(f"could not read the activations list ({exc}); trying again")
+            if re.search(r": HTTP 404 ", str(exc)):
+                gone = True
+                break
+            read_error = exc
+            say(
+                f"could not read {name} (id {old_id}) after the delete ({exc}); trying again"
+            )
             continue
-        list_error = None
-        if not any(a.get("id") == old_id for a in listed):
-            gone = True
-            break
+        read_error = None
     if not gone:
-        if list_error is not None:
+        if read_error is not None:
             raise AuditError(
-                f"{name}: the activations list could not be read for "
-                f"{NAME_WAIT_SECONDS} s after the delete ({list_error})"
-                f"{delete_note}; check whether id {old_id} is gone, then run "
+                f"{name}: id {old_id} could not be read for "
+                f"{NAME_WAIT_SECONDS} s after the delete ({read_error})"
+                f"{delete_note}; check whether it is gone, then run "
                 "aap/seed.yml to create it again"
             )
         raise AuditError(
-            f"{name}: id {old_id} still listed {DELETE_WAIT_SECONDS} s after the delete{delete_note}; not recreating"
+            f"{name}: id {old_id} still present {DELETE_WAIT_SECONDS} s after the delete{delete_note}; not recreating"
         )
     expected = yaml.safe_load(extra_var_text) or {}
     status = created = None
@@ -377,9 +398,7 @@ def recreate(client, detail, extra_var_text, say, wait_seconds=360, enabled=None
         found = None
         try:
             same_name = [
-                a
-                for a in client.list_activations()
-                if a.get("name") == name and a.get("id") != old_id
+                a for a in client.activations_named(name) if a.get("id") != old_id
             ]
             if same_name:
                 status, found = client.request(
@@ -457,6 +476,8 @@ def recreate(client, detail, extra_var_text, say, wait_seconds=360, enabled=None
 def _line(entry):
     if not entry["problems"]:
         return f"{entry['name']}: ok ({entry['status']})"
+    if entry["id"] is None:
+        return f"{entry['name']}: " + "; ".join(entry["problems"])
     return f"{entry['name']} (id {entry['id']}): " + "; ".join(entry["problems"])
 
 
@@ -488,6 +509,13 @@ def main(argv=None):
         "--organization",
         default="FlashBlade",
         help="aap_organization (default FlashBlade)",
+    )
+    parser.add_argument(
+        "--rulebooks",
+        default=str(RULEBOOK_DIR),
+        metavar="DIR",
+        help="the platform rulebook directory whose files name the expected "
+        "activations (default extensions/eda/rulebooks/platform)",
     )
     parser.add_argument(
         "--allow",
@@ -533,21 +561,29 @@ def main(argv=None):
     def say(text):
         print(text, file=sys.stderr if args.json else sys.stdout)
 
+    names = expected_activation_names(args.rulebooks)
+    if not names:
+        parser.error(f"no platform rulebook under {args.rulebooks}")
+
     client = Client(url, token, insecure=insecure)
     report = []
     try:
-        activations = [
-            a
-            for a in client.list_activations()
-            if str(a.get("name", "")).startswith(PREFIX)
-        ]
-        if not activations:
-            print(
-                f"activation_audit: no activation named {PREFIX}* found",
-                file=sys.stderr,
-            )
-            return 1
-        for summary in sorted(activations, key=lambda a: a["name"]):
+        activations = []
+        for name in names:
+            found = client.activations_named(name)
+            if not found:
+                entry = {
+                    "name": name,
+                    "id": None,
+                    "status": None,
+                    "problems": ["not on the controller"],
+                    "drift": False,
+                }
+                report.append(entry)
+                if not args.json:
+                    say(_line(entry))
+            activations.extend(found)
+        for summary in sorted(activations, key=lambda a: (a["name"], a["id"])):
             status, detail = client.request(
                 "GET", f"/api/eda/v1/activations/{summary['id']}/"
             )

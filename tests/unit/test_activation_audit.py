@@ -9,9 +9,11 @@ import importlib.util
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import threading
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -169,20 +171,24 @@ class Handler(BaseHTTPRequestHandler):
                 store.list_drop -= 1
                 self.close_connection = True
                 return
+            # the controller's name filter is a case-insensitive substring
+            # match; every other filter is ignored
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            needle = (query.get("name") or [""])[0].lower()
+            rows = [a for a in store.activations if needle in a["name"].lower()]
             return self._send(
                 200,
                 {
-                    "results": [
-                        {"id": a["id"], "name": a["name"]} for a in store.activations
-                    ],
+                    "results": [{"id": a["id"], "name": a["name"]} for a in rows],
                     "next": None,
                 },
             )
+        if re.match(r"^/api/eda/v1/activations/\d+/$", self.path) and store.detail_503:
+            # the gateway answers 503 to a detail read, of a deleted id as well
+            store.detail_503 -= 1
+            return self._send(503, {"detail": "gateway"})
         for a in store.activations:
             if self.path == f"/api/eda/v1/activations/{a['id']}/":
-                if store.detail_503:
-                    store.detail_503 -= 1
-                    return self._send(503, {"detail": "gateway"})
                 if a["id"] in store.detail_empty_ids:
                     store.detail_empty_ids.discard(a["id"])
                     return self._send_empty(200)
@@ -261,9 +267,9 @@ class Handler(BaseHTTPRequestHandler):
             for a in store.activations
             if self.path != f"/api/eda/v1/activations/{a['id']}/"
         ]
-        if store.list_503_after_delete and len(store.activations) < before:
-            store.list_503 = store.list_503_after_delete
-            store.list_503_after_delete = 0
+        if store.detail_503_after_delete and len(store.activations) < before:
+            store.detail_503 = store.detail_503_after_delete
+            store.detail_503_after_delete = 0
         if store.delete_503 and len(store.activations) < before:
             # carried out, but the gateway lost the answer
             store.delete_503 -= 1
@@ -290,7 +296,9 @@ class Store:
         self.list_503 = 0  # activations lists answered 503
         self.list_403 = 0  # activations lists answered 403 (the gateway under load)
         self.list_drop = 0  # activations lists whose connection is dropped
-        self.list_503_after_delete = 0  # ... armed by the next delete
+        self.detail_503_after_delete = (
+            0  # detail reads answered 503, armed by the next delete
+        )
         self.detail_503 = 0  # activation details answered 503
         self.detail_503_after_create = 0  # ... armed by the next create
         self.detail_empty_ids = set()  # details answered 200 with no body, once
@@ -331,15 +339,35 @@ def _activation(aid, name, variables, enabled=True, status="running", credential
 
 
 @pytest.fixture
-def files(tmp_path):
+def rulebooks(tmp_path):
+    """A platform rulebook directory naming the expected activations; the
+    tests start from capacity and add the files they need."""
+    d = tmp_path / "platform"
+    d.mkdir()
+    (d / "capacity.yml").write_text("")
+    return d
+
+
+@pytest.fixture
+def files(tmp_path, rulebooks):
     example = tmp_path / "example.yml"
     site = tmp_path / "site.yml"
     example.write_text(yaml.safe_dump(EXAMPLE))
     site.write_text(yaml.safe_dump(SITE))
-    return ["--example", str(example), "--vars", str(site)]
+    return [
+        "--example",
+        str(example),
+        "--vars",
+        str(site),
+        "--rulebooks",
+        str(rulebooks),
+    ]
 
 
-def test_cli_reports_drift_and_exits_one(audit, store, files, capsys, monkeypatch):
+def test_cli_reports_drift_and_exits_one(
+    audit, store, files, rulebooks, capsys, monkeypatch
+):
+    (rulebooks / "alerts.yml").write_text("")
     good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashBlade", False)
     stale = dict(good, orchestrator_url="https://orchestrator.example.com")
     store.activations = [
@@ -358,6 +386,9 @@ def test_cli_reports_drift_and_exits_one(audit, store, files, capsys, monkeypatc
     assert "Something else" not in out.out
     assert "2 activation(s), 1 wrong" in out.err
     assert "tok" not in out.out + out.err
+    # every read was by name; the controller's list was never asked for
+    reads = [c[1] for c in store.calls if c[0] == "GET" and "activations/?" in c[1]]
+    assert reads and all("name=" in r for r in reads)
     # a clean fleet exits 0 and the JSON form carries the same report
     store.activations[1] = _activation(8, "FlashBlade rulebook - capacity", good)
     code = audit.main(["--url", store.url, *files, "--json"])
@@ -367,8 +398,10 @@ def test_cli_reports_drift_and_exits_one(audit, store, files, capsys, monkeypatc
 
 
 def test_recreate_touches_only_the_drifted_and_keeps_the_enabled_flag(
-    audit, store, files, capsys, monkeypatch
+    audit, store, files, rulebooks, capsys, monkeypatch
 ):
+    (rulebooks / "alerts.yml").write_text("")
+    (rulebooks / "health.yml").write_text("")
     good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashBlade", False)
     stale = dict(good, alerts_interval=30)
     store.activations = [
@@ -411,7 +444,7 @@ def test_list_rides_out_a_long_gateway_outage(audit, store, files, capsys, monke
     rather than the handful of seconds a nightly check cannot afford to
     fail on."""
     good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashBlade", False)
-    store.activations = [_activation(7, "FlashBlade rulebook - alerts", good)]
+    store.activations = [_activation(7, "FlashBlade rulebook - capacity", good)]
     store.list_503 = 9
     store.list_403 = 3
     store.list_drop = 2
@@ -421,14 +454,32 @@ def test_list_rides_out_a_long_gateway_outage(audit, store, files, capsys, monke
     out = capsys.readouterr()
     assert code == 0
     assert "1 activation(s), 0 wrong" in out.err
-    lists = [c for c in store.calls if c[0] == "GET" and "activations/?" in c[1]]
-    assert len(lists) == 15  # 14 transient answers, then the page
-    assert all("page_size=20" in c[1] for c in lists)
+    reads = [c for c in store.calls if c[0] == "GET" and "activations/?" in c[1]]
+    assert len(reads) == 15  # 14 transient answers, then the page
+    assert all("name=FlashBlade+rulebook+-+capacity" in c[1] for c in reads)
+
+
+def test_a_name_with_no_activation_is_reported(
+    audit, store, files, rulebooks, capsys, monkeypatch
+):
+    """The expected set comes from the platform rulebook files, so a rulebook
+    whose activation is missing is a finding, not silence."""
+    (rulebooks / "alerts.yml").write_text("")
+    good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashBlade", False)
+    store.activations = [_activation(7, "FlashBlade rulebook - capacity", good)]
+    monkeypatch.setenv("AAP_TOKEN", "tok")
+    monkeypatch.setattr(audit.time, "sleep", lambda s: None)
+    code = audit.main(["--url", store.url, *files])
+    out = capsys.readouterr()
+    assert code == 1
+    assert "FlashBlade rulebook - alerts: not on the controller" in out.out
+    assert "FlashBlade rulebook - capacity: ok (running)" in out.out
+    assert "2 activation(s), 1 wrong" in out.err
 
 
 def test_list_gives_up_after_the_retry_budget(audit, store, files, capsys, monkeypatch):
     good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashBlade", False)
-    store.activations = [_activation(7, "FlashBlade rulebook - alerts", good)]
+    store.activations = [_activation(7, "FlashBlade rulebook - capacity", good)]
     store.list_503 = 1000
     monkeypatch.setenv("AAP_TOKEN", "tok")
     monkeypatch.setattr(audit.time, "sleep", lambda s: None)
@@ -501,8 +552,9 @@ def test_recreate_does_not_wait_for_a_disabled_activation(
 
 
 def test_recreate_keeps_a_create_that_went_through_behind_a_gateway_error(
-    audit, store, files, capsys, monkeypatch
+    audit, store, files, rulebooks, capsys, monkeypatch
 ):
+    (rulebooks / "alerts.yml").write_text("")
     good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashBlade", False)
     store.activations = [
         _activation(7, "FlashBlade rulebook - alerts", good),
@@ -677,9 +729,10 @@ def test_recreate_treats_a_cut_short_refusal_as_unknown_and_tries_again(
     assert code == 0
 
 
-def test_recreate_waits_out_a_list_error_after_the_delete(
-    audit, store, files, capsys, monkeypatch
+def test_recreate_waits_out_a_read_error_after_the_delete(
+    audit, store, files, rulebooks, capsys, monkeypatch
 ):
+    (rulebooks / "health.yml").write_text("")
     good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashBlade", False)
     store.activations = [
         _activation(
@@ -687,17 +740,20 @@ def test_recreate_waits_out_a_list_error_after_the_delete(
         ),
         _activation(9, "FlashBlade rulebook - health", dict(good, alerts_interval=31)),
     ]
-    # one whole read fails, the next read rides out the rest
-    store.list_503_after_delete = audit.REQUEST_RETRIES + 2
+    # one whole read of the deleted id fails, the next rides out the rest
+    store.detail_503_after_delete = audit.REQUEST_RETRIES + 2
     code = _run_recreate(audit, store, files, monkeypatch)
     out = capsys.readouterr()
-    assert "could not read the activations list" in out.out
+    assert (
+        "could not read FlashBlade rulebook - capacity (id 8) after the delete"
+        in out.out
+    )
     assert "created FlashBlade rulebook - capacity as id 101" in out.out
     assert "created FlashBlade rulebook - health as id 102" in out.out
     assert code == 0
 
 
-def test_recreate_says_so_when_the_list_stays_unreadable_after_the_delete(
+def test_recreate_says_so_when_the_id_stays_unreadable_after_the_delete(
     audit, store, files, capsys, monkeypatch
 ):
     good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashBlade", False)
@@ -706,19 +762,20 @@ def test_recreate_says_so_when_the_list_stays_unreadable_after_the_delete(
             8, "FlashBlade rulebook - capacity", dict(good, alerts_interval=30)
         ),
     ]
-    store.list_503_after_delete = 1000  # outlasts the delete wait
+    store.detail_503_after_delete = 1000  # outlasts the delete wait
     code = _run_recreate(audit, store, files, monkeypatch)
     out = capsys.readouterr()
     assert store.created == []
-    assert "the activations list could not be read for 300 s" in out.err
-    assert "still listed" not in out.err
-    assert "check whether id 8 is gone, then run aap/seed.yml" in out.err
+    assert "id 8 could not be read for 300 s after the delete" in out.err
+    assert "still present" not in out.err
+    assert "check whether it is gone, then run aap/seed.yml" in out.err
     assert code == 1
 
 
 def test_audit_reports_a_bodiless_detail_answer_and_keeps_the_ids_done(
-    audit, store, files, capsys, monkeypatch
+    audit, store, files, rulebooks, capsys, monkeypatch
 ):
+    (rulebooks / "health.yml").write_text("")
     good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashBlade", False)
     store.activations = [
         _activation(
@@ -736,8 +793,9 @@ def test_audit_reports_a_bodiless_detail_answer_and_keeps_the_ids_done(
 
 
 def test_recreate_waits_out_a_detail_error_after_the_create(
-    audit, store, files, capsys, monkeypatch
+    audit, store, files, rulebooks, capsys, monkeypatch
 ):
+    (rulebooks / "health.yml").write_text("")
     good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashBlade", False)
     store.activations = [
         _activation(
@@ -784,19 +842,19 @@ def test_recreate_keeps_waiting_when_the_lookup_itself_fails(
         ),
     ]
     store.name_held = 1
-    real_list_all = audit.Client.list_all
+    real_named = audit.Client.activations_named
     calls = {"n": 0}
 
-    def flaky_list_all(self, path):
-        # the list answers 5xx once, right after the create was refused
+    def flaky_named(self, name):
+        # the read by name answers 5xx once, right after the create was refused
         calls["n"] += 1
-        if calls["n"] == 3:
+        if calls["n"] == 2:
             raise audit.AuditError(
-                f"GET {path}: gave up after {audit.REQUEST_RETRIES} attempts"
+                f"GET activations?name={name}: gave up after {audit.REQUEST_RETRIES} attempts"
             )
-        return real_list_all(self, path)
+        return real_named(self, name)
 
-    monkeypatch.setattr(audit.Client, "list_all", flaky_list_all)
+    monkeypatch.setattr(audit.Client, "activations_named", flaky_named)
     code = _run_recreate(audit, store, files, monkeypatch)
     out = capsys.readouterr()
     assert "could not look FlashBlade rulebook - capacity up" in out.out
@@ -888,14 +946,14 @@ def test_cli_takes_the_gateway_and_tls_from_the_credentials_environment(
     injects AAP_HOSTNAME (possibly with an /api/... path) and
     AAP_VALIDATE_CERTS; --url and --insecure default to them."""
     good = audit.expected_extra_vars(EXAMPLE, SITE, "FlashBlade", False)
-    store.activations = [_activation(7, "FlashBlade rulebook - alerts", good)]
+    store.activations = [_activation(7, "FlashBlade rulebook - capacity", good)]
     monkeypatch.setenv("AAP_TOKEN", "tok")
     monkeypatch.setenv("AAP_HOSTNAME", store.url + "/api/controller/")
     monkeypatch.setenv("AAP_VALIDATE_CERTS", "False")
     code = audit.main([*files])
     out = capsys.readouterr()
     assert code == 0
-    assert out.out.splitlines()[0] == "FlashBlade rulebook - alerts: ok (running)"
+    assert out.out.splitlines()[0] == "FlashBlade rulebook - capacity: ok (running)"
 
 
 def test_env_defaults_for_the_gateway_and_tls(audit, monkeypatch):
