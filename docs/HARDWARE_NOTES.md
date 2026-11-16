@@ -828,7 +828,8 @@ seed, the two images and the activations are written around;
   websocket service is ready; an activation that had already reached its
   restart policy's limit is only marked failed ("exited with code 143 ...
   has reached the maximum number of restarts") and stays so until it is
-  restarted by id, one at a time as above.
+  restarted: `tools/activation_restart.py` restarts the FlashBlade ones that
+  are not running, one at a time, once the EDA API answers again.
 - The EDA controller runs at most `MAX_RUNNING_ACTIVATIONS` activations
   at a time (12 by default; the installer variable
   `eda_max_running_activations` sets it). One past the cap sits in

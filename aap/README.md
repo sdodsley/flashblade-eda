@@ -476,6 +476,24 @@ is printed as it happens, old id and new id, because the Rule Audit rows
 stay under the old id. Run it after the seed and after any change to the
 site file.
 
+## After a host reboot
+
+The platform's own units bring it back, and the activation worker restarts
+the activations the shutdown ended, but one that had already reached its
+restart policy's limit is marked failed and left there.
+`tools/activation_restart.py` finishes the job: it waits for the EDA API
+(`--wait-minutes`, 15 by default), reads the activation of every platform
+rulebook by its full name, leaves the disabled and the running ones alone,
+waits for one that is starting, and restarts each other one through its
+restart endpoint, one at a time, up to three times (an early start can
+meet the websocket service before it is ready); the exit status is 1 when
+one does not run. It takes the gateway, the token and the TLS setting from
+the same flags and environment as the audit, so a oneshot user unit
+ordered after the platform's units (`After=automation-gateway.service
+automation-eda-api.service automation-eda-daphne.service
+automation-eda-activation-worker-1.service`) runs it at boot, reading the
+token from a file at run time rather than carrying it in the unit.
+
 ## Re-running safely
 
 Run the same command again. Objects are matched by name and only

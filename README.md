@@ -218,6 +218,8 @@ tools/telemetry_rules.py               writes prometheus/flashblade.rules.yml fr
 tools/platform_rulebooks.py            writes extensions/eda/rulebooks/platform/ from the standalone rulebooks
 tools/activation_audit.py              compares every FlashBlade activation's extra vars with the site vars and, with
                                        --recreate, recreates the drifted ones (aap/README.md, "Checking the activations")
+tools/activation_restart.py            restarts the FlashBlade activations that are not running once the EDA API
+                                       answers again, after a host reboot (aap/README.md, "After a host reboot")
 tools/ao_lint.py, tools/ao_sync.py     offline linter for the definitions (`make lint-ao`); import into an orchestrator
 baseline/                              schema of the git baseline (README); the real <array>.yml files live in a separate checkout
 vars/example.yml, inventory/example.yml  copy to vars/local-<site>.yml and inventory/local-<site>.yml (gitignored)

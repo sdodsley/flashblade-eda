@@ -13,6 +13,10 @@
   EDA API ejected at the gateway for every reader; its `name` filter is a
   substring match, so the exact match is made client-side. The audit
   reports a platform rulebook whose activation is missing.
+- `tools/activation_restart.py` restarts, one at a time, every FlashBlade
+  activation that is enabled and not running once the EDA API answers
+  again, for the ones a host reboot leaves failed at their restart ceiling;
+  a oneshot user unit ordered after the platform's units runs it at boot.
 
 ## 0.1.1 (2026-11-14)
 

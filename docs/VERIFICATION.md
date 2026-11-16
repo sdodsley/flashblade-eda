@@ -156,6 +156,9 @@ unit test, so a replayed event takes the same path as a live one.
 
 ## Not verified
 
+- `tools/activation_restart.py` through a boot: its tests run against a
+  fake controller, and a run on the platform with every FlashBlade
+  activation already running touched nothing; no reboot has exercised it.
 - Of the management syslog, `purity.alert` and `purity.test` lines from the
   array: the `purity.audit` layout is confirmed from a live syslog server;
   the other two programs are parsed as the Admin Guide documents.
