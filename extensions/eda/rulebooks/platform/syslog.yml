@@ -40,7 +40,7 @@
             extra_vars:
               severity: '{{ event.purefb_syslog_alert.severity }}'
               subject: '{{ event.purefb_syslog_alert.array }} alert{{ ('' '' ~ event.purefb_syslog_alert.code) if event.purefb_syslog_alert.code else '''' }}{{ ('' '' ~ event.purefb_syslog_alert.state) if event.purefb_syslog_alert.state else '''' }}: {{ event.purefb_syslog_alert.subject | default(event.purefb_syslog_alert.message, true) }}'
-              detail: '{{ event.purefb_syslog_alert.details | default('''', true) }} {{ (''Action: '' ~ event.purefb_syslog_alert.action) if event.purefb_syslog_alert.action else '''' }} {{ (''KB '' ~ event.purefb_syslog_alert.knowledge_base_url) if event.purefb_syslog_alert.knowledge_base_url else '''' }} (syslog from {{ event.purefb_syslog_alert.source }}, first seen {{ event.purefb_syslog_alert.first_seen | default(event.purefb_syslog_alert.time, true) }} UTC)'
+              detail: '{{ event.purefb_syslog_alert.details | default('''', true) }} {{ (''Action: '' ~ event.purefb_syslog_alert.action) if event.purefb_syslog_alert.action else '''' }} {{ (''KB '' ~ event.purefb_syslog_alert.knowledge_base_url) if event.purefb_syslog_alert.knowledge_base_url else '''' }} (syslog from {{ event.purefb_syslog_alert.source }}, first seen {{ event.purefb_syslog_alert.first_seen | default(event.purefb_syslog_alert.time, true) }})'
               alert_code: '{{ event.purefb_syslog_alert.code | default('''', true) }}'
               target_array: '{{ event.purefb_syslog_alert.array }}'
     - name: Human action via syslog audit - fast notification
