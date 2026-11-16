@@ -130,9 +130,7 @@ orchestrator's execution starts first and promotes, reads and demotes the
 replica in about six minutes; the controller schedule's copy waits for it
 (the template does not allow simultaneous jobs), finds the day's marker
 and records the drill as skipped, so a site keeps one of the two
-schedulers. While the drill job runs, the EDA API's activations listing
-times out on the shared host ([HARDWARE_NOTES.md](HARDWARE_NOTES.md),
-"Containerized platform").
+schedulers.
 
 ## Replayed only
 

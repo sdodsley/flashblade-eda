@@ -832,12 +832,17 @@ seed, the two images and the activations are written around;
   that enforces its enabled flag over that answer sweeps another
   project's activations too; the FlashBlade seed picks its own out by
   name before it enables or disables anything.
-- A playbook job running on the platform host is enough to push the EDA
-  API's activations listing past its worker timeout for the job's
-  duration: the gateway answers 500 or 503 to every listing, even a small
-  page, for those minutes. A scheduled check that reads the EDA API runs
-  away from the job schedules, and a tool that reads it during one rides
-  the answers out with a retry budget of minutes.
+- The EDA API is the first platform service to fail on a host short of
+  memory. With the host deep in swap, gunicorn kills the API's workers
+  ("WORKER TIMEOUT ... Perhaps out of memory?") and the gateway answers
+  500 or 503 to every EDA read, the status endpoint included, while the
+  activations keep running and the controller still answers. On the lab
+  the memory went to another process on the shared host (the
+  orchestrator's background worker at some 10 GB resident), not to a
+  job, although a job hour makes it worse. A scheduled check that reads
+  the EDA API runs away from the job hours, with a retry budget of
+  minutes, and a host that swaps needs the memory back before any EDA
+  read is trusted.
 - Reading an activation's detail is not free: the serializer walks its
   instances, and an activation that has restarted thirty times answers
   slowly. A script that polls details every few seconds across a dozen
