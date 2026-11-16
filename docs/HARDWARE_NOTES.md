@@ -832,6 +832,12 @@ seed, the two images and the activations are written around;
   that enforces its enabled flag over that answer sweeps another
   project's activations too; the FlashBlade seed picks its own out by
   name before it enables or disables anything.
+- A playbook job running on the platform host is enough to push the EDA
+  API's activations listing past its worker timeout for the job's
+  duration: the gateway answers 500 or 503 to every listing, even a small
+  page, for those minutes. A scheduled check that reads the EDA API runs
+  away from the job schedules, and a tool that reads it during one rides
+  the answers out with a retry budget of minutes.
 - Reading an activation's detail is not free: the serializer walks its
   instances, and an activation that has restarted thirty times answers
   slowly. A script that polls details every few seconds across a dozen

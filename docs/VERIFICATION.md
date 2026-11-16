@@ -123,6 +123,17 @@ human changes and the Alertmanager posts come from the client VM.
 | 9 | `FlashBlade - capacity reclaim (controller tier)` launched by hand | the request job publishes its artifacts, the workflow pauses at the approval node, the approval is given from the Slack card (the bot) or in the platform's UI, the reclaim node rebuilds the request from the artifacts and records each refusal or that nothing is pending, and the notify node runs | passed: the request job published `request_id`, `candidate_count` and `candidates`, the workflow paused at the approval node, the Slack bot's card carried the approval back as its platform user, the reclaim node rebuilt the request from the artifacts (`rebuilt_from: job artifacts`, nothing pending, `result: done`) and the workflow completed |
 | 10 | the orchestrator: the capacity route (a fixture event posted through `FlashBlade - orchestrator post`); `day2_grow_fs` started from the API against `eda-demo-quota`; `dr_drill_schedule.json` published | the capacity execution runs the request, pauses at its approval and on approval runs `FlashBlade - capacity reclaim` to completion; the grow definition notifies, pauses at its approval, grows the file system through `FlashBlade - grow file system` and notifies with `old_size`, `new_size` and the job link; publishing the drill definition creates its schedule | passed: `tools/ao_sync.py` validated, created and published the seven definitions (a second run reports them unchanged); the capacity event posted through the template started an execution that ran the request with the event array's credential and, with nothing pending, took the no-candidates notify to completion; posted again with a destroyed file system it paused at the approval, the Slack card decided it and the reclaim eradicated that file system (`result: done`); `day2_grow_fs` started from the API paused at its approval, the Slack decision ran the grow (1.25 to 1.5 GiB, `outcome: grown`) and the closing notify; publishing the drill definition created its Temporal schedule (next run 03:00 UTC) |
 
+The four schedules fire on their own: `FlashBlade - showback (daily)` and
+`FlashBlade - selftest (daily)` launch their templates at their hours, and
+at 03:00 UTC both drill schedulers launch `FlashBlade - DR drill`. The
+orchestrator's execution starts first and promotes, reads and demotes the
+replica in about six minutes; the controller schedule's copy waits for it
+(the template does not allow simultaneous jobs), finds the day's marker
+and records the drill as skipped, so a site keeps one of the two
+schedulers. While the drill job runs, the EDA API's activations listing
+times out on the shared host ([HARDWARE_NOTES.md](HARDWARE_NOTES.md),
+"Containerized platform").
+
 ## Replayed only
 
 Exercised from fixtures under `tests/fixtures/`, not induced on the array:
@@ -198,8 +209,7 @@ unit test, so a replayed event takes the same path as a live one.
   object-store array and its second object-audit activation; the Source
   Control credential's removal once the repository is public (the seed
   creates none when the token variable is unset and never deletes one);
-  the three controller schedules and the orchestrator's drill schedule
-  firing on their own; the three other day-2 definitions
+  the three other day-2 definitions
   (`day2_identify_led`, `day2_qos_cap`, `day2_quarantine_client`) and
   `replication_paused_approval.json` from a live paused link, linted and
   unit-tested only; all fifteen activations running at once (the lab
