@@ -76,17 +76,22 @@ header), syslog_severity (the PRI's severity word, None when the array
 sends no PRI), facility (None without a PRI), source (sender ip), protocol
 (udp | tcp) and raw (the whole line).
 
-purefb_syslog_alert   `<SEVERITY> <State> - <array>: <subject> [<code>]
-                      #012<details>`, the details being lines separated by
-                      #012 (the octal escape rsyslog uses for a newline):
-                      free text, then `Severity:`, `State:`, `First Seen UTC
-                      Time:`, `Array Name:`, `Array ID:`, `Purity//FB
-                      Version:`, `Suggested Action:` and `Knowledge Base
+purefb_syslog_alert   `<SEVERITY> <State> - <array>: (Alert ID: <uuid>)
+                      <subject> [<code>] #012<details>`, the state one or
+                      more words (Open, Closing, Closed, Waiting To
+                      Downgrade), the alert id optional, the details being
+                      lines separated by #012 (the octal escape rsyslog uses
+                      for a newline): free text, then `Severity:`, `State:`,
+                      `First Seen UTC Time:`, `First Seen Array Time:`,
+                      `Array Name:`, `Array ID:`, `Purity//FB Version:`,
+                      `Details:`, `Suggested Action:` and `Knowledge Base
                       Article:`. Gives severity (info | warning | critical,
                       the same words the REST purefb_alert event uses: the
                       Severity field, else the leading word, else the PRI),
-                      state, subject, code (int), details (the free-text
-                      lines), action, knowledge_base_url, first_seen,
+                      state (lower case), subject (without the alert id),
+                      alert_id, code (int), details (the free-text lines and
+                      the Details line), action (None when blank),
+                      knowledge_base_url, first_seen, first_seen_array,
                       array_id, purity_version. A purity.alert line the
                       layout does not match is emitted whole with code None.
 purefb_syslog_audit   `- Adding audit entry. GUID=..., ID=..., Time=...,
@@ -298,11 +303,16 @@ RFC5424 = re.compile(
     r"^<(?P<pri>\d{1,3})>1\s+(?P<time>\S+)\s+(?P<host>\S+)\s+(?P<prog>\S+)\s+\S+\s+\S+\s+(?:\[.*?\]|-)\s*(?P<msg>.*)$",
     re.S,
 )
-# purity.alert: "<SEVERITY> <State> - <array>: <subject> [<code>] #012<details>"
+# purity.alert: "<SEVERITY> <State> - <array>: <subject> [<code>] #012<details>",
+# the state one or more words ("Open", "Closing", "Waiting To Downgrade")
 ALERT = re.compile(
-    r"^(?P<level>[A-Za-z]+)\s+(?P<state>[A-Za-z]+)\s+-\s+(?P<array>[^\s:]+):\s+"
+    r"^(?P<level>[A-Za-z]+)\s+(?P<state>[A-Za-z]+(?:\s[A-Za-z]+)*)\s+-\s+(?P<array>[^\s:]+):\s+"
     r"(?P<subject>.+?)\s*\[(?P<code>\d+)\]\s*(?P<details>.*)$",
     re.S,
+)
+# The subject may open with the alert's id: "(Alert ID: <uuid>) <subject>"
+ALERT_ID = re.compile(
+    r"^\(Alert ID:\s*(?P<alert_id>[0-9A-Fa-f-]+)\)\s*(?P<subject>.*)$", re.S
 )
 # Lines inside the alert details are separated by #012 (rsyslog's escape for
 # a newline); a real newline is accepted for a forwarder that keeps them.
@@ -312,6 +322,7 @@ ALERT_FIELDS = {
     "severity": "severity_word",
     "state": "state",
     "first seen utc time": "first_seen",
+    "first seen array time": "first_seen_array",
     "array name": "array_name",
     "array id": "array_id",
     "purity//fb version": "purity_version",
@@ -383,6 +394,8 @@ ALERT_KEYS = (
     "action",
     "knowledge_base_url",
     "first_seen",
+    "first_seen_array",
+    "alert_id",
     "array_id",
     "purity_version",
 )
@@ -469,9 +482,16 @@ def _array_name(own_name, host, hostnames):
 def _alert_fields(m):
     """Fields of the purity.alert layout from its regex match."""
     fields = dict.fromkeys(ALERT_KEYS)
+    subject = " ".join(m.group("subject").split())
+    alert_id = None
+    i = ALERT_ID.match(subject)
+    if i:
+        alert_id = i.group("alert_id")
+        subject = " ".join(i.group("subject").split()) or subject
     fields.update(
         state=m.group("state").lower(),
-        subject=" ".join(m.group("subject").split()),
+        subject=subject,
+        alert_id=alert_id,
         code=int(m.group("code")),
         array_name=m.group("array"),
     )
@@ -481,9 +501,16 @@ def _alert_fields(m):
         if not part:
             continue
         f = DETAIL_FIELD.match(part)
-        key = ALERT_FIELDS.get(f.group("key").strip().lower()) if f else None
+        label = f.group("key").strip().lower() if f else None
+        key = ALERT_FIELDS.get(label) if label else None
         if key:
-            fields[key] = " ".join(f.group("value").split())
+            # a blank value ("Suggested Action:  ") is no value
+            fields[key] = " ".join(f.group("value").split()) or None
+        elif label == "details":
+            # the Details line is more free text, kept without its label
+            value = " ".join(f.group("value").split())
+            if value:
+                free.append(value)
         else:
             free.append(" ".join(part.split()))
     fields["details"] = " ".join(free)

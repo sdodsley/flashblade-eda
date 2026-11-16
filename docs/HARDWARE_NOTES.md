@@ -156,16 +156,20 @@ Purity//FB 4.6.4 (REST 2.21) unless stated; a legacy FlashBlade on 4.5.6
   TCP or TLS, facility local6 or local7, programs `purity.alert`,
   `purity.audit` and `purity.test`; sessions are logged too. The layouts
   differ from FlashArray's:
-  `<ts> <fm-host> purity.alert: <SEVERITY> <State> - <array>: <subject>
-  [<code>] #012<details ... Severity: Warning#012State: Open#012First Seen
-  UTC Time: ...#012Array Name: ...#012Array ID: ...#012Purity//FB Version:
-  ...#012Suggested Action: ...#012Knowledge Base Article: <url>` and
+  `<ts> <fm-host> purity.alert: <SEVERITY> <State> - <array>: (Alert ID:
+  <uuid>) <subject> [<code>] #012<details ... Severity: CRITICAL#012State:
+  Open#012First Seen UTC Time: 2026 Nov 16 17:02:19 UTC#012First Seen Array
+  Time: ...#012Array Name: ...#012Array ID: ...#012Purity//FB Version:
+  ...#012Details: ...#012Suggested Action: ...#012Knowledge Base Article:
+  <url>`, the state one or more words (`Open`, `Closing`, `Closed`,
+  `Waiting To Downgrade`) and `Suggested Action` sometimes blank, and
   `<ts> <fm-host> purity.audit: - Adding audit entry. GUID=<guid>, ID=<n>,
   Time=<yyyy-mm-dd hh:mm:ss.ffffff>, User=<user>, Location=<ip>,
   UI=CLI|GUI|REST, Command=<cmd>, Subcommand=<sub>, Arguments=<args>`.
-  RFC 3164 by default; RFC 5424 is a tunable. The `purity.audit` layout is
-  confirmed from a live syslog server; the `purity.alert` and `purity.test`
-  layouts are from the FlashBlade Admin Guide 4.8.1.
+  RFC 3164 by default; RFC 5424 is a tunable. The `purity.audit` and
+  `purity.alert` layouts are confirmed from live lines (the alert lines from
+  a Purity//FB 4.6.4 array under upgrade, PRI 178 = local6.crit); the
+  `purity.test` layout is from the FlashBlade Admin Guide 4.8.1.
 - Alert 1139 "Message Drop for Remote Syslog (Audit Related)" fires when a
   target drops data-audit messages; it is suppressed during a maintenance
   window, as is 1140.

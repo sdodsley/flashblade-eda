@@ -461,3 +461,62 @@ def test_replay_rules_match_the_real_rulebook(replay):
         assert (
             rule == real_rules[name]
         ), f"{replay.name}: rule '{name}' has drifted from {real.name}"
+
+
+def test_syslog_alert_templates_never_print_none():
+    """An alert line outside the layout arrives with every alert field None
+    and the severity from the PRI; the notify templates then render the
+    message, never the word None (Jinja's default() leaves a None alone
+    unless told otherwise)."""
+    jinja2 = pytest.importorskip("jinja2")
+    alert = dict.fromkeys(
+        (
+            "severity",
+            "state",
+            "subject",
+            "code",
+            "details",
+            "action",
+            "knowledge_base_url",
+            "first_seen",
+            "first_seen_array",
+            "alert_id",
+            "array_id",
+            "purity_version",
+            "host",
+            "syslog_time",
+            "program",
+            "syslog_severity",
+            "facility",
+            "protocol",
+            "raw",
+        )
+    )
+    alert.update(
+        array="fb-a",
+        severity="critical",
+        message="CRITICAL Waiting To Downgrade - fb-a: something new",
+        time="Nov 16 17:02:39",
+        source="192.0.2.10",
+    )
+    for path in (
+        pathlib.Path("extensions/eda/rulebooks/syslog.yml"),
+        pathlib.Path("extensions/eda/rulebooks/platform/syslog.yml"),
+    ):
+        rulebook = yaml.safe_load(path.read_text(encoding="utf-8"))
+        rule = next(
+            r for r in rulebook[0]["rules"] if r["name"] == "Alert via syslog - notify"
+        )
+        action = rule["action"]
+        extra = (
+            action["run_playbook"]["extra_vars"]
+            if "run_playbook" in action
+            else action["run_job_template"]["job_args"]["extra_vars"]
+        )
+        for key, template in extra.items():
+            text = jinja2.Template(str(template)).render(
+                event={"purefb_syslog_alert": alert}, alert_log="/tmp/alerts.log"
+            )
+            assert "None" not in text, f"{path.name} {key}: {text!r}"
+            if key == "subject":
+                assert text.startswith("fb-a alert:") and alert["message"] in text

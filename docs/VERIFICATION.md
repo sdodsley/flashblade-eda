@@ -159,9 +159,9 @@ unit test, so a replayed event takes the same path as a live one.
 - `tools/activation_restart.py` through a boot: its tests run against a
   fake controller, and a run on the platform with every FlashBlade
   activation already running touched nothing; no reboot has exercised it.
-- Of the management syslog, `purity.alert` and `purity.test` lines from the
-  array: the `purity.audit` layout is confirmed from a live syslog server;
-  the other two programs are parsed as the Admin Guide documents.
+- Of the management syslog, `purity.test` lines from the array: the
+  `purity.audit` and `purity.alert` layouts are confirmed from live lines;
+  `purity.test` is parsed as the Admin Guide documents.
 - The data-audit JSON branch of the listener: SMB audit needs an Active
   Directory join the lab lacks and NFS audit needs Purity//FB 4.8.0.
 - A real hardware fault, a hot array, a full array: replayed or induced on

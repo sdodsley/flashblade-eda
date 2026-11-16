@@ -17,6 +17,12 @@
   activation that is enabled and not running once the EDA API answers
   again, for the ones a host reboot leaves failed at their restart ceiling;
   a oneshot user unit ordered after the platform's units runs it at boot.
+- `purefb_syslog` parses the alert lines a live array writes: a state of
+  several words (`Waiting To Downgrade`), the alert id ahead of the subject
+  (now `alert_id`), the `First Seen Array Time` and `Details` lines and a
+  blank `Suggested Action`. Such a line used to fall outside the layout and
+  the syslog rulebook printed its empty fields as `None`; the templates now
+  fall back to the message.
 
 ## 0.1.1 (2026-11-14)
 

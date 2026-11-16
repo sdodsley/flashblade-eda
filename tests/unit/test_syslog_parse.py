@@ -690,3 +690,61 @@ def test_hostnames_argument_accepts_a_json_or_yaml_string(syslog):
 def test_main_rejects_a_bad_allowed_source_before_listening(syslog):
     with pytest.raises(ValueError):
         asyncio.run(syslog.main(_Q(), {"allowed_sources": ["198.51.100.0/24", "nope"]}))
+
+
+# Lines a Purity//FB 4.6.4 array wrote during an upgrade (hostnames
+# anonymised): a state of several words, the alert id ahead of the subject,
+# the "First Seen Array Time" and "Details" lines, a blank "Suggested
+# Action", PRI 178 (local6.crit).
+ALERT_LIVE_TAIL = (
+    "#012A drive's status is critical. No data has been lost, but "
+    "performance/parity may be impacted. There will be daily notifications for "
+    "7 days.#012#012Severity: CRITICAL#012State: {state}#012First Seen UTC Time: "
+    "2026 Nov 16 17:02:43 UTC#012First Seen Array Time: 2026 Nov 16 09:02:43 PST"
+    f"#012Array Name: fb-a#012Array ID: {ARRAY_ID}#012Purity//FB Version: 4.6.4"
+    "#012Details: No board state#012#012Suggested Action:  #012Knowledge Base "
+    "Article: https://support.purestorage.com/?cid=Alert_1017#012"
+)
+ALERT_LIVE = (
+    "<178>Nov 16 17:05:38 fb-a-fm1 purity.alert: CRITICAL Closing - fb-a: "
+    "(Alert ID: 3bedc475-ee88-a490-f4f5-18de62b81806) Drive CH1.FB8.BAY2 requires "
+    "attention [1017] " + ALERT_LIVE_TAIL.format(state="Closing")
+)
+ALERT_WAITING = (
+    "<178>Nov 16 17:02:39 fb-a-fm1 purity.alert: CRITICAL Waiting To Downgrade - "
+    "fb-a: (Alert ID: a9e232e5-fd68-6d9d-313b-4f2262f26855) Blade CH1.FB8 requires "
+    "attention [1000] " + ALERT_LIVE_TAIL.format(state="Waiting to downgrade")
+)
+
+
+def test_alert_line_as_a_live_array_writes_it(syslog):
+    e = syslog.parse(ALERT_LIVE, {}, set())
+    assert e["kind"] == "alert" and e["array"] == "fb-a" and e["host"] == "fb-a-fm1"
+    assert e["severity"] == "critical" and e["state"] == "closing"
+    assert e["code"] == 1017 and e["subject"] == "Drive CH1.FB8.BAY2 requires attention"
+    assert e["alert_id"] == "3bedc475-ee88-a490-f4f5-18de62b81806"
+    assert e["details"] == (
+        "A drive's status is critical. No data has been lost, but "
+        "performance/parity may be impacted. There will be daily notifications "
+        "for 7 days. No board state"
+    )
+    assert e["action"] is None  # a blank Suggested Action is no action
+    assert e["knowledge_base_url"] == "https://support.purestorage.com/?cid=Alert_1017"
+    assert e["first_seen"] == "2026 Nov 16 17:02:43 UTC"
+    assert e["first_seen_array"] == "2026 Nov 16 09:02:43 PST"
+    assert e["array_id"] == ARRAY_ID and e["purity_version"] == "4.6.4"
+    assert e["syslog_severity"] == "crit" and e["facility"] == 22
+
+
+def test_alert_state_of_several_words_is_parsed(syslog):
+    e = syslog.parse(ALERT_WAITING, {}, set())
+    assert e["state"] == "waiting to downgrade" and e["code"] == 1000
+    assert e["subject"] == "Blade CH1.FB8 requires attention"
+    assert e["alert_id"] == "a9e232e5-fd68-6d9d-313b-4f2262f26855"
+    assert e["array"] == "fb-a" and e["severity"] == "critical"
+    # the id-less layout still parses, with no alert_id
+    plain = ALERT_WAITING.replace(
+        "(Alert ID: a9e232e5-fd68-6d9d-313b-4f2262f26855) ", ""
+    )
+    p = syslog.parse(plain, {}, set())
+    assert p["subject"] == "Blade CH1.FB8 requires attention" and p["alert_id"] is None

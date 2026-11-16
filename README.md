@@ -309,8 +309,10 @@ send and emits one event per line, named by kind: `purefb_syslog_alert`,
 `purefb_file_activity`. A FlashBlade syslog server carries
 `services`: with `management` the line is one of the Purity layouts, and
 the listener parses `purity.alert` (`<SEVERITY> <State> - <array>:
-<subject> [<code>]` plus the `Severity:`, `State:`, `Array Name:` and
-`Knowledge Base Article:` fields in the detail) and `purity.audit`
+(Alert ID: <uuid>) <subject> [<code>]`, the state one or more words, plus
+the `Severity:`, `State:`, `First Seen UTC Time:`, `Array Name:`,
+`Suggested Action:` and `Knowledge Base Article:` fields in the detail)
+and `purity.audit`
 (`Adding audit entry. GUID=..., ID=..., Time=..., User=..., Location=...,
 UI=CLI|GUI|REST, Command=..., Subcommand=..., Arguments=...`) into fields;
 with `data-audit` each line is one JSON object (`pf: fb`, `user`,
