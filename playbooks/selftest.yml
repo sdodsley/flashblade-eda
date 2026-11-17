@@ -18,9 +18,10 @@
 #               refused; skipped for an array without an object_store entry
 #   audit       the audit_baseline policy is enabled, has members and every
 #               baseline bucket carries a filter
-#   telemetry   the telemetry target exists and is enabled (REST 2.21);
-#               skipped while telemetry_endpoint is empty and on an array
-#               whose REST does not serve 2.21
+#   telemetry   the telemetry target exists and is enabled, read at the
+#               newest REST version the array serves; skipped while
+#               telemetry_endpoint is empty and on an array whose REST is
+#               older than 2.21
 #   prometheus  <prometheus_url>/-/ready answers 200; skipped while empty
 # Nothing is changed. One selftest record per array, critical when a check
 # failed, info otherwise, with every check's result in it.
@@ -30,7 +31,9 @@
   vars:
     store: "{{ (object_store | default({}))[inventory_hostname] | default({}) }}"
     checks: "{{ selftest_checks | default(['rest', 's3', 'audit', 'telemetry', 'prometheus']) }}"
-    telemetry_api_version: "2.21"
+    # a REST version to pin; empty means the newest the array serves, 2.21 at
+    # least (tasks/fb_api_version.yml)
+    telemetry_api_version: ""
   tasks:
     - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
       ansible.builtin.include_tasks:
@@ -175,24 +178,17 @@
     - name: Check the telemetry target
       when: "'telemetry' in checks"
       block:
-        # the versions list needs no token; telemetry needs REST 2.21
-        - name: Ask the management address for its API versions
+        # the versions list needs no token; telemetry needs REST 2.21 or newer
+        - name: Settle the REST version the telemetry endpoints are asked for
           when: telemetry_endpoint | default('') | length > 0
-          ansible.builtin.uri:
-            url: >-
-              {{ fb_url | string | regex_replace('/+$', '') | regex_replace('^(?!https?://)', 'https://') }}/api/api_version
-            method: GET
-            return_content: true
-            validate_certs: "{{ fb_validate_certs | default(false) | bool }}"
-            timeout: 20
-          register: version_probe
-          failed_when: false
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/tasks/fb_api_version.yml"
 
         - name: Decide whether this array can hold a telemetry target
           ansible.builtin.set_fact:
             telemetry_wanted: >-
               {{ (telemetry_endpoint | default('') | length) > 0
-                 and telemetry_api_version in (version_probe.json.versions | default([])) }}
+                 and (telemetry_rest_version | default('') | length) > 0 }}
 
         - name: Read the telemetry target
           when: telemetry_wanted | bool
@@ -201,7 +197,7 @@
           vars:
             fb_rest_method: GET
             fb_rest_path: "telemetry-targets?names={{ telemetry_target_name | default('eda-prom') }}"
-            fb_rest_api_version: "{{ telemetry_api_version }}"
+            fb_rest_api_version: "{{ telemetry_rest_version }}"
             fb_rest_ignore_errors: true
 
         - name: Keep the telemetry result
@@ -209,7 +205,7 @@
             results: >-
               {{ results | combine({'telemetry': {'ok': true, 'skipped': true, 'detail': 'telemetry_endpoint is empty'}
                                     if (telemetry_endpoint | default('') | length) == 0
-                                    else {'ok': true, 'skipped': true, 'detail': 'the array does not serve REST ' ~ telemetry_api_version}
+                                    else {'ok': true, 'skipped': true, 'detail': 'the array serves no REST version with telemetry (2.21 or newer)'}
                                     if not telemetry_wanted | bool
                                     else {'ok': (fb_rest_status | int) == 200 and ((fb_rest_json['items'] | default([{}]))[0].enabled | default(false) | bool),
                                           'skipped': false,

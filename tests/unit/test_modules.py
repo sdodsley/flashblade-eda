@@ -628,6 +628,7 @@ class FakeRest:
         self.calls = []
         self.fail = {}
         self.versions = set()
+        self.api_versions = ["2.19", "2.20", "2.21"]  # what GET /api/api_version lists
         self.logins = 0
         self.logouts = 0
         self.sessions = []
@@ -657,6 +658,8 @@ class FakeRest:
 
     def request(self, method, url, params, body, headers):
         path = url.split("/api/", 1)[1]
+        if path == "api_version":
+            return FakeHTTPResponse(200, {"versions": list(self.api_versions)})
         if path == "login":
             if headers.get("api-token") != API_TOKEN:
                 return self._error("invalid credentials", 401)
@@ -1836,6 +1839,27 @@ def test_telemetry_target_api_version_and_verify_follow_the_options():
     assert SESSION_TOKEN not in json.dumps(
         run(TELEMETRY_TARGET, FakeClient(), rest=rest, **target_args())
     )
+
+
+def test_telemetry_modules_ask_for_the_newest_version_the_array_serves():
+    rest = telemetry_rest(targets=[telemetry_target_row()])
+    rest.api_versions = ["2.21", "2.29", "2.30"]
+    run(TELEMETRY_TARGET, FakeClient(), rest=rest, **target_args())
+    run(
+        TELEMETRY_POLICY,
+        FakeClient(),
+        rest=rest,
+        name="device_perf_metrics",
+        targets=["eda-prom"],
+    )
+    assert rest.versions == {"2.30"}
+    # an array too old for the telemetry endpoints is refused before any login
+    rest = telemetry_rest(targets=[telemetry_target_row()])
+    rest.api_versions = ["2.16", "2.17"]
+    result = run(TELEMETRY_TARGET, FakeClient(), rest=rest, **target_args())
+    assert result["failed"] is True
+    assert "2.21" in result["msg"] and "2.17" in result["msg"]
+    assert rest.logins == 0 and rest.calls == []
 
 
 # ------------------------------------------------------------ telemetry policy

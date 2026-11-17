@@ -3,16 +3,21 @@
 Facts about the array, the SDK, the collection, ansible-rulebook and the
 state model that shape the code, grouped by topic; [README.md](../README.md)
 carries the short form. Array facts are from a FlashBlade//S200 on
-Purity//FB 4.6.4 (REST 2.21) unless stated; a legacy FlashBlade on 4.5.6
-(REST 2.17) is its replication peer ("Replication" below).
+Purity//FB 4.6.4 (REST 2.21), re-checked on 4.8.8 (REST 2.30) where
+stated; a legacy FlashBlade on 4.5.6 (REST 2.17) is its replication peer
+("Replication" below).
 
 ## REST API
 
-- The lab array negotiates REST 2.21 and py-pure-client 1.98.0 covers
-  FB_2_0 to FB_2_30. The plugin must not call a method the negotiated
-  client lacks: `get_telemetry_*` (SDK FB_2_29, although the array serves
-  `/telemetry-targets` on 2.21), `get_software_installations` (absent on
-  2.21), `get_workloads` (2.23).
+- The lab array negotiates REST 2.21 on 4.6.4 and 2.30 on 4.8.8;
+  py-pure-client 1.98.0 covers FB_2_0 to FB_2_30. The plugin must not call
+  a method the negotiated client lacks: `get_telemetry_*` (SDK FB_2_29; a
+  4.6.4 array serves `/telemetry-targets` on 2.21, a 4.8.8 array from 2.29
+  only), `get_software_installations` (absent on 2.21), `get_workloads`
+  (2.23). The eight signals, the maintenance window, the identify LED and
+  the audit lookback run unchanged against 4.8.8 at 2.30, and the older
+  versions the playbooks pin (2.16 maintenance windows, 2.17 QoS, 2.20
+  object audit) still answer there.
 - There is no `/alerts/events` on FlashBlade. The alerts signal fetches
   `get_alerts(filter="state!='closed'")`, falls back to an unfiltered
   `get_alerts(limit=...)` if the filter answers 400 (logged once), and
@@ -165,7 +170,9 @@ Purity//FB 4.6.4 (REST 2.21) unless stated; a legacy FlashBlade on 4.5.6
   `Waiting To Downgrade`) and `Suggested Action` sometimes blank, and
   `<ts> <fm-host> purity.audit: - Adding audit entry. GUID=<guid>, ID=<n>,
   Time=<yyyy-mm-dd hh:mm:ss.ffffff>, User=<user>, Location=<ip>,
-  UI=CLI|GUI|REST, Command=<cmd>, Subcommand=<sub>, Arguments=<args>`.
+  UI=CLI|GUI|REST, Command=<cmd>, Subcommand=<sub>, Arguments=<args>`,
+  from 4.8.8 with `, OriginName=<name>, OriginId=<id>` after the arguments
+  (`null` when unset) and nanoseconds in the time.
   RFC 3164 by default; RFC 5424 is a tunable. The `purity.audit` and
   `purity.alert` layouts are confirmed from live lines (the alert lines from
   a Purity//FB 4.6.4 array under upgrade, PRI 178 = local6.crit); the
@@ -336,10 +343,26 @@ The log objects, read back from `eda-log` after traffic from `eda-app`:
 
 ## Telemetry
 
-Probed on the lab array (Purity//FB 4.6.4, REST 2.21). The
-FB_2_21 client has no telemetry methods, so `purefb_telemetry_target`,
-`purefb_telemetry_policy`, `telemetry_check.yml` and
-`tools/telemetry_rules.py` speak REST.
+Probed on the lab array on Purity//FB 4.6.4 (REST 2.21) and again on
+4.8.8 (REST 2.30). The FB_2_21 client has no telemetry methods, so
+`purefb_telemetry_target`, `purefb_telemetry_policy`, the telemetry
+playbooks and `tools/telemetry_rules.py` speak REST, at the newest version
+the array serves: a 4.8.8 array answers every telemetry endpoint 404
+"Unsupported REST version for this endpoint" below 2.29.
+
+- On 4.8.8 a policy's rules name metrics collections. `GET
+  /telemetry-metrics-policies/rules` items are `{name "<policy>.<index>",
+  policy{name}, index, resolution, collection{name}, policy_version}`, one
+  per built-in policy, with a resolution of 30000 ms for the device,
+  file-system and bucket performance and connector policies and 300000 ms
+  for the rest (60000 and 600000 on 4.6.4). `GET
+  /telemetry-metrics-collections` lists 19 collections, each with
+  `default_resolution` and `supported_resolutions` (30 s to 24 h), `GET
+  /telemetry-metrics-collections/metrics` their members (`{group{name},
+  member{name}}`, 51 metrics, 36 behind the twelve policies) and `GET
+  /telemetry-metrics` the metric names; seven collections (busyness, subject
+  performance, histogram, delta and workload) belong to no policy. The
+  target's `enabled` flag, endpoint and source are as on 2.21.
 
 - Verified against a live Prometheus 3.16 receiver: the array POSTs to the
   endpoint path exactly as given, so a Prometheus 3.x OTLP receiver needs
@@ -382,13 +405,16 @@ FB_2_21 client has no telemetry methods, so `purefb_telemetry_target`,
   `endpoint`, `transport`, `source{name}`, `enabled`, `api_token`,
   `ca_certificate`, `ca_certificate_group`, `client_certificate`,
   `resource_attributes`.
-- `GET /telemetry-targets/test?names=<n>` answers 400 with an empty body,
-  against a port that is not an OTLP receiver and against a receiver that
-  is storing the pushes alike, so no success shape has been seen (the
-  design says the array delivers `dummy_metric_milliseconds`). The
-  module's `test` option returns
-  `{status, ok, body}` and `telemetry_check.yml` treats anything but 200
-  as a failed test.
+- `GET /telemetry-targets/test?names=<n>` on 4.6.4 answers 400 with an
+  empty body, against a port that is not an OTLP receiver and against a
+  receiver that is storing the pushes alike. On 4.8.8 it answers 200 with
+  one item per controller: `{component_name "CH1.FB8", component_address,
+  description "Test network connectivity using netcat (nc)", destination
+  "<host>:<port>", enabled, resource{name, id, resource_type
+  "telemetry-targets"}, result_details "Successfully verified network
+  connectivity to the target ..."}`, a TCP reachability test rather than a
+  metric push. The module's `test` option returns `{status, ok, body}` and
+  `telemetry_check.yml` treats anything but 200 as a failed test.
 - Policies: `GET /telemetry-metrics-policies` lists 12 built-in policies
   (`bucket_client_perf_metrics`, `bucket_perf_metrics`,
   `bucket_space_metrics`, `device_client_perf_metrics`,
@@ -442,8 +468,8 @@ FB_2_21 client has no telemetry methods, so `purefb_telemetry_target`,
 
 ## Replication
 
-The lab pair: `fb-a`, the FlashBlade//S200 on Purity//FB 4.6.4 (REST
-2.21), and `fb-b`, a legacy FlashBlade on 4.5.6 (REST 2.17).
+The lab pair: `fb-a`, the FlashBlade//S200 (Purity//FB 4.6.4, REST 2.21,
+for these facts), and `fb-b`, a legacy FlashBlade on 4.5.6 (REST 2.17).
 
 - The array connection `fb-a` to `fb-b` is made with
   `everpure.flashblade.purefb_connect`. `GET /array-connections` item `{id,

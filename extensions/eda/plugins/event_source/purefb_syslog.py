@@ -96,11 +96,14 @@ purefb_syslog_alert   `<SEVERITY> <State> - <array>: (Alert ID: <uuid>)
                       layout does not match is emitted whole with code None.
 purefb_syslog_audit   `- Adding audit entry. GUID=..., ID=..., Time=...,
                       User=..., Location=..., UI=..., Command=...,
-                      Subcommand=..., Arguments=...` gives guid, audit_id,
-                      time, user, location (the client ip), user_interface
-                      (CLI | GUI | REST), command, subcommand, arguments and
-                      by_automation (user in automation_users). The audit
-                      line names no array: `array` is the mapped hostname.
+                      Subcommand=..., Arguments=...[, OriginName=...,
+                      OriginId=...]` gives guid, audit_id, time, user,
+                      location (the client ip), user_interface (CLI | GUI |
+                      REST), command, subcommand, arguments, origin_name and
+                      origin_id (the last two from Purity//FB 4.8.8, None
+                      when the line says null) and by_automation (user in
+                      automation_users). The audit line names no array:
+                      `array` is the mapped hostname.
 purefb_syslog_test    the purity.test line; `Array Name:` and `UTC Time:`
                       trailers are read when present (array_name, utc_time).
 purefb_syslog_other   any other program (only when `programs` lets it
@@ -343,11 +346,16 @@ AUDIT_KEYS = {
     "Command": "command",
     "Subcommand": "subcommand",
     "Arguments": "arguments",
+    "OriginName": "origin_name",
+    "OriginId": "origin_id",
 }
 # Arguments may hold commas, so the pairs are cut at the known keys only
 AUDIT_KEY = re.compile(
-    r"(?:^|,\s*)(GUID|ID|Time|User|Location|UI|Command|Subcommand|Arguments)="
+    r"(?:^|,\s*)(GUID|ID|Time|User|Location|UI|Command|Subcommand|Arguments"
+    r"|OriginName|OriginId)="
 )
+# the two origin pairs say null when the entry has no origin
+AUDIT_NULL_KEYS = ("origin_name", "origin_id")
 # Unquoted trailers on purity.test lines
 UTC_TRAILER = re.compile(r"\bUTC Time:\s*(.+?)(?=\s+Array Name:|\s*$)", re.S)
 ARRAY_TRAILER = re.compile(r"\bArray [Nn]ame:\s*'?([^'\s]+)'?")
@@ -531,6 +539,9 @@ def _audit_fields(m):
     for i, mark in enumerate(marks):
         end = marks[i + 1].start() if i + 1 < len(marks) else len(pairs)
         fields[AUDIT_KEYS[mark.group(1)]] = pairs[mark.end() : end].strip()
+    for key in AUDIT_NULL_KEYS:
+        if fields.get(key) in ("", "null"):
+            fields[key] = None
     return fields
 
 

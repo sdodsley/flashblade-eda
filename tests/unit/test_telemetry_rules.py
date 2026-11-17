@@ -1,14 +1,16 @@
 # Copyright 2026 Everpure, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Tests for tools/telemetry_rules.py, the generator of the Prometheus rule
-file: the lab's policy listing (tests/fixtures/telemetry_rules.json, the
-twelve policies and 35 metrics of Purity//FB 4.6.4) renders the golden
-file byte for byte and the committed prometheus/flashblade.rules.yml is
-that same output; the output is valid YAML carrying the alert names the
-Alertmanager rulebook routes by and the labels every alert must have; the
-window and the first-metric choice behave; the live reader logs in, pages
-and logs out without ever showing the token. Nothing here reaches an
-array."""
+file: the lab's policy listings (tests/fixtures/telemetry_rules.json, the
+twelve policies and 35 metrics of Purity//FB 4.6.4, one metric per rule;
+tests/fixtures/telemetry_rules_488.json, the same policies on 4.8.8, one
+metrics collection per rule with its own resolution) render the golden
+file and the committed prometheus/flashblade.rules.yml byte for byte; the
+output is valid YAML carrying the alert names the Alertmanager rulebook
+routes by and the labels every alert must have; the window and the
+first-metric choice behave; the live reader logs in, pages, reads the
+collections when the rules name them and logs out without ever showing
+the token. Nothing here reaches an array."""
 
 import importlib.util
 import json
@@ -25,6 +27,7 @@ import yaml
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 TOOL = ROOT / "tools" / "telemetry_rules.py"
 FIXTURE = ROOT / "tests" / "fixtures" / "telemetry_rules.json"
+FIXTURE_488 = ROOT / "tests" / "fixtures" / "telemetry_rules_488.json"
 GOLDEN = ROOT / "tests" / "fixtures" / "flashblade.rules.yml"
 COMMITTED = ROOT / "prometheus" / "flashblade.rules.yml"
 ARRAY = "fb-a"
@@ -42,8 +45,15 @@ POLICIES = [
     "fs_space_metrics",
     "obj_store_account_space_metrics",
 ]
-# the policies the array pushes every minute; the rest every ten
+# the policies a 4.6.4 array pushes every minute; the rest every ten
 ONE_MINUTE = {"device_connector_metrics", "device_perf_metrics", "device_space_metrics"}
+# the policies a 4.8.8 array pushes every 30 seconds; the rest every five minutes
+THIRTY_SECONDS = {
+    "bucket_perf_metrics",
+    "device_connector_metrics",
+    "device_perf_metrics",
+    "fs_perf_metrics",
+}
 ALERTS = {
     "FlashBladeTelemetrySilent",
     "FlashBladeHealthNotOk",
@@ -70,8 +80,19 @@ def items():
 
 
 @pytest.fixture(scope="module")
+def listing_488():
+    return json.loads(FIXTURE_488.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
 def rendered(gen, items):
     return gen.render(gen.policies_from_rules(items), [ARRAY], 10, "device_name")
+
+
+@pytest.fixture(scope="module")
+def rendered_488(gen, listing_488):
+    policies = gen.policies_from_rules(listing_488["items"], listing_488["collections"])
+    return gen.render(policies, [ARRAY], 10, "device_name")
 
 
 def _rules(text):
@@ -94,12 +115,28 @@ def test_golden_file_is_the_rendering(rendered):
     assert rendered == GOLDEN.read_text(encoding="utf-8")
 
 
-def test_committed_rule_file_is_the_rendering(rendered):
+def test_488_fixture_is_the_lab_listing(listing_488):
+    items = listing_488["items"]
+    assert len(items) == 12
+    assert sorted(i["policy"]["name"] for i in items) == POLICIES
+    for item in items:
+        assert item["name"] == f"{item['policy']['name']}.{item['index']}"
+        assert "metric_name" not in item and item["collection"]["name"].startswith("_")
+        expected = 30000 if item["policy"]["name"] in THIRTY_SECONDS else 300000
+        assert item["resolution"] == expected, item["name"]
+    collections = listing_488["collections"]
+    assert len(collections) == 19
+    used = [collections[i["collection"]["name"]] for i in items]
+    assert sum(len(c) for c in used) == 36
+    assert all(m.startswith("storage.device.") for c in used for m in c)
+
+
+def test_committed_rule_file_is_the_rendering(rendered_488):
     """prometheus/flashblade.rules.yml is the generator's output for the
-    fixture listing with --array-name fb-a; regenerate it with
-    `python tools/telemetry_rules.py --from-file tests/fixtures/telemetry_rules.json --array-name fb-a`.
+    4.8.8 fixture listing with --array-name fb-a; regenerate it with
+    `python tools/telemetry_rules.py --from-file tests/fixtures/telemetry_rules_488.json --array-name fb-a`.
     """
-    assert rendered == COMMITTED.read_text(encoding="utf-8")
+    assert rendered_488 == COMMITTED.read_text(encoding="utf-8")
 
 
 def test_output_is_yaml_with_the_expected_alerts(rendered):
@@ -201,6 +238,55 @@ def test_policies_from_rules_orders_by_index_and_keeps_the_first_resolution(gen)
     assert list(policies) == ["a", "p"]
     assert policies["p"] == {"metrics": ["a.first", "a.second"], "resolution_ms": 60000}
     assert policies["a"] == {"metrics": ["z"], "resolution_ms": 30000}
+
+
+def test_policies_from_rules_reads_collections(gen):
+    listing = [
+        {
+            "name": "p.2",
+            "policy": {"name": "p"},
+            "index": 2,
+            "resolution": 300000,
+            "collection": {"name": "_p_slow"},
+        },
+        {
+            "name": "p.1",
+            "policy": {"name": "p"},
+            "index": 1,
+            "resolution": 30000,
+            "collection": {"name": "_p_fast"},
+        },
+        {
+            "name": "q.1",
+            "policy": {"name": "q"},
+            "index": 1,
+            "resolution": 30000,
+            "collection": {"name": "_unknown"},
+        },
+        {"name": "r.1", "policy": {"name": "r"}, "index": 1, "resolution": 60000},
+    ]
+    collections = {"_p_fast": ["b.first", "a.first"], "_p_slow": ["z.slow"]}
+    policies = gen.policies_from_rules(listing, collections)
+    # q names a collection the map lacks and r names nothing: both dropped
+    assert list(policies) == ["p"]
+    assert policies["p"] == {
+        "metrics": ["b.first", "a.first", "z.slow"],
+        "resolution_ms": 30000,
+    }
+    assert gen.policies_from_rules(listing) == {}
+
+
+def test_from_file_with_collections_renders_the_committed_file(
+    gen, capsys, rendered_488
+):
+    argv = ["--from-file", str(FIXTURE_488), "--array-name", ARRAY, "--out", "-"]
+    assert gen.main(argv) == 0
+    assert capsys.readouterr().out == rendered_488
+    assert (
+        gen.main(["--from-file", str(FIXTURE_488), "--array-name", ARRAY, "--check"])
+        == 0
+    )
+    assert "12 policies, 36 metrics, 1 array" in capsys.readouterr().out
 
 
 def test_prometheus_name_and_window(gen):
@@ -473,3 +559,50 @@ def test_nothing_imported_beyond_the_standard_library():
         if line.startswith(("import ", "from ")):
             module = line.split()[1].split(".")[0]
             assert module in stdlib, line
+
+
+class FakeArray488(FakeArray):
+    """A 4.8.8 array: REST up to 2.30, rules naming collections, the
+    collection membership listing, no telemetry endpoint below 2.29."""
+
+    def __init__(self, listing):
+        super().__init__(listing["items"], versions=("2.21", "2.29", "2.30"))
+        self.collections = listing["collections"]
+
+    def __call__(self, request, timeout=None, context=None):
+        path = request.full_url.split("/api", 1)[1]
+        if request.get_header("X-auth-token") == "session-1" and path.startswith(
+            "/2.30/"
+        ):
+            self.requests.append(request)
+            if path.startswith("/2.30/telemetry-metrics-policies/rules?"):
+                page = {"items": self.items, "continuation_token": None}
+            elif path.startswith("/2.30/telemetry-metrics-collections/metrics?"):
+                rows = [
+                    {"group": {"name": group}, "member": {"name": metric}}
+                    for group, metrics in self.collections.items()
+                    for metric in reversed(metrics)
+                ]
+                page = {"items": rows, "continuation_token": None}
+            elif path.startswith("/2.30/arrays?"):
+                page = {"items": [{"name": ARRAY}]}
+            else:
+                return FakeResponse(404, b'{"errors": [{"message": "not found"}]}')
+            return FakeResponse(body=json.dumps(page).encode())
+        return super().__call__(request, timeout, context)
+
+
+def test_live_listing_with_collections_renders_the_committed_file(
+    gen, listing_488, rendered_488, monkeypatch, capsys
+):
+    fake = FakeArray488(listing_488)
+    monkeypatch.setattr(gen.urllib.request, "urlopen", fake)
+    monkeypatch.setenv("FB_T_TOKEN", TOKEN)
+    assert gen.main(["fb-t.example.com", "FB_T_TOKEN", "--out", "-"]) == 0
+    out = capsys.readouterr()
+    assert out.out == rendered_488 and TOKEN not in out.out
+    paths = [r.full_url.split("/api", 1)[1] for r in fake.requests]
+    # the newest version is negotiated; the collections are read once
+    assert sum("/2.30/telemetry-metrics-policies/rules" in p for p in paths) == 1
+    assert sum("/2.30/telemetry-metrics-collections/metrics" in p for p in paths) == 1
+    assert paths[-1] == "/logout" and fake.logged_out

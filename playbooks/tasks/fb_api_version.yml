@@ -1,0 +1,31 @@
+---
+# Copyright 2026 Everpure, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The REST version the telemetry endpoints are asked for: telemetry_api_version
+# when the caller set it, else the newest version the array serves at or above
+# 2.21 (telemetry arrived there; a Purity//FB 4.8 array answers the telemetry
+# endpoints from 2.29 up only). GET /api/api_version needs no token. Leaves
+# telemetry_rest_version set, "" when the array serves nothing new enough.
+- name: Ask the management address for its API versions
+  when: telemetry_api_version | default('', true) | length == 0
+  ansible.builtin.uri:
+    url: >-
+      {{ fb_url | string | regex_replace('/+$', '') | regex_replace('^(?!https?://)', 'https://') }}/api/api_version
+    method: GET
+    return_content: true
+    validate_certs: "{{ fb_validate_certs | default(false) | bool }}"
+    timeout: 20
+  register: fb_api_versions
+  failed_when: false
+
+- name: Settle the REST version the telemetry endpoints are asked for
+  ansible.builtin.set_fact:
+    telemetry_rest_version: >-
+      {%- if telemetry_api_version | default('', true) | length > 0 -%}
+      {{ telemetry_api_version }}
+      {%- else -%}
+      {%- set minors = fb_api_versions.json.versions | default([]) | select('match', '^2[.][0-9]+$')
+                       | map('regex_replace', '^2[.]', '') | map('int') | select('ge', 21) | list -%}
+      {{ ('2.' ~ (minors | max)) if minors else '' }}
+      {%- endif -%}

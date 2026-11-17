@@ -151,10 +151,13 @@ workers use, not the host user's ([aap/README.md](../aap/README.md),
 ## Version floors
 
 The plugin negotiates the REST version the array serves (2.21 on
-Purity//FB 4.6.4) and must not call methods the negotiated client lacks:
-`get_telemetry_*` exist in the SDK from FB_2_29 although the array serves
-`/telemetry-targets` on 2.21, and `get_software_installations` and
-`get_workloads` arrive later still. Where a playbook needs an endpoint the
+Purity//FB 4.6.4, 2.30 on 4.8.8) and must not call methods the negotiated
+client lacks: `get_telemetry_*` exist in the SDK from FB_2_29, while a
+4.6.4 array serves `/telemetry-targets` on 2.21 and a 4.8.8 array from
+2.29 only, so the REST callers (the two telemetry modules, the telemetry
+playbooks and `tools/telemetry_rules.py`) ask for the newest version the
+array serves; `get_software_installations` and `get_workloads` arrive
+later still. Where a playbook needs an endpoint the
 collection has no module for, `playbooks/tasks/fb_rest.yml` calls it with
 `ansible.builtin.uri` against `/api/<fb_api_version>/`, default 2.16, the
 floor for maintenance windows. Raising `fb_api_version` is a site choice,

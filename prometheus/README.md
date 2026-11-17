@@ -13,11 +13,15 @@ playbooks as the polling rulebooks. Nothing is scraped and no exporter runs.
 
 ## How the array pushes
 
-Purity//FB 4.6.4 (REST 2.21) has twelve built-in telemetry metric policies
-(`GET /telemetry-metrics-policies`, 35 metrics between them: array
-performance, space and connectors every minute, state, client, file
-system, bucket, account and replication every ten) and pushes them to any
-telemetry target attached to the policies. The FB_2_21 SDK has no
+A FlashBlade has twelve built-in telemetry metric policies
+(`GET /telemetry-metrics-policies`) and pushes them to any telemetry target
+attached to the policies. On Purity//FB 4.6.4 (REST 2.21) a policy's rules
+name one metric each, 35 between them: array performance, space and
+connectors every minute, state, client, file system, bucket, account and
+replication every ten. On 4.8.8 (REST 2.29 and later) a rule names a
+metrics collection and carries its own resolution, 36 metrics between them:
+array, file-system and bucket performance and connectors every 30 seconds,
+the rest every five minutes. The FB_2_21 SDK has no
 telemetry methods, so the two modules use REST:
 
 ```
@@ -121,15 +125,17 @@ the value that label carries, once per array the receiver sees (live, it
 defaults to the array's own name). `tests/unit/test_telemetry_rules.py`
 regenerates the file from the fixture listing and compares it with the
 committed one, so a regenerate is also a test run. Regenerate when the
-array's policy listing changes; 4.8.6 makes the resolution per rule and the
-window follows the watched metric's own resolution.
+array's policy listing changes; from 4.8.6 the resolution is per rule and
+the window follows the first rule's resolution.
 
 ## What the silence rule means
 
 With push there is no `up == 0`. `FlashBladeTelemetrySilent` fires, once
 per policy and array, when the policy's first metric has been absent for
-twice the policy's resolution or the floor, whichever is longer: ten
-minutes for the one-minute policies, twenty for the ten-minute ones.
+twice the policy's resolution or the floor, whichever is longer: on 4.6.4
+ten minutes for the one-minute policies and twenty for the ten-minute ones;
+on 4.8.8, where no policy is slower than five minutes, the ten minute floor
+for every policy.
 Silence has four causes the alert cannot tell apart (a dead array, a dead
 path, a disabled or detached target, a receiver fault), so the rulebook
 runs `playbooks/telemetry_check.yml`, which asks the management VIP whether

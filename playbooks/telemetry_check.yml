@@ -10,9 +10,11 @@
 #       -e target_array=fb-a -e alert=manual -e telemetry_target_name=eda-prom \
 #       -e prometheus_url=http://prom.example.com:9090 -e alert_log=$PWD/alerts.log
 # Four reads, none of which changes anything: the telemetry target (GET
-# /telemetry-targets, REST 2.21), the array's own delivery test (GET
-# /telemetry-targets/test: the array pushes dummy_metric_milliseconds to
-# the receiver and reports whether it arrived), the unauthenticated
+# /telemetry-targets at the newest REST version the array serves, 2.21 at
+# least: tasks/fb_api_version.yml), the array's own delivery test (GET
+# /telemetry-targets/test: on Purity//FB 4.8.8 a TCP reachability test from
+# each controller to the endpoint, answered 200 with one result per
+# controller; 4.6.4 answers 400 whatever the state), the unauthenticated
 # /api/api_version of the management address (the array is alive) and,
 # when prometheus_url is set, the receiver's query API (the receiver is
 # alive). The verdict is the first that holds:
@@ -27,13 +29,16 @@
 # The alert fired, so one telemetry_check record is written whatever the
 # verdict. Telemetry targets arrived with REST 2.21, so those two reads ask
 # for that version whatever fb_api_version says.
-# verify: the shape of a successful /telemetry-targets/test answer (the lab
-# had no receiver; a port that is not one answered 400 with an empty body).
+# The test answers 200 on 4.8.8 with {items: [{component_name, destination,
+# description, result_details, enabled, resource}]} and 400 with an empty
+# body on 4.6.4, receiver or not.
 - name: Check the telemetry pipeline after a silence alert
   hosts: "{{ target_array }}"
   gather_facts: false
   vars:
-    telemetry_api_version: "2.21"
+    # a REST version to pin; empty means the newest the array serves, 2.21 at
+    # least (tasks/fb_api_version.yml)
+    telemetry_api_version: ""
   tasks:
     - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
       ansible.builtin.include_tasks:
@@ -60,13 +65,17 @@
           telemetry_target_name {{ telemetry_target_name | string | truncate(80) }} must be a plain name and
           prometheus_url {{ prometheus_url | default('') | string | truncate(80) }} an http(s) URL or empty
 
+    - name: Settle the REST version the telemetry endpoints are asked for
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_api_version.yml"
+
     - name: Read the telemetry target
       ansible.builtin.include_tasks:
         file: "{{ playbook_dir }}/tasks/fb_rest.yml"
       vars:
         fb_rest_method: GET
         fb_rest_path: "telemetry-targets?names={{ telemetry_target_name }}"
-        fb_rest_api_version: "{{ telemetry_api_version }}"
+        fb_rest_api_version: "{{ telemetry_rest_version }}"
         fb_rest_ignore_errors: true
 
     - name: Keep what the array said about the target
@@ -81,7 +90,7 @@
       vars:
         fb_rest_method: GET
         fb_rest_path: "telemetry-targets/test?names={{ telemetry_target_name }}"
-        fb_rest_api_version: "{{ telemetry_api_version }}"
+        fb_rest_api_version: "{{ telemetry_rest_version }}"
         fb_rest_ignore_errors: true
 
     - name: Keep the test outcome

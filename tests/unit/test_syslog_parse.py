@@ -748,3 +748,30 @@ def test_alert_state_of_several_words_is_parsed(syslog):
     )
     p = syslog.parse(plain, {}, set())
     assert p["subject"] == "Blade CH1.FB8 requires attention" and p["alert_id"] is None
+
+
+# A Purity//FB 4.8.8 audit line: two origin pairs after the arguments, null
+# when the entry has no origin, and nanoseconds in the time.
+AUDIT_488 = (
+    "<174>Nov 16 20:32:30 fb-a-fm1 purity.audit: - Adding audit entry. "
+    "GUID=5a0c1f4e-2f9a-4c1e-9c3a-2b0f4d6e8a10, ID=6860, "
+    "Time=2026-11-16 20:32:30.191646655, User=ir, Location=127.0.0.1, UI=CLI, "
+    "Command=puremaintenance, Subcommand=schedule, Arguments=--timeout '4h' array, "
+    "OriginName=null, OriginId=null"
+)
+
+
+def test_audit_origin_pairs_are_fields_not_arguments(syslog):
+    e = syslog.parse(AUDIT_488, {}, set())
+    assert e["kind"] == "audit" and e["user"] == "ir" and e["audit_id"] == "6860"
+    assert e["arguments"] == "--timeout '4h' array"
+    assert e["origin_name"] is None and e["origin_id"] is None
+    assert e["time"] == "2026-11-16 20:32:30.191646655"
+    named = AUDIT_488.replace(
+        "OriginName=null, OriginId=null", "OriginName=fleet-a, OriginId=7"
+    )
+    n = syslog.parse(named, {}, set())
+    assert n["origin_name"] == "fleet-a" and n["origin_id"] == "7"
+    assert n["arguments"] == "--timeout '4h' array"
+    # a line without the pairs still carries the keys
+    assert syslog.parse(AUDIT, {}, set())["origin_name"] is None

@@ -4,11 +4,12 @@ Why a FlashBlade is an event source, what it emits, how events reach
 ansible-rulebook, the ideas each rulebook implements, and what waits for a
 later part or a newer Purity//FB.
 
-Versions this design assumes: py-pure-client 1.98.0 (FB_2_0 to FB_2_30; the
-lab array serves REST 2.21), Purity//FB 4.6.4 on a FlashBlade//S200,
+Versions this design assumes: py-pure-client 1.98.0 (FB_2_0 to FB_2_30),
+Purity//FB 4.6.4 (REST 2.21) and 4.8.8 (REST 2.30) on a FlashBlade//S200,
 everpure.flashblade 1.29.0, ansible-rulebook 1.3.x and ansible.eda 2.13.
-Anything said about 4.8.x or 4.10 comes from release documentation and is
-unverified on hardware.
+Of 4.8.x the telemetry model and the syslog layouts are verified on
+hardware and the NFS audit is not; anything said about 4.10 comes from
+release documentation.
 
 ## 1. Thesis
 
@@ -41,7 +42,7 @@ closed.
 
 ## 2. What the lab shows
 
-A FlashBlade//S200 on Purity//FB 4.6.4 (REST 2.21).
+A FlashBlade//S200 on Purity//FB 4.6.4 (REST 2.21) and 4.8.8 (REST 2.30).
 "Now" is demonstrable on that array; "later" needs a newer Purity//FB or a
 lab change; "blocked" is not possible there.
 
@@ -55,14 +56,14 @@ lab change; "blocked" is not possible there.
 | Space and performance history | now | 7 daily points with `resolution=86400000` by type; 6 half-hour performance points; per-protocol NFS metadata rates |
 | Per-client performance | now | `/arrays/clients/performance` answers (empty while idle; a load from the client VM fills it) |
 | Object audit to a log bucket | now | policy, log-target and filter endpoints answer; 43 S3 actions available for filters; with the lab account, buckets, policy, log target and filters in place the records read back as NDJSON log objects, one per authority per rotation window, written seconds after the window closes ([HARDWARE_NOTES.md](HARDWARE_NOTES.md), "Object audit") |
-| OTLP telemetry push | now | REST 2.21 serves `/telemetry-targets` and 12 built-in metric policies with 35 rules; the SDK names these methods from FB_2_29, so the two telemetry modules (`purefb_telemetry_target`, `purefb_telemetry_policy`) speak REST; the array opens a TCP connection to the endpoint when the target is created and refuses one nothing listens on |
+| OTLP telemetry push | now | `/telemetry-targets` and 12 built-in metric policies: on REST 2.21 (4.6.4) one metric per rule, 35 in all; from REST 2.29 (4.8.8) a metrics collection and a resolution per rule, 36 in all, and nothing below 2.29 answers; the SDK names these methods from FB_2_29, so the two telemetry modules (`purefb_telemetry_target`, `purefb_telemetry_policy`) speak REST at the newest version the array serves; the array opens a TCP connection to the endpoint when the target is created and refuses one nothing listens on |
 | Management syslog push | now | a syslog server created with `purefb_syslog` delivers `purity.audit` lines to the listener within seconds |
 | Legal holds, QoS policies, Object Lock, public-access config | now | endpoints and models present on 2.21 |
 | SMB file-access audit | blocked | needs an AD-joined SMB file system with SACLs; the lab has no Active Directory join |
-| NFS file-access audit | later | Purity//FB 4.8.0 (control type `policy`); 4.6.4 cannot audit NFS and blocks NFS mounts on an SMB-audited file system |
+| NFS file-access audit | later | Purity//FB 4.8.0 (control type `policy`), which the lab array serves and nothing here uses yet; 4.6.4 cannot audit NFS and blocks NFS mounts on an SMB-audited file system |
 | File log targets (audit written into a file system) | blocked | 400 "Operation not permitted": directed availability on 4.6.x |
 | Kafka object notifications | later | Purity//FB 4.10.a (REST 2.32), above the installed SDK ceiling of 2.30 |
-| Per-rule telemetry resolution | later | 4.8.6 |
+| Per-rule telemetry resolution | later | 4.8.6; the lab array carries a resolution per policy rule (30 s or 5 min) and no rulebook raises it yet |
 
 The production file system on the lab array is a Manila share on legacy
 NFS rules with no export policy, and the NFS client VM also hosts the
@@ -78,7 +79,7 @@ uses a throwaway file system; nothing isolates the VM.
 | Data-audit syslog | SMB 4.4/4.5 (SACL, AD); NFS 4.8.0 | seconds | a syslog server with services `[data-audit]`; an audit policy per file system (no module yet); rsyslog tap with 128 KB messages | `purefb_syslog` JSON branch |
 | Object-audit log bucket | 4.6.3 (REST 2.20) | one rotation (5 min on the lab) plus seconds | an account, a log bucket with Object Lock and quota headroom, a policy, a log target, prefix filters (the three modules under `plugins/modules/`), a read-only key | `purefb_object_audit` (boto3) |
 | Kafka notifications | 4.10.a (REST 2.32) | under 5 s normally | a Kafka log target and routing info | `ansible.eda.kafka` (needs aiokafka) |
-| OTLP to Prometheus to Alertmanager | 4.6.4; per-rule resolution 4.8.6 | 60 s for the device performance, space and connector policies, 10 min for the rest, plus rule evaluation | a telemetry target attached to the metric policies (`purefb_telemetry_target`, `purefb_telemetry_policy`, `telemetry_setup.yml`), Prometheus 3.x with the OTLP receiver and the resource attributes promoted, Alertmanager routed to the EDA listener (`prometheus/`) | `ansible.eda.alertmanager` (`alertmanager.yml`) |
+| OTLP to Prometheus to Alertmanager | 4.6.4; per-rule resolution 4.8.6 | on 4.6.4 60 s for the device performance, space and connector policies and 10 min for the rest; on 4.8.8 30 s for the device, file-system and bucket performance and connector policies and 5 min for the rest; plus rule evaluation | a telemetry target attached to the metric policies (`purefb_telemetry_target`, `purefb_telemetry_policy`, `telemetry_setup.yml`), Prometheus 3.x with the OTLP receiver and the resource attributes promoted, Alertmanager routed to the EDA listener (`prometheus/`) | `ansible.eda.alertmanager` (`alertmanager.yml`) |
 | SNMP | any | seconds | `purefb_snmp_mgr` | none in ansible.eda; adds nothing over syslog, not built |
 
 The diagram at the top of [README.md](../README.md) shows the paths;

@@ -15,9 +15,10 @@ playbook.
 
 Status: a prototype, not a supported product, at version 0.1. Everything
 in the tree is built, unit-tested and verified on a FlashBlade//S200
-running Purity//FB 4.6.4 (REST 2.21), its Purity//FB 4.5.6 replication
-peer and a containerized Ansible Automation Platform 2.7 with the
-automation orchestrator beside it; the lab exit tests, their results and
+running Purity//FB 4.6.4 and 4.8.8 (REST 2.21 and 2.30), its Purity//FB
+4.5.6 replication peer and a containerized Ansible Automation Platform
+2.7 with the automation orchestrator beside it; the lab exit tests, their
+results and
 what the lab cannot show are in
 [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
@@ -64,7 +65,8 @@ ansible-rulebook 1.3.x and ansible-core 2.17 (the tested versions;
 boto3 >= 1.26 for the object-audit source and the S3 task file; Prometheus
 3.x with its OTLP receiver and Alertmanager only for the telemetry path
 ([prometheus/README.md](prometheus/README.md)).
-Written against Purity//FB 4.6.4 (REST 2.21); the maintenance-window gate
+Written against Purity//FB 4.6.4 and 4.8.8 (REST 2.21 and 2.30); the
+maintenance-window gate
 needs 4.5.2 (REST 2.16) and reads false on anything older; object audit
 needs 4.6.3 (REST 2.20); telemetry targets and metric policies are served
 on 2.21 and the modules reach them over REST because the SDK names them
@@ -244,8 +246,8 @@ fact events; policy lives in the rulebooks. `arrays` is a list, or a JSON
 string that decodes to one so a platform credential can inject it as a
 single variable. One instance can run several signals, each on its own
 interval; every REST call is bounded by `request_timeout` (default 30 s).
-The client is built for the REST version the array serves (2.21 on 4.6.4)
-and the code calls nothing that version lacks:
+The client is built for the REST version the array serves (2.21 on 4.6.4,
+2.30 on 4.8.8) and the code calls nothing that version lacks:
 
 | Signal | Endpoints | Events |
 | --- | --- | --- |
@@ -698,14 +700,15 @@ file system and a load generator and are listed, with their state, in
 
 ## Roadmap
 
-What is built runs on Purity//FB 4.6.4; what follows needs a newer
-release or further work. The reasoning is in
+What is built runs on Purity//FB 4.6.4 and 4.8.8; what follows needs a
+newer release or further work. The reasoning is in
 [docs/DESIGN.md](docs/DESIGN.md).
 
-- **Purity//FB 4.8.0:** NFS file-access audit, which makes honeyfiles, an
-  inbox folder and per-user access storms observable over the data-audit
-  syslog. **4.8.6:** per-rule telemetry resolution, so collections can be
-  raised during an incident. **4.10:** object notifications to Kafka;
+- **Purity//FB 4.8.0,** served by the lab array and not built yet: NFS
+  file-access audit, which makes honeyfiles, an inbox folder and per-user
+  access storms observable over the data-audit syslog. **4.8.6:** per-rule
+  telemetry resolution, which the array exposes and no rulebook raises yet.
+  **4.10:** object notifications to Kafka;
   `ansible.eda.kafka` takes the bucket tail's place behind the same event
   filter, and the canary latency drops from one log rotation to seconds.
 - Reclaim candidates beyond pending eradication: snapshot sprawl and

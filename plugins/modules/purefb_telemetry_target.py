@@ -14,8 +14,10 @@ description:
     telemetry metrics policies that decide which metrics it receives.
   - The array opens a connection to the endpoint when a target is created
     and refuses an endpoint nothing listens on.
-  - Works over REST (2.21, Purity//FB 4.6.4 or later), because the SDK
-    client negotiated for that release has no telemetry methods. Needs the
+  - Works over REST, at the newest version the array serves (2.21 on
+    Purity//FB 4.6.4; a 4.8 array answers the telemetry endpoints from 2.29
+    up only), because the SDK client negotiated for 4.6.4 has no telemetry
+    methods. Needs the
     C(requests) library.
 author:
   - Simon Dodsley (@sdodsley)
@@ -66,10 +68,11 @@ options:
     default: false
   api_version:
     description:
-      - REST version the requests ask for. Telemetry targets arrived with
-        2.21.
+      - REST version the requests ask for. By default the newest version
+        the array serves and 2.21 at least, since telemetry arrived with
+        2.21 and a Purity//FB 4.8 array answers the telemetry endpoints
+        from 2.29 up only.
     type: str
-    default: "2.21"
   state:
     description:
       - Create or update the target, or delete it.
@@ -207,6 +210,10 @@ def rest_error(status, data):
     return message or "status {0}".format(status)
 
 
+# the first REST version with the telemetry endpoints
+TELEMETRY_VERSION = (2, 21)
+
+
 class Rest:
     """The array over REST for what the negotiated SDK client lacks: one
     login with the api-token header, x-auth-token on every request under
@@ -230,7 +237,41 @@ class Rest:
             warnings.filterwarnings("ignore", message="Unverified HTTPS request")
         self.logged_in = False
 
+    def negotiate(self):
+        """Settle the REST version when none was given: the newest the array
+        serves, TELEMETRY_VERSION at least (GET /api/api_version needs no
+        token)."""
+        if self.version:
+            return
+        versions = []
+        try:
+            res = self.session.request(
+                "GET", self.base + "/api/api_version", timeout=self.TIMEOUT
+            )
+            data = res.json()
+            if isinstance(data, dict):
+                versions = data.get("versions") or []
+        except (requests.exceptions.RequestException, ValueError, AttributeError):
+            versions = []
+        parsed = []
+        for text in versions:
+            parts = str(text).split(".")
+            if len(parts) == 2 and all(p.isdigit() for p in parts):
+                parsed.append((int(parts[0]), int(parts[1])))
+        parsed.sort()
+        if not parsed or parsed[-1] < TELEMETRY_VERSION:
+            self.module.fail_json(
+                msg="{0} serves REST {1}; the telemetry endpoints need {2}.{3} or newer".format(
+                    self.base,
+                    versions[-1] if versions else "nothing",
+                    TELEMETRY_VERSION[0],
+                    TELEMETRY_VERSION[1],
+                )
+            )
+        self.version = "{0}.{1}".format(parsed[-1][0], parsed[-1][1])
+
     def login(self):
+        self.negotiate()
         try:
             res = self.session.request(
                 "POST",
@@ -490,7 +531,7 @@ def main():
             enabled=dict(type="bool", default=True),
             policies=dict(type="list", elements="str"),
             test=dict(type="bool", default=False),
-            api_version=dict(type="str", default="2.21"),
+            api_version=dict(type="str"),
             state=dict(type="str", default="present", choices=["present", "absent"]),
         )
     )

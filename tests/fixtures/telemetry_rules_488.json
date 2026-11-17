@@ -1,0 +1,227 @@
+{
+  "items": [
+    {
+      "name": "bucket_client_perf_metrics.1",
+      "policy": {
+        "name": "bucket_client_perf_metrics"
+      },
+      "index": 1,
+      "resolution": 300000,
+      "collection": {
+        "name": "_bucket_client_perf_metrics"
+      }
+    },
+    {
+      "name": "bucket_perf_metrics.1",
+      "policy": {
+        "name": "bucket_perf_metrics"
+      },
+      "index": 1,
+      "resolution": 30000,
+      "collection": {
+        "name": "_bucket_perf_metrics"
+      }
+    },
+    {
+      "name": "bucket_space_metrics.1",
+      "policy": {
+        "name": "bucket_space_metrics"
+      },
+      "index": 1,
+      "resolution": 300000,
+      "collection": {
+        "name": "_bucket_space_metrics"
+      }
+    },
+    {
+      "name": "device_client_perf_metrics.1",
+      "policy": {
+        "name": "device_client_perf_metrics"
+      },
+      "index": 1,
+      "resolution": 300000,
+      "collection": {
+        "name": "_device_client_perf_metrics"
+      }
+    },
+    {
+      "name": "device_connector_metrics.1",
+      "policy": {
+        "name": "device_connector_metrics"
+      },
+      "index": 1,
+      "resolution": 30000,
+      "collection": {
+        "name": "_device_connector_metrics"
+      }
+    },
+    {
+      "name": "device_perf_metrics.1",
+      "policy": {
+        "name": "device_perf_metrics"
+      },
+      "index": 1,
+      "resolution": 30000,
+      "collection": {
+        "name": "_device_perf_metrics"
+      }
+    },
+    {
+      "name": "device_replication_perf_metrics.1",
+      "policy": {
+        "name": "device_replication_perf_metrics"
+      },
+      "index": 1,
+      "resolution": 300000,
+      "collection": {
+        "name": "_device_replication_perf_metrics"
+      }
+    },
+    {
+      "name": "device_space_metrics.1",
+      "policy": {
+        "name": "device_space_metrics"
+      },
+      "index": 1,
+      "resolution": 300000,
+      "collection": {
+        "name": "_device_space_metrics"
+      }
+    },
+    {
+      "name": "device_state_metrics.1",
+      "policy": {
+        "name": "device_state_metrics"
+      },
+      "index": 1,
+      "resolution": 300000,
+      "collection": {
+        "name": "_device_state_metrics"
+      }
+    },
+    {
+      "name": "fs_perf_metrics.1",
+      "policy": {
+        "name": "fs_perf_metrics"
+      },
+      "index": 1,
+      "resolution": 30000,
+      "collection": {
+        "name": "_fs_perf_metrics"
+      }
+    },
+    {
+      "name": "fs_space_metrics.1",
+      "policy": {
+        "name": "fs_space_metrics"
+      },
+      "index": 1,
+      "resolution": 300000,
+      "collection": {
+        "name": "_fs_space_metrics"
+      }
+    },
+    {
+      "name": "obj_store_account_space_metrics.1",
+      "policy": {
+        "name": "obj_store_account_space_metrics"
+      },
+      "index": 1,
+      "resolution": 300000,
+      "collection": {
+        "name": "_obj_store_account_space_metrics"
+      }
+    }
+  ],
+  "collections": {
+    "_bucket_client_perf_histogram_metrics": [
+      "storage.device.bucket.client.latency_histogram"
+    ],
+    "_bucket_client_perf_metrics": [
+      "storage.device.bucket.client.latency_us",
+      "storage.device.bucket.client.op_count"
+    ],
+    "_bucket_perf_metrics": [
+      "storage.device.bucket.bw_bpo",
+      "storage.device.bucket.bw_bps",
+      "storage.device.bucket.iops",
+      "storage.device.bucket.latency_us"
+    ],
+    "_bucket_space_delta_metrics": [
+      "storage.device.bucket.delta_obj_count",
+      "storage.device.bucket.delta_space_bytes"
+    ],
+    "_bucket_space_metrics": [
+      "storage.device.bucket.obj_count",
+      "storage.device.bucket.space_bytes",
+      "storage.device.bucket.space_reduction"
+    ],
+    "_device_busyness_metrics": [
+      "storage.device.busyness_pct"
+    ],
+    "_device_client_perf_metrics": [
+      "storage.device.client.bw_bpo",
+      "storage.device.client.bw_bps",
+      "storage.device.client.iops",
+      "storage.device.client.latency_us"
+    ],
+    "_device_connector_metrics": [
+      "storage.device.connector.bw_bps",
+      "storage.device.connector.bw_pps",
+      "storage.device.connector.err_ps"
+    ],
+    "_device_perf_metrics": [
+      "storage.device.bw_bpo",
+      "storage.device.bw_bps",
+      "storage.device.iops",
+      "storage.device.latency_us"
+    ],
+    "_device_replication_perf_metrics": [
+      "storage.device.repl.bw_bps"
+    ],
+    "_device_space_metrics": [
+      "storage.device.space_bytes",
+      "storage.device.space_parity",
+      "storage.device.space_reduction"
+    ],
+    "_device_state_metrics": [
+      "storage.device.alerts",
+      "storage.device.health",
+      "storage.device.info"
+    ],
+    "_fs_perf_metrics": [
+      "storage.device.fs.bw_bpo",
+      "storage.device.fs.bw_bps",
+      "storage.device.fs.iops",
+      "storage.device.fs.latency_us"
+    ],
+    "_fs_space_metrics": [
+      "storage.device.fs.space_bytes",
+      "storage.device.fs.space_reduction"
+    ],
+    "_fs_subject_perf_metrics": [
+      "storage.device.fs.subject.bw_bps",
+      "storage.device.fs.subject.iops",
+      "storage.device.fs.subject.latency_us"
+    ],
+    "_obj_store_account_space_delta_metrics": [
+      "storage.device.obj_store_account.delta_obj_count",
+      "storage.device.obj_store_account.delta_space_bytes"
+    ],
+    "_obj_store_account_space_metrics": [
+      "storage.device.obj_store_account.obj_count",
+      "storage.device.obj_store_account.space_bytes",
+      "storage.device.obj_store_account.space_reduction"
+    ],
+    "_workload_perf_metrics": [
+      "storage.device.workload.bw_bpo",
+      "storage.device.workload.bw_bps",
+      "storage.device.workload.iops",
+      "storage.device.workload.latency_us"
+    ],
+    "_workload_space_metrics": [
+      "storage.device.workload.space_bytes",
+      "storage.device.workload.space_reduction"
+    ]
+  }
+}

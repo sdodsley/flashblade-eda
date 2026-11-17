@@ -18,17 +18,21 @@
 # read first (GET /telemetry-metrics-policies) and the new target is added
 # to it, never replacing a target somebody else attached. Last, GET
 # /telemetry-targets/test asks the array to push its dummy metric and say
-# whether it arrived. Telemetry arrived with REST 2.21 (Purity//FB 4.6.4),
-# so the reads ask for that version whatever fb_api_version says. Every
+# whether it arrived. Telemetry arrived with REST 2.21 (Purity//FB 4.6.4)
+# and a 4.8 array answers its endpoints from 2.29 up only, so the reads and
+# the modules ask for the newest version the array serves, whatever
+# fb_api_version says (tasks/fb_api_version.yml). Every
 # step is idempotent; a refusal is recorded, not fatal, so the record says
 # how far the setup got.
-# verify: the success shape of /telemetry-targets/test once a receiver
-# exists (the lab had none; a port that is not one answered 400).
+# The test answers 200 on Purity//FB 4.8.8 (a reachability result per
+# controller) and 400 with an empty body on 4.6.4, receiver or not.
 - name: Set up the telemetry target and its policies
   hosts: "{{ target_array }}"
   gather_facts: false
   vars:
-    telemetry_api_version: "2.21"
+    # a REST version to pin; empty means the newest the array serves, 2.21 at
+    # least (tasks/fb_api_version.yml)
+    telemetry_api_version: ""
   tasks:
     - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
       ansible.builtin.include_tasks:
@@ -61,6 +65,10 @@
           telemetry_source a network interface name, telemetry_transport otlp-http-protobuf or
           otlp-http-protobuf-without-tls, and telemetry_policies a non-empty list of policy names
 
+    - name: Settle the REST version the telemetry endpoints are asked for
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/fb_api_version.yml"
+
     - name: Make sure the telemetry target exists and is enabled
       sdodsley.flashblade_eda.purefb_telemetry_target:
         fb_url: "{{ fb_url }}"
@@ -81,7 +89,7 @@
       vars:
         fb_rest_method: GET
         fb_rest_path: "telemetry-metrics-policies"
-        fb_rest_api_version: "{{ telemetry_api_version }}"
+        fb_rest_api_version: "{{ telemetry_rest_version }}"
         fb_rest_ignore_errors: true
 
     - name: Lay the policies out as name -> target names
@@ -116,7 +124,7 @@
       vars:
         fb_rest_method: GET
         fb_rest_path: "telemetry-targets/test?names={{ telemetry_target_name }}"
-        fb_rest_api_version: "{{ telemetry_api_version }}"
+        fb_rest_api_version: "{{ telemetry_rest_version }}"
         fb_rest_ignore_errors: true
 
     - name: Note what was attached, what failed and what the test said

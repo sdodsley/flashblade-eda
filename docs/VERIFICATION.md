@@ -8,7 +8,8 @@ supported product.
 
 ## Environment
 
-- `fb-a`: a FlashBlade//S200 on Purity//FB 4.6.4 (REST 2.21): 10 blades,
+- `fb-a`: a FlashBlade//S200 on Purity//FB 4.6.4 (REST 2.21) for the
+  tables below and 4.8.8 (REST 2.30) for "On Purity//FB 4.8.8": 10 blades,
   40 DFM drives, one LAG of 8 x 100 GbE to a Cisco Nexus switch with LLDP
   visible, a Manila share the tests never touch, two scratch file systems
   (`eda-demo-quota` for the quota, grow, client, tarpit, quarantine and
@@ -154,6 +155,21 @@ the golden `tests/fixtures/flashblade.rules.yml` by the unit tests. The
 replay rulebooks are kept rule-for-rule identical to the live ones by the
 unit test, so a replayed event takes the same path as a live one.
 
+## On Purity//FB 4.8.8
+
+The same array after its upgrade, REST up to 2.30, through
+`tests/e2e_sources.sh`, the source plugin run directly and the playbooks
+run from a checkout.
+
+| # | Test | Expected | Result |
+| --- | --- | --- | --- |
+| 1 | the eight REST signals (`tests/e2e_sources.sh`, then the telemetry, posture, replication, config, sessions and health signals run directly for two minutes) | every signal answers at 2.30 with the event names of the tables above and no `purefb_poll_error` | passed: alert, health, capacity, array, client, file-system and bucket performance, config, session, posture, replication and array-connection events; no poll error |
+| 2 | a maintenance window opened and closed, the identify LED lit and cleared on `CH1.FB1`, the audits signal with a ten-minute lookback | `maintenance_active` true on the health event; the LED changes; the audit entries name the window and the LED | passed |
+| 3 | `purity.alert` lines captured during the upgrade | parsed, the multi-word `Waiting To Downgrade` state included | passed after the layout fix; the lines are fixtures of `tests/unit/test_syslog_parse.py` |
+| 4 | the telemetry metric policies at 2.30 | `tools/telemetry_rules.py --check --array-name fb-a` agrees with the committed rule file | passed: twelve rules naming collections at 30 s or 5 min; `prometheus/flashblade.rules.yml` is generated from that listing and loaded by the lab's Prometheus |
+| 5 | `telemetry_check.yml` and the selftest's `rest` and `telemetry` checks against the array | the target is read at the REST version `tasks/fb_api_version.yml` settles (2.30) and the delivery test answers | passed: verdict `healthy`, the test answers 200 with a reachability result per controller; selftest `rest` Purity//FB 4.8.8, `telemetry` target enabled |
+| 6 | the older REST versions the playbooks pin (2.16 maintenance windows, 2.17 QoS policies, 2.20 object audit and log targets) | still served | passed |
+
 ## Not verified
 
 - `tools/activation_restart.py` through a boot: its tests run against a
@@ -163,7 +179,8 @@ unit test, so a replayed event takes the same path as a live one.
   `purity.audit` and `purity.alert` layouts are confirmed from live lines;
   `purity.test` is parsed as the Admin Guide documents.
 - The data-audit JSON branch of the listener: SMB audit needs an Active
-  Directory join the lab lacks and NFS audit needs Purity//FB 4.8.0.
+  Directory join the lab lacks; NFS audit needs Purity//FB 4.8.0, which the
+  lab array now serves and no test has used yet.
 - A real hardware fault, a hot array, a full array: replayed or induced on
   lowered thresholds only. The health rule on a real fault (the gauge's
   enum is unpublished; 5 is observed for every healthy component),
