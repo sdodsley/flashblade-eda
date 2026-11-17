@@ -1001,7 +1001,7 @@ def neighbors(ports=PORTS):
     return [
         {
             "local_port": {"name": p},
-            "neighbor_chassis": {"name": "slc6-rsw-1", "addresses": ["10.21.12.72"]},
+            "neighbor_chassis": {"name": "sw-1", "addresses": ["203.0.113.72"]},
             "neighbor_port": {
                 "description": f"Ethernet1/{13 + PORTS.index(p)}",
                 "id": {"type": "ifname", "value": f"Ethernet1/{13 + PORTS.index(p)}"},
@@ -1106,8 +1106,8 @@ def test_health_issue_sets_and_counts(events):
     assert hardware["CH1.FB1"]["neighbor_port"] == ""
     assert hardware["CH1.FB1"]["maintenance_active"] is True
     eth = hardware["CH1.FM1.ETH1"]
-    assert eth["neighbor_switch"] == "slc6-rsw-1"
-    assert eth["neighbor_switch_address"] == "10.21.12.72"
+    assert eth["neighbor_switch"] == "sw-1"
+    assert eth["neighbor_switch_address"] == "203.0.113.72"
     assert eth["neighbor_port"] == "Ethernet1/13"
     assert not any("purefb_lag" in e for e in out)
 
@@ -1196,7 +1196,7 @@ def test_lag_degradation_uses_the_last_good_lldp_view(events):
     assert degraded["status"] == "healthy"
     assert degraded["ports"][0] == {
         "name": "CH1.FM1.ETH1",
-        "neighbor_switch": "slc6-rsw-1",
+        "neighbor_switch": "sw-1",
         "neighbor_port": "Ethernet1/13",
     }
     assert len(degraded["ports"]) == 8
@@ -1598,10 +1598,10 @@ def test_client_share_streaks_per_protocol(events):
 
 
 def test_client_rows_split_the_port_off_the_address(events):
-    # the array names a client row <address>:<port> (lab: 10.21.200.129:893)
+    # the array names a client row <address>:<port> (lab: 198.51.100.129:893)
     client = FakeClient(
         clients=[
-            perf_row("10.21.200.129:893", 800, 800),
+            perf_row("198.51.100.129:893", 800, 800),
             perf_row("[fe80::1]:2049", 1, 1),
         ],
         baseline=[],
@@ -1614,11 +1614,11 @@ def test_client_rows_split_the_port_off_the_address(events):
         for e in out
         if "purefb_client_performance" in e
     }
-    assert set(rows) == {"10.21.200.129", "fe80::1"}
-    assert rows["10.21.200.129"]["client_port"] == 893
+    assert set(rows) == {"198.51.100.129", "fe80::1"}
+    assert rows["198.51.100.129"]["client_port"] == 893
     assert rows["fe80::1"]["client_port"] == 2049
     # the streak is kept per address, so a reconnect on a new port continues it
-    client.clients = [perf_row("10.21.200.129:901", 800, 800)]
+    client.clients = [perf_row("198.51.100.129:901", 800, 800)]
     out = events._performance_events(arr, state, {"top_clients": 5})
     busy = [e for e in out if "purefb_client_performance" in e][0]
     assert busy["purefb_client_performance"]["high_share_polls"] == 2

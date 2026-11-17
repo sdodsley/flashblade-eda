@@ -29,7 +29,7 @@ storm = len(sys.argv) > 5 and sys.argv[5] == "storm"
 stamp = time.strftime("%b %d %H:%M:%S")
 utc = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
 iso = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
-array_id = "744fbeb9-aded-41a3-a721-bacd8d06847c"
+array_id = "1f3a9c2e-5b7d-4e81-9a6c-0d2f4b6e8a10"
 
 
 def alert(level, state, subject, code, text, action):
@@ -112,7 +112,7 @@ lines = [
     audit(
         0,
         "pureuser",
-        "10.21.22.12",
+        "192.0.2.12",
         "REST",
         "purepolicy",
         "nfs delete",

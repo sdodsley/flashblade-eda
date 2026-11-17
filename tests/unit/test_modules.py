@@ -2336,7 +2336,7 @@ def test_qos_array_errors_carry_the_message():
 # -------------------------------------------------------- sessions and locks
 
 
-def session_row(name, client="10.21.200.129", user="simon", protocol="nfs"):
+def session_row(name, client="198.51.100.129", user="alice", protocol="nfs"):
     row = {
         "name": name,
         "client": client,
@@ -2350,7 +2350,7 @@ def session_row(name, client="10.21.200.129", user="simon", protocol="nfs"):
 
 
 def lock_row(
-    name, client="10.21.200.129", fs="eda-demo-quota", path="/jobs/a.lock", inode=77
+    name, client="198.51.100.129", fs="eda-demo-quota", path="/jobs/a.lock", inode=77
 ):
     return {
         "name": name,
@@ -2367,12 +2367,12 @@ def test_session_removes_only_the_clients_sessions():
     client = FakeClient(
         sessions=[
             session_row("s1"),
-            session_row("s2", client="10.21.200.7"),
+            session_row("s2", client="198.51.100.7"),
             # a session the array lists without a user: read as unknown
             session_row("s3", user=None),
         ]
     )
-    result = run(SESSION, client, client="10.21.200.129")
+    result = run(SESSION, client, client="198.51.100.129")
     assert result["rc"] == 0 and result["changed"] is True
     assert result["removed"] == {"sessions": 2, "locks": 0, "items": ["s1", "s3"]}
     assert client.called(("get_",)) == ["get_file_systems_sessions"]
@@ -2386,7 +2386,7 @@ def test_session_by_user_passes_protocols_and_disruptive():
     client = FakeClient(
         sessions=[session_row("s1", protocol="smb"), session_row("s2", protocol="nfs")]
     )
-    result = run(SESSION, client, user="simon", protocols=["smb"], disruptive=True)
+    result = run(SESSION, client, user="alice", protocols=["smb"], disruptive=True)
     assert result["removed"]["items"] == ["s1"]
     assert client.calls[0][1] == {"protocols": ["smb"]}
     assert client.calls[-1][1] == {"names": ["s1"], "disruptive": True}
@@ -2432,8 +2432,8 @@ def test_session_locks_by_file_system_path_and_inode():
     result = run(SESSION, client, kind="locks", file_system="eda-demo-quota", inode=78)
     assert result["removed"]["items"] == ["l2"]
     # the client narrows the locks too
-    client = FakeClient(locks=[lock_row("l1"), lock_row("l2", client="10.21.200.7")])
-    result = run(SESSION, client, kind="locks", client="10.21.200.129")
+    client = FakeClient(locks=[lock_row("l1"), lock_row("l2", client="198.51.100.7")])
+    result = run(SESSION, client, kind="locks", client="198.51.100.129")
     assert result["removed"]["items"] == ["l1"]
 
 
@@ -2444,14 +2444,14 @@ def test_session_both_skips_sessions_when_only_a_file_system_is_given():
     assert client.called(("get_",)) == ["get_file_systems_locks"]
     assert "s1" in client.sessions
     client = FakeClient(sessions=[session_row("s1")], locks=[lock_row("l1")])
-    result = run(SESSION, client, kind="both", client="10.21.200.129")
+    result = run(SESSION, client, kind="both", client="198.51.100.129")
     assert result["removed"] == {"sessions": 1, "locks": 1, "items": ["s1", "l1"]}
     assert client.sessions == {} and client.locks == {}
 
 
 def test_session_check_mode_reports_what_would_go():
     client = FakeClient(sessions=[session_row("s1")], locks=[lock_row("l1")])
-    result = run(SESSION, client, check_mode=True, kind="both", client="10.21.200.129")
+    result = run(SESSION, client, check_mode=True, kind="both", client="198.51.100.129")
     assert result["changed"] is True
     assert result["removed"] == {"sessions": 1, "locks": 1, "items": ["s1", "l1"]}
     assert client.called() == []
@@ -2466,7 +2466,7 @@ def test_session_needs_a_client_user_or_file_system():
 def test_session_array_error_carries_the_message():
     client = FakeClient(sessions=[session_row("s1")])
     client.fail["delete_file_systems_sessions"] = "Session s1 has open files"
-    result = run(SESSION, client, client="10.21.200.129")
+    result = run(SESSION, client, client="198.51.100.129")
     assert result["failed"] is True and "has open files" in result["msg"]
     assert "s1" in client.sessions
     client = FakeClient()

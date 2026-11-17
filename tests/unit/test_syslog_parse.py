@@ -9,7 +9,7 @@ import json
 import pytest
 import yaml
 
-ARRAY_ID = "744fbeb9-aded-41a3-a721-bacd8d06847c"
+ARRAY_ID = "1f3a9c2e-5b7d-4e81-9a6c-0d2f4b6e8a10"
 # The management layouts the FlashBlade Admin Guide documents: #012 separates
 # the detail lines of an alert; an audit entry is one line of Key=value
 # pairs. Hostnames anonymised.
@@ -37,7 +37,7 @@ ALERT_ODD = "Nov 12 10:06:00 fb-a-fm1 purity.alert: something the layout does no
 AUDIT = (
     "Nov 12 10:01:00 fb-a-fm1 purity.audit: - Adding audit entry. "
     "GUID=139a249a-7c1f-4d86-8fe8-2108b63e4fd6, ID=6683, "
-    "Time=2026-11-12 10:01:00.123456, User=pureuser, Location=10.21.22.12, UI=REST, "
+    "Time=2026-11-12 10:01:00.123456, User=pureuser, Location=192.0.2.12, UI=REST, "
     "Command=purepolicy, Subcommand=nfs delete, Arguments=cnfs-fixer-pol"
 )
 AUDIT_GUI = (
@@ -144,7 +144,7 @@ def test_audit_fields_are_parsed(syslog):
     assert e["guid"] == "139a249a-7c1f-4d86-8fe8-2108b63e4fd6"
     assert e["audit_id"] == "6683" and e["time"] == "2026-11-12 10:01:00.123456"
     assert e["syslog_time"] == "Nov 12 10:01:00"
-    assert e["user"] == "pureuser" and e["location"] == "10.21.22.12"
+    assert e["user"] == "pureuser" and e["location"] == "192.0.2.12"
     assert e["user_interface"] == "REST"
     assert e["command"] == "purepolicy" and e["subcommand"] == "nfs delete"
     assert e["arguments"] == "cnfs-fixer-pol"
@@ -226,13 +226,13 @@ def test_file_record_always_passes_the_program_filter(syslog):
     async def go():
         local = asyncio.Queue()
         emit = syslog._emitter(local, {}, set(), [], None)
-        assert emit(FILE_FB, "10.21.200.230", "tcp") is True
-        assert emit(FILE_FA, "10.21.200.231", "tcp") is True
-        assert emit(OS_LINE, "10.21.200.230", "tcp") is False
+        assert emit(FILE_FB, "198.51.100.230", "tcp") is True
+        assert emit(FILE_FA, "198.51.100.231", "tcp") is True
+        assert emit(OS_LINE, "198.51.100.230", "tcp") is False
         assert local.qsize() == 2
         first = local.get_nowait()
         assert list(first) == ["purefb_file_event"]
-        assert first["purefb_file_event"]["source"] == "10.21.200.230"
+        assert first["purefb_file_event"]["source"] == "198.51.100.230"
         assert first["purefb_file_event"]["protocol"] == "tcp"
 
     asyncio.run(go())
@@ -477,7 +477,7 @@ def test_emitter_tallies_file_events_into_activity(syslog):
             line = "<134>Nov 12 10:10:00 fb-a : " + json.dumps(
                 _record(time=_stamp(i), op_name="unlink", path=f"f{i}")
             )
-            assert emit(line, "10.21.200.230", "tcp") is True
+            assert emit(line, "198.51.100.230", "tcp") is True
         assert local.qsize() == 3
         names = [list(local.get_nowait()) for _ in range(3)]
         assert names == [
@@ -501,10 +501,10 @@ def test_emitter_tallies_file_events_into_activity(syslog):
         line = "<134>Nov 12 10:10:00 fb-a : " + json.dumps(
             _record(op_name="unlink", path="f")
         )
-        emit(line, "10.21.200.230", "udp")
+        emit(line, "198.51.100.230", "udp")
         local.get_nowait()
         act = local.get_nowait()["purefb_file_activity"]
-        assert act["array"] == "inventory-a" and act["source"] == "10.21.200.230"
+        assert act["array"] == "inventory-a" and act["source"] == "198.51.100.230"
         assert act["protocol"] == "udp" and act["mass_delete"] is True
 
     asyncio.run(one_activity_record())
@@ -633,7 +633,7 @@ def test_tcp_client_accepts_a_100_kb_data_audit_record(syslog):
         reader = asyncio.StreamReader(limit=syslog.TCP_LINE_LIMIT)
         reader.feed_data(payload)
         reader.feed_eof()
-        writer = FakeWriter(("10.21.200.230", 40000))
+        writer = FakeWriter(("198.51.100.230", 40000))
         await syslog._tcp_client(
             reader,
             writer,
@@ -707,12 +707,12 @@ ALERT_LIVE_TAIL = (
 )
 ALERT_LIVE = (
     "<178>Nov 16 17:05:38 fb-a-fm1 purity.alert: CRITICAL Closing - fb-a: "
-    "(Alert ID: 3bedc475-ee88-a490-f4f5-18de62b81806) Drive CH1.FB8.BAY2 requires "
+    "(Alert ID: 5d6e7f80-91a2-4b3c-8d4e-5f6a7b8c9d0e) Drive CH1.FB8.BAY2 requires "
     "attention [1017] " + ALERT_LIVE_TAIL.format(state="Closing")
 )
 ALERT_WAITING = (
     "<178>Nov 16 17:02:39 fb-a-fm1 purity.alert: CRITICAL Waiting To Downgrade - "
-    "fb-a: (Alert ID: a9e232e5-fd68-6d9d-313b-4f2262f26855) Blade CH1.FB8 requires "
+    "fb-a: (Alert ID: 0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d) Blade CH1.FB8 requires "
     "attention [1000] " + ALERT_LIVE_TAIL.format(state="Waiting to downgrade")
 )
 
@@ -722,7 +722,7 @@ def test_alert_line_as_a_live_array_writes_it(syslog):
     assert e["kind"] == "alert" and e["array"] == "fb-a" and e["host"] == "fb-a-fm1"
     assert e["severity"] == "critical" and e["state"] == "closing"
     assert e["code"] == 1017 and e["subject"] == "Drive CH1.FB8.BAY2 requires attention"
-    assert e["alert_id"] == "3bedc475-ee88-a490-f4f5-18de62b81806"
+    assert e["alert_id"] == "5d6e7f80-91a2-4b3c-8d4e-5f6a7b8c9d0e"
     assert e["details"] == (
         "A drive's status is critical. No data has been lost, but "
         "performance/parity may be impacted. There will be daily notifications "
@@ -740,11 +740,11 @@ def test_alert_state_of_several_words_is_parsed(syslog):
     e = syslog.parse(ALERT_WAITING, {}, set())
     assert e["state"] == "waiting to downgrade" and e["code"] == 1000
     assert e["subject"] == "Blade CH1.FB8 requires attention"
-    assert e["alert_id"] == "a9e232e5-fd68-6d9d-313b-4f2262f26855"
+    assert e["alert_id"] == "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
     assert e["array"] == "fb-a" and e["severity"] == "critical"
     # the id-less layout still parses, with no alert_id
     plain = ALERT_WAITING.replace(
-        "(Alert ID: a9e232e5-fd68-6d9d-313b-4f2262f26855) ", ""
+        "(Alert ID: 0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d) ", ""
     )
     p = syslog.parse(plain, {}, set())
     assert p["subject"] == "Blade CH1.FB8 requires attention" and p["alert_id"] is None

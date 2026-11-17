@@ -145,7 +145,7 @@ def record(
     error=None,
     event_id=1,
     version="AAAAAAAAAAOfDjBzWH7_ugCM",
-    ip="10.21.22.12",
+    ip="192.0.2.12",
 ):
     """One record in the shape the lab array writes (see the samples): the
     key is absent for a bucket operation, responseElements is null on an
@@ -178,7 +178,7 @@ def record(
             "userName": user,
         },
         "userAgent": "Boto3/1.44.1 md/Botocore#1.44.1 ua/2.1 os/linux",
-        "requestParameters": {"bucketName": bucket, "Host": "10.21.200.233"},
+        "requestParameters": {"bucketName": bucket, "Host": "198.51.100.233"},
         "responseElements": (
             None if error else {"x-amz-version-id": version, "ETag": '"e5eb"'}
         ),
@@ -875,7 +875,7 @@ def test_second_poll_emits_new_records_then_the_rollup_then_health(
     assert ev["event_time_ms"] == ms("2026-11-12T20:08:50Z") + 953
     assert ev["event_id"] == 4 and ev["read_only"] is False
     assert ev["access_key_id"] == APP_KEY and ev["user"] == "eda-app"
-    assert ev["account"] == "eda" and ev["source_ip"] == "10.21.22.12"
+    assert ev["account"] == "eda" and ev["source_ip"] == "192.0.2.12"
     assert ev["user_agent"].startswith("Boto3/")
     assert ev["error_code"] == "" and ev["error_message"] == "" and ev["ok"] is True
     assert ev["version_id"] == "AAAAAAAAAAOfDjBzWH7_ugCa"
@@ -1333,7 +1333,7 @@ def test_version_id_comes_from_the_last_response_elements(
     line = (
         '{"eventId": 21, "eventTime": "2026-11-12T20:08:50.692Z", "eventName": '
         '"GetObject", "readOnly": true, "bucketName": "eda-data", '
-        '"recipientAccountId": "eda", "sourceIPAddress": "10.21.22.12", '
+        '"recipientAccountId": "eda", "sourceIPAddress": "192.0.2.12", '
         '"userIdentity": {"accessKeyId": "' + APP_KEY + '", "userName": "eda-app"}, '
         '"requestParameters": {"bucketName": "eda-data", "key": "canary/c.txt"}, '
         '"responseElements": {"x-amz-version-id": "FIRST"}, '
@@ -1408,7 +1408,7 @@ def test_rollup_counts_and_the_error_storm(object_audit, monkeypatch, tmp_path, 
             error="NoSuchKey",
             event_id=i,
             time=f"2026-11-12T20:08:5{i}.000Z",
-            ip="10.21.22.12" if i < 5 else "10.21.22.13",
+            ip="192.0.2.12" if i < 5 else "192.0.2.13",
         )
         for i in range(1, 6)
     ]
@@ -1430,8 +1430,8 @@ def test_rollup_counts_and_the_error_storm(object_audit, monkeypatch, tmp_path, 
     assert rollup["last_time"] == "2026-11-12T20:08:55.000Z"
     assert rollup["by_event_name"] == {"GetObject": 5, "PutObject": 1}
     assert rollup["by_error_code"] == {"NoSuchKey": 5}
-    assert rollup["by_source_ip"] == {"10.21.22.12": 5, "10.21.22.13": 1}
-    assert rollup["top_source_ip"] == "10.21.22.12"
+    assert rollup["by_source_ip"] == {"192.0.2.12": 5, "192.0.2.13": 1}
+    assert rollup["top_source_ip"] == "192.0.2.12"
     assert rollup["error_storm"] is True and rollup["denied_storm"] is False
     assert rollup["mass_delete"] is False and rollup["bad_lines"] == 0
     assert rollup["canary_hits"] == 0 and rollup["honey_hits"] == 0
