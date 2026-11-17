@@ -520,3 +520,34 @@ def test_syslog_alert_templates_never_print_none():
             assert "None" not in text, f"{path.name} {key}: {text!r}"
             if key == "subject":
                 assert text.startswith("fb-a alert:") and alert["message"] in text
+
+
+def test_syslog_alerts_are_graded_by_state():
+    """The array repeats the alert's severity word on every state change, so
+    a closing alert arrives as CRITICAL: the syslog rulebook notifies at the
+    alert's severity for an open alert only, gives a closed one a notice at
+    info and logs closing and waiting to downgrade, as alerts.yml does for
+    the REST transitions."""
+    for path in (
+        pathlib.Path("extensions/eda/rulebooks/syslog.yml"),
+        pathlib.Path("extensions/eda/rulebooks/platform/syslog.yml"),
+    ):
+        rules = {
+            r["name"]: r
+            for r in yaml.safe_load(path.read_text(encoding="utf-8"))[0]["rules"]
+        }
+        notify = rules["Alert via syslog - notify"]["condition"]
+        assert 'severity in ["warning", "critical"]' in notify
+        assert 'state not in ["closing", "closed", "waiting to downgrade"]' in notify
+        closed = rules["Alert closed via syslog - notify"]
+        assert closed["condition"] == 'event.purefb_syslog_alert.state == "closed"'
+        action = closed["action"]
+        extra = (
+            action["run_playbook"]["extra_vars"]
+            if "run_playbook" in action
+            else action["run_job_template"]["job_args"]["extra_vars"]
+        )
+        assert extra["severity"] == "info" and " closed:" in extra["subject"]
+        closing = rules["Alert closing via syslog - log"]
+        assert 'state in ["closing", "waiting to downgrade"]' in closing["condition"]
+        assert "debug" in closing["action"]

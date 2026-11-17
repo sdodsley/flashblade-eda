@@ -25,7 +25,7 @@
         automation_users: '{{ automation_users }}'
   rules:
     - name: Alert via syslog - notify
-      condition: event.purefb_syslog_alert.severity in ["warning", "critical"]
+      condition: event.purefb_syslog_alert.severity in ["warning", "critical"] and event.purefb_syslog_alert.state not in ["closing", "closed", "waiting to downgrade"]
       throttle:
         once_within: 10 minutes
         group_by_attributes:
@@ -43,6 +43,30 @@
               detail: '{{ event.purefb_syslog_alert.details | default('''', true) }} {{ (''Action: '' ~ event.purefb_syslog_alert.action) if event.purefb_syslog_alert.action else '''' }} {{ (''KB '' ~ event.purefb_syslog_alert.knowledge_base_url) if event.purefb_syslog_alert.knowledge_base_url else '''' }} (syslog from {{ event.purefb_syslog_alert.source }}, first seen {{ event.purefb_syslog_alert.first_seen | default(event.purefb_syslog_alert.time, true) }})'
               alert_code: '{{ event.purefb_syslog_alert.code | default('''', true) }}'
               target_array: '{{ event.purefb_syslog_alert.array }}'
+    - name: Alert closed via syslog - notify
+      condition: event.purefb_syslog_alert.state == "closed"
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefb_syslog_alert.array
+          - event.purefb_syslog_alert.code
+          - event.purefb_syslog_alert.subject
+      action:
+        run_job_template:
+          name: FlashBlade - notify
+          organization: '{{ aap_organization }}'
+          job_args:
+            extra_vars:
+              severity: info
+              subject: '{{ event.purefb_syslog_alert.array }} alert{{ ('' '' ~ event.purefb_syslog_alert.code) if event.purefb_syslog_alert.code else '''' }} closed: {{ event.purefb_syslog_alert.subject | default(event.purefb_syslog_alert.message, true) }}'
+              detail: (syslog from {{ event.purefb_syslog_alert.source }}, first seen {{ event.purefb_syslog_alert.first_seen | default(event.purefb_syslog_alert.time, true) }})
+              alert_code: '{{ event.purefb_syslog_alert.code | default('''', true) }}'
+              target_array: '{{ event.purefb_syslog_alert.array }}'
+    - name: Alert closing via syslog - log
+      condition: event.purefb_syslog_alert.state in ["closing", "waiting to downgrade"]
+      action:
+        debug:
+          msg: '{{ event.purefb_syslog_alert.array }} alert {{ event.purefb_syslog_alert.code }} {{ event.purefb_syslog_alert.state }}: {{ event.purefb_syslog_alert.subject }}'
     - name: Human action via syslog audit - fast notification
       condition: event.purefb_syslog_audit.by_automation == false and event.purefb_syslog_audit.user is defined and event.purefb_syslog_audit.command is defined
       action:

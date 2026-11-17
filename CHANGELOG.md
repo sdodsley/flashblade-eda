@@ -40,6 +40,11 @@
   status 0 with the reason when the array serves nothing new enough, and
   takes a pin only when the array serves it; `purefb_alert_flag` and
   `purefb_qos` negotiate like the telemetry modules.
+- The syslog rulebook grades an alert by its state. The array repeats the
+  alert's severity word on every state change, so a closing alert used to
+  raise a warning or critical notification; now an open alert is notified
+  at its severity, a closed one gets a notice at info, and closing and
+  waiting to downgrade are logged.
 
 ## 0.1.1 (2026-11-14)
 

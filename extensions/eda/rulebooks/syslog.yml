@@ -38,8 +38,16 @@
         automation_users: "{{ automation_users }}"
 
   rules:
+    # The array repeats the alert's severity word on every state change, so a
+    # closing alert arrives as CRITICAL too: the notification at the alert's
+    # severity is for an open alert (or one whose line the layout did not
+    # cover, state unknown); closed gets one notice at info and closing and
+    # waiting to downgrade are logged, as alerts.yml does for the REST
+    # transitions.
     - name: Alert via syslog - notify
-      condition: event.purefb_syslog_alert.severity in ["warning", "critical"]
+      condition: >-
+        event.purefb_syslog_alert.severity in ["warning", "critical"] and
+        event.purefb_syslog_alert.state not in ["closing", "closed", "waiting to downgrade"]
       throttle:
         once_within: 10 minutes
         group_by_attributes:
@@ -63,6 +71,37 @@
             alert_code: "{{ event.purefb_syslog_alert.code | default('', true) }}"
             target_array: "{{ event.purefb_syslog_alert.array }}"
             alert_log: "{{ alert_log }}"
+
+    - name: Alert closed via syslog - notify
+      condition: event.purefb_syslog_alert.state == "closed"
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.purefb_syslog_alert.array
+          - event.purefb_syslog_alert.code
+          - event.purefb_syslog_alert.subject
+      action:
+        run_playbook:
+          name: playbooks/notify.yml
+          extra_vars:
+            severity: info
+            subject: >-
+              {{ event.purefb_syslog_alert.array }} alert{{ (' ' ~ event.purefb_syslog_alert.code) if event.purefb_syslog_alert.code else '' }} closed:
+              {{ event.purefb_syslog_alert.subject | default(event.purefb_syslog_alert.message, true) }}
+            detail: >-
+              (syslog from {{ event.purefb_syslog_alert.source }},
+              first seen {{ event.purefb_syslog_alert.first_seen | default(event.purefb_syslog_alert.time, true) }})
+            alert_code: "{{ event.purefb_syslog_alert.code | default('', true) }}"
+            target_array: "{{ event.purefb_syslog_alert.array }}"
+            alert_log: "{{ alert_log }}"
+
+    - name: Alert closing via syslog - log
+      condition: event.purefb_syslog_alert.state in ["closing", "waiting to downgrade"]
+      action:
+        debug:
+          msg: >-
+            {{ event.purefb_syslog_alert.array }} alert {{ event.purefb_syslog_alert.code }}
+            {{ event.purefb_syslog_alert.state }}: {{ event.purefb_syslog_alert.subject }}
 
     - name: Human action via syslog audit - fast notification
       condition: >-
