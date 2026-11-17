@@ -1,50 +1,28 @@
 # Changelog
 
-## Unreleased
+## 0.1.2 (2026-11-17)
 
-- `tools/activation_audit.py` rides out a busy gateway: transient answers
-  (5xx, 403, a dropped connection on a read) are retried for two minutes,
-  the activation list is read in pages of twenty, the wait for the list
-  after a delete lasts the name-release window, and `--recreate --enable`
-  creates the new activation enabled whatever flag the old one carried.
-- The seed and the audit read each activation by its full name, one
-  request per platform rulebook, and never list: the EDA controller's
-  listing takes ten seconds whatever the page size and a timeout gets the
-  EDA API ejected at the gateway for every reader; its `name` filter is a
-  substring match, so the exact match is made client-side. The audit
-  reports a platform rulebook whose activation is missing.
-- `tools/activation_restart.py` restarts, one at a time, every FlashBlade
-  activation that is enabled and not running once the EDA API answers
-  again, for the ones a host reboot leaves failed at their restart ceiling;
-  a oneshot user unit ordered after the platform's units runs it at boot.
-- `purefb_syslog` parses the alert lines a live array writes: a state of
-  several words (`Waiting To Downgrade`), the alert id ahead of the subject
-  (now `alert_id`), the `First Seen Array Time` and `Details` lines and a
-  blank `Suggested Action`. Such a line used to fall outside the layout and
-  the syslog rulebook printed its empty fields as `None`; the templates now
-  fall back to the message.
-- Purity//FB 4.8.8. The telemetry callers (`purefb_telemetry_target`,
-  `purefb_telemetry_policy`, the telemetry playbooks,
-  `tools/telemetry_rules.py`) ask for the newest REST version the array
-  serves, since a 4.8 array answers the telemetry endpoints from 2.29 up
-  only; the rule generator reads a
-  policy's rules as metrics collections with a resolution each, and
-  `prometheus/flashblade.rules.yml` is generated from that listing.
-  `purefb_syslog` gives the `OriginName` and `OriginId` pairs of a 4.8.8
-  audit line fields of their own. The REST signals, the maintenance, LED
-  and audit paths and the telemetry playbooks were run against 4.8.8; the
-  verification record says what.
-- Every raw REST call picks its version the same way. `tasks/fb_rest.yml`
-  asks for the newest version the array serves at or above the endpoint's
-  floor (`fb_rest_min_version`) and the site's (`fb_api_version`), answers
-  status 0 with the reason when the array serves nothing new enough, and
-  takes a pin only when the array serves it; `purefb_alert_flag` and
-  `purefb_qos` negotiate like the telemetry modules.
-- The syslog rulebook grades an alert by its state. The array repeats the
-  alert's severity word on every state change, so a closing alert used to
-  raise a warning or critical notification; now an open alert is notified
-  at its severity, a closed one gets a notice at info, and closing and
-  waiting to downgrade are logged.
+Hardening on a shared, containerized platform and the lab array's move to
+Purity//FB 4.8.8: the platform tools stop listing activations and survive
+a reboot, every REST call picks its version with a floor, and the syslog
+alert path parses what a live array writes and grades it by state.
+
+- The seed and `tools/activation_audit.py` read each activation by its full
+  name and never list; the audit rides out a busy gateway and reports a
+  rulebook whose activation is missing.
+- `tools/activation_restart.py` restarts the activations a host reboot
+  leaves failed, one at a time, from a user unit after the platform's own.
+- `purefb_syslog` parses the alert and audit lines a live array writes,
+  including a state of several words and the alert id (`alert_id`).
+- The syslog rulebook grades an alert by its state: open at its severity,
+  closed at info, closing and waiting to downgrade logged.
+- Purity//FB 4.8.8: the telemetry endpoints answer from REST 2.29 up and
+  name metrics collections with a resolution each; the telemetry modules,
+  playbooks, `tools/telemetry_rules.py` and the rule file follow.
+- `tasks/fb_rest.yml` asks for the newest REST version the array serves
+  above the endpoint's and the site's floor and says why when none fits;
+  `purefb_alert_flag` and `purefb_qos` negotiate the same way.
+- The documents state what was verified on 4.6.4 and on 4.8.8.
 
 ## 0.1.1 (2026-11-14)
 

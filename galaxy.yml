@@ -16,7 +16,7 @@
 # artifact through build_ignore.
 namespace: sdodsley
 name: flashblade_eda
-version: 0.1.0
+version: 0.1.2
 readme: README.md
 authors:
   - sdodsley
