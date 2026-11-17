@@ -12,8 +12,8 @@
 # uses to drop a share or client policy) and the policy itself is deleted,
 # so nothing of the cap remains. An object carrying a policy with another
 # name, or none, is left alone and recorded; a duplicate lift changes
-# nothing. QoS policies arrived with REST 2.17, so the requests ask for
-# that version whatever fb_api_version says.
+# nothing. QoS policies arrived with REST 2.17, the floor the requests
+# give tasks/fb_rest.yml.
 # verify: on the lab, PATCH {"qos_policy": {"name": ""}} clears the
 # assignment; if it does not, DELETE /qos-policies/members?member_names=
 # <object>&policy_names=<policy> is the other form.
@@ -54,7 +54,7 @@
       vars:
         fb_rest_method: GET
         fb_rest_path: "{{ object_path }}?names={{ object_name }}"
-        fb_rest_api_version: "{{ qos_api_version }}"
+        fb_rest_min_version: "{{ qos_api_version }}"
         fb_rest_ignore_errors: true
 
     - name: Keep what the array said
@@ -85,7 +85,7 @@
             fb_rest_method: PATCH
             fb_rest_path: "{{ object_path }}?names={{ object_name }}"
             fb_rest_body: "{{ {'qos_policy': {'name': ''}} }}"
-            fb_rest_api_version: "{{ qos_api_version }}"
+            fb_rest_min_version: "{{ qos_api_version }}"
             fb_rest_ignore_errors: true
 
         - name: Keep the outcome
@@ -102,7 +102,7 @@
           vars:
             fb_rest_method: DELETE
             fb_rest_path: "qos-policies?names={{ previous_policy }}"
-            fb_rest_api_version: "{{ qos_api_version }}"
+            fb_rest_min_version: "{{ qos_api_version }}"
             fb_rest_ignore_errors: true
 
         - name: Note the deletion

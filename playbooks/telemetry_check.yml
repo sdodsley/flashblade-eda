@@ -11,7 +11,7 @@
 #       -e prometheus_url=http://prom.example.com:9090 -e alert_log=$PWD/alerts.log
 # Four reads, none of which changes anything: the telemetry target (GET
 # /telemetry-targets at the newest REST version the array serves, 2.21 at
-# least: tasks/fb_api_version.yml), the array's own delivery test (GET
+# least: tasks/fb_rest.yml), the array's own delivery test (GET
 # /telemetry-targets/test: on Purity//FB 4.8.8 a TCP reachability test from
 # each controller to the endpoint, answered 200 with one result per
 # controller; 4.6.4 answers 400 whatever the state), the unauthenticated
@@ -37,7 +37,7 @@
   gather_facts: false
   vars:
     # a REST version to pin; empty means the newest the array serves, 2.21 at
-    # least (tasks/fb_api_version.yml)
+    # least (tasks/fb_rest.yml)
     telemetry_api_version: ""
   tasks:
     - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
@@ -65,17 +65,14 @@
           telemetry_target_name {{ telemetry_target_name | string | truncate(80) }} must be a plain name and
           prometheus_url {{ prometheus_url | default('') | string | truncate(80) }} an http(s) URL or empty
 
-    - name: Settle the REST version the telemetry endpoints are asked for
-      ansible.builtin.include_tasks:
-        file: "{{ playbook_dir }}/tasks/fb_api_version.yml"
-
     - name: Read the telemetry target
       ansible.builtin.include_tasks:
         file: "{{ playbook_dir }}/tasks/fb_rest.yml"
       vars:
         fb_rest_method: GET
         fb_rest_path: "telemetry-targets?names={{ telemetry_target_name }}"
-        fb_rest_api_version: "{{ telemetry_rest_version }}"
+        fb_rest_min_version: "2.21"
+        fb_rest_api_version: "{{ telemetry_api_version | default('') }}"
         fb_rest_ignore_errors: true
 
     - name: Keep what the array said about the target
@@ -90,7 +87,8 @@
       vars:
         fb_rest_method: GET
         fb_rest_path: "telemetry-targets/test?names={{ telemetry_target_name }}"
-        fb_rest_api_version: "{{ telemetry_rest_version }}"
+        fb_rest_min_version: "2.21"
+        fb_rest_api_version: "{{ telemetry_api_version | default('') }}"
         fb_rest_ignore_errors: true
 
     - name: Keep the test outcome

@@ -24,16 +24,22 @@
   the syslog rulebook printed its empty fields as `None`; the templates now
   fall back to the message.
 - Purity//FB 4.8.8. The telemetry callers (`purefb_telemetry_target`,
-  `purefb_telemetry_policy`, the telemetry playbooks through
-  `tasks/fb_api_version.yml`, `tools/telemetry_rules.py`) ask for the
-  newest REST version the array serves, since a 4.8 array answers the
-  telemetry endpoints from 2.29 up only; the rule generator reads a
+  `purefb_telemetry_policy`, the telemetry playbooks,
+  `tools/telemetry_rules.py`) ask for the newest REST version the array
+  serves, since a 4.8 array answers the telemetry endpoints from 2.29 up
+  only; the rule generator reads a
   policy's rules as metrics collections with a resolution each, and
   `prometheus/flashblade.rules.yml` is generated from that listing.
   `purefb_syslog` gives the `OriginName` and `OriginId` pairs of a 4.8.8
   audit line fields of their own. The REST signals, the maintenance, LED
   and audit paths and the telemetry playbooks were run against 4.8.8; the
   verification record says what.
+- Every raw REST call picks its version the same way. `tasks/fb_rest.yml`
+  asks for the newest version the array serves at or above the endpoint's
+  floor (`fb_rest_min_version`) and the site's (`fb_api_version`), answers
+  status 0 with the reason when the array serves nothing new enough, and
+  takes a pin only when the array serves it; `purefb_alert_flag` and
+  `purefb_qos` negotiate like the telemetry modules.
 
 ## 0.1.1 (2026-11-14)
 

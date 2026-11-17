@@ -15,7 +15,7 @@
 # cap never replaces a limit a human set, and the lift (qos_lift.yml) only
 # removes eda-cap- policies. Both modes are idempotent: a second cap on an
 # object already capped changes nothing. QoS policies arrived with REST
-# 2.17, so the requests ask for that version whatever fb_api_version says.
+# 2.17, the floor the requests give tasks/fb_rest.yml.
 # No collection module manages QoS policies in everpure.flashblade 1.29,
 # hence tasks/fb_rest.yml throughout.
 # verify: on the lab, POST /qos-policies takes max_total_ops_per_sec and the
@@ -59,7 +59,7 @@
       vars:
         fb_rest_method: GET
         fb_rest_path: "{{ object_path }}?names={{ object_name }}"
-        fb_rest_api_version: "{{ qos_api_version }}"
+        fb_rest_min_version: "{{ qos_api_version }}"
         fb_rest_ignore_errors: true
 
     - name: Keep what the array said
@@ -94,7 +94,7 @@
           vars:
             fb_rest_method: GET
             fb_rest_path: "qos-policies?names={{ policy_name }}"
-            fb_rest_api_version: "{{ qos_api_version }}"
+            fb_rest_min_version: "{{ qos_api_version }}"
             fb_rest_ignore_errors: true
 
         - name: Note whether it exists
@@ -109,7 +109,7 @@
             fb_rest_method: POST
             fb_rest_path: "qos-policies?names={{ policy_name }}"
             fb_rest_body: "{{ {'max_total_ops_per_sec': cap_ops_per_sec | int} }}"
-            fb_rest_api_version: "{{ qos_api_version }}"
+            fb_rest_min_version: "{{ qos_api_version }}"
             fb_rest_status_codes: [200, 201]
 
         - name: Note the creation
@@ -123,7 +123,7 @@
             fb_rest_method: PATCH
             fb_rest_path: "{{ object_path }}?names={{ object_name }}"
             fb_rest_body: "{{ {'qos_policy': {'name': policy_name}} }}"
-            fb_rest_api_version: "{{ qos_api_version }}"
+            fb_rest_min_version: "{{ qos_api_version }}"
             fb_rest_ignore_errors: true
 
         - name: Keep the assignment outcome

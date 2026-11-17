@@ -427,13 +427,18 @@ def test_rest_helper_never_shows_the_token_and_always_logs_out(repo_root):
     tasks = _load(repo_root / "playbooks" / "tasks" / "fb_rest.yml")
     uri = [t for t in tasks if "ansible.builtin.uri" in t]
     assert [t["name"] for t in uri] == [
+        "Ask the array which REST versions it serves",
         "Log in to the array",
         "Send the request",
         "Log out of the array",
     ]
-    for task in uri:
+    probe, login, request, logout = uri
+    # the versions probe carries no token and needs no secrecy; the rest do
+    assert probe["ansible.builtin.uri"]["url"].endswith("/api/api_version")
+    assert "headers" not in probe["ansible.builtin.uri"]
+    assert probe["failed_when"] is False
+    for task in (login, request, logout):
         assert task.get("no_log") is True, task["name"]
-    login, request, logout = uri
     assert login["ansible.builtin.uri"]["url"].endswith("/api/login")
     assert set(login["ansible.builtin.uri"]["headers"]) == {"api-token"}
     assert set(request["ansible.builtin.uri"]["headers"]) == {"x-auth-token"}
@@ -453,7 +458,35 @@ def test_rest_helper_never_shows_the_token_and_always_logs_out(repo_root):
     assert "fb_rest_ignore_errors" in last["when"]
     assert "token" not in last["ansible.builtin.assert"]["fail_msg"].lower()
     text = (repo_root / "playbooks" / "tasks" / "fb_rest.yml").read_text()
-    assert "fb_rest_api_version | default(fb_api_version | default('2.16'))" in text
+    # the version is settled per request: the newest the array serves at or
+    # above the endpoint's floor and the site's, or the pin when it is served
+    assert "/api/{{ fb_rest_version }}/" in text
+    assert "fb_rest_min_version | default('2.16')" in text
+    assert "fb_api_version | default('2.16')" in text
+    assert "fb_rest_api_version | default('', true)" in text
+    assert "Say why the request cannot be made" in names
+    assert names.index("Ask the array which REST versions it serves") < names.index(
+        "Log in to the array"
+    )
+
+
+def test_fb_rest_callers_give_floors_not_pins(repo_root):
+    """Every include of tasks/fb_rest.yml names the endpoint's floor through
+    fb_rest_min_version where one is above the default, and pins a version
+    only through the telemetry playbooks' optional telemetry_api_version."""
+    floors = set()
+    pins = set()
+    for path in sorted((repo_root / "playbooks").rglob("*.yml")):
+        if path.name == "fb_rest.yml":
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("fb_rest_min_version:"):
+                floors.add(stripped.split(":", 1)[1].split("#")[0].strip().strip('"'))
+            if stripped.startswith("fb_rest_api_version:"):
+                pins.add(stripped.split(":", 1)[1].strip())
+    assert floors == {"2.20", "2.21", "{{ qos_api_version }}"}
+    assert pins == {"\"{{ telemetry_api_version | default('') }}\""}
 
 
 def test_s3_helper_never_shows_a_key_and_never_fails(repo_root):

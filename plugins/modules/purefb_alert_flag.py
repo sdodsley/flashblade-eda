@@ -12,8 +12,9 @@ description:
   - Set the flag on one alert of the array. The flag is the array's own
     "somebody is looking at this" mark; the automation sets it when it has
     acted on an alert and clears it when the alert is handed back.
-  - Works over REST (C(PATCH /alerts)), which the collection has no module
-    for. Needs the C(requests) library.
+  - Works over REST (C(PATCH /alerts), at the newest version the array
+    serves), which the collection has no module for. Needs the C(requests)
+    library.
 author:
   - Simon Dodsley (@sdodsley)
 options:
@@ -30,9 +31,9 @@ options:
     required: true
   api_version:
     description:
-      - REST version the requests ask for.
+      - REST version the requests ask for. By default the newest version
+        the array serves, 2.16 at least.
     type: str
-    default: "2.21"
 extends_documentation_fragment:
   - everpure.flashblade.everpure.fb
 """
@@ -115,6 +116,10 @@ def rest_error(status, data):
     return message or "status {0}".format(status)
 
 
+# the first REST version with the endpoints this module uses
+MIN_VERSION = (2, 16)
+
+
 class Rest:
     """The array over REST for what the negotiated SDK client lacks: one
     login with the api-token header, x-auth-token on every request under
@@ -138,7 +143,40 @@ class Rest:
             warnings.filterwarnings("ignore", message="Unverified HTTPS request")
         self.logged_in = False
 
+    def negotiate(self):
+        """Settle the REST version when none was given: the newest the array
+        serves, MIN_VERSION at least (GET /api/api_version needs no token)."""
+        if self.version:
+            return
+        versions = []
+        try:
+            res = self.session.request(
+                "GET", self.base + "/api/api_version", timeout=self.TIMEOUT
+            )
+            data = res.json()
+            if isinstance(data, dict):
+                versions = data.get("versions") or []
+        except (requests.exceptions.RequestException, ValueError, AttributeError):
+            versions = []
+        parsed = []
+        for text in versions:
+            parts = str(text).split(".")
+            if len(parts) == 2 and all(p.isdigit() for p in parts):
+                parsed.append((int(parts[0]), int(parts[1])))
+        parsed.sort()
+        if not parsed or parsed[-1] < MIN_VERSION:
+            self.module.fail_json(
+                msg="{0} serves REST {1}; this module needs {2}.{3} or newer".format(
+                    self.base,
+                    versions[-1] if versions else "nothing",
+                    MIN_VERSION[0],
+                    MIN_VERSION[1],
+                )
+            )
+        self.version = "{0}.{1}".format(parsed[-1][0], parsed[-1][1])
+
     def login(self):
+        self.negotiate()
         try:
             res = self.session.request(
                 "POST",
@@ -241,7 +279,7 @@ def main():
         dict(
             alert=dict(type="str", required=True),
             flagged=dict(type="bool", required=True),
-            api_version=dict(type="str", default="2.21"),
+            api_version=dict(type="str"),
         )
     )
     module = AnsibleModule(argument_spec, supports_check_mode=True)

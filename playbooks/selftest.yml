@@ -32,7 +32,7 @@
     store: "{{ (object_store | default({}))[inventory_hostname] | default({}) }}"
     checks: "{{ selftest_checks | default(['rest', 's3', 'audit', 'telemetry', 'prometheus']) }}"
     # a REST version to pin; empty means the newest the array serves, 2.21 at
-    # least (tasks/fb_api_version.yml)
+    # least (tasks/fb_rest.yml)
     telemetry_api_version: ""
   tasks:
     - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
@@ -122,7 +122,7 @@
           vars:
             fb_rest_method: GET
             fb_rest_path: "audit-object-store-policies?names={{ audit_baseline.policy }}"
-            fb_rest_api_version: "2.20"  # the object-audit endpoints arrived with REST 2.20
+            fb_rest_min_version: "2.20"  # the object-audit endpoints arrived with REST 2.20
             fb_rest_ignore_errors: true
 
         - name: Keep the policy
@@ -136,7 +136,7 @@
           vars:
             fb_rest_method: GET
             fb_rest_path: "audit-object-store-policies/members?policy_names={{ audit_baseline.policy }}"
-            fb_rest_api_version: "2.20"  # the object-audit endpoints arrived with REST 2.20
+            fb_rest_min_version: "2.20"  # the object-audit endpoints arrived with REST 2.20
             fb_rest_ignore_errors: true
 
         - name: Keep the members
@@ -151,7 +151,7 @@
           vars:
             fb_rest_method: GET
             fb_rest_path: "buckets/audit-filters"
-            fb_rest_api_version: "2.20"  # the object-audit endpoints arrived with REST 2.20
+            fb_rest_min_version: "2.20"  # the object-audit endpoints arrived with REST 2.20
             fb_rest_ignore_errors: true
 
         - name: Keep the buckets that carry a filter
@@ -178,26 +178,17 @@
     - name: Check the telemetry target
       when: "'telemetry' in checks"
       block:
-        # the versions list needs no token; telemetry needs REST 2.21 or newer
-        - name: Settle the REST version the telemetry endpoints are asked for
-          when: telemetry_endpoint | default('') | length > 0
-          ansible.builtin.include_tasks:
-            file: "{{ playbook_dir }}/tasks/fb_api_version.yml"
-
-        - name: Decide whether this array can hold a telemetry target
-          ansible.builtin.set_fact:
-            telemetry_wanted: >-
-              {{ (telemetry_endpoint | default('') | length) > 0
-                 and (telemetry_rest_version | default('') | length) > 0 }}
-
+        # telemetry needs REST 2.21 or newer; fb_rest.yml asks for the newest the
+        # array serves and answers status 0 when it serves nothing new enough
         - name: Read the telemetry target
-          when: telemetry_wanted | bool
+          when: telemetry_endpoint | default('') | length > 0
           ansible.builtin.include_tasks:
             file: "{{ playbook_dir }}/tasks/fb_rest.yml"
           vars:
             fb_rest_method: GET
             fb_rest_path: "telemetry-targets?names={{ telemetry_target_name | default('eda-prom') }}"
-            fb_rest_api_version: "{{ telemetry_rest_version }}"
+            fb_rest_min_version: "2.21"
+            fb_rest_api_version: "{{ telemetry_api_version | default('') }}"
             fb_rest_ignore_errors: true
 
         - name: Keep the telemetry result
@@ -205,8 +196,8 @@
             results: >-
               {{ results | combine({'telemetry': {'ok': true, 'skipped': true, 'detail': 'telemetry_endpoint is empty'}
                                     if (telemetry_endpoint | default('') | length) == 0
-                                    else {'ok': true, 'skipped': true, 'detail': 'the array serves no REST version with telemetry (2.21 or newer)'}
-                                    if not telemetry_wanted | bool
+                                    else {'ok': true, 'skipped': true, 'detail': fb_rest_error | trim}
+                                    if (fb_rest_status | int) == 0
                                     else {'ok': (fb_rest_status | int) == 200 and ((fb_rest_json['items'] | default([{}]))[0].enabled | default(false) | bool),
                                           'skipped': false,
                                           'detail': ('target ' ~ (telemetry_target_name | default('eda-prom')) ~ ' enabled=' ~ ((fb_rest_json['items'] | default([{}]))[0].enabled | default(false))

@@ -19,8 +19,8 @@
 # the assignment (PATCH /file-systems qos_policy with an empty name, the
 # form qos_lift.yml uses; a null policy is tried when the array refuses
 # that) and keeps the policy object for the next time. Both actions are
-# idempotent. QoS policies arrived with REST 2.17, so the requests ask for
-# that version whatever fb_api_version says.
+# idempotent. QoS policies arrived with REST 2.17, the floor the requests
+# give tasks/fb_rest.yml.
 # verify: which clearing form the array accepts (the contract leaves it
 # open; the record names the one that worked).
 - name: Tarpit a file system or lift the tarpit
@@ -61,7 +61,7 @@
       vars:
         fb_rest_method: GET
         fb_rest_path: "file-systems?names={{ file_system }}"
-        fb_rest_api_version: "{{ qos_api_version }}"
+        fb_rest_min_version: "{{ qos_api_version }}"
         fb_rest_ignore_errors: true
 
     - name: Keep what the array said
@@ -120,7 +120,7 @@
             fb_rest_method: PATCH
             fb_rest_path: "file-systems?names={{ file_system }}"
             fb_rest_body: "{{ {'qos_policy': {'name': ''}} }}"
-            fb_rest_api_version: "{{ qos_api_version }}"
+            fb_rest_min_version: "{{ qos_api_version }}"
             fb_rest_ignore_errors: true
 
         - name: Keep the first attempt
@@ -137,7 +137,7 @@
             fb_rest_method: PATCH
             fb_rest_path: "file-systems?names={{ file_system }}"
             fb_rest_body: "{{ {'qos_policy': none} }}"
-            fb_rest_api_version: "{{ qos_api_version }}"
+            fb_rest_min_version: "{{ qos_api_version }}"
             fb_rest_ignore_errors: true
 
         - name: Keep the second attempt

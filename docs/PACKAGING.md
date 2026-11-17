@@ -159,9 +159,17 @@ playbooks and `tools/telemetry_rules.py`) ask for the newest version the
 array serves; `get_software_installations` and `get_workloads` arrive
 later still. Where a playbook needs an endpoint the
 collection has no module for, `playbooks/tasks/fb_rest.yml` calls it with
-`ansible.builtin.uri` against `/api/<fb_api_version>/`, default 2.16, the
-floor for maintenance windows. Raising `fb_api_version` is a site choice,
-not a code change.
+`ansible.builtin.uri` at the newest REST version the array serves
+(`GET /api/api_version`, read once per array and play) at or above the
+endpoint's floor (`fb_rest_min_version`: 2.16 maintenance windows, 2.17
+QoS, 2.20 object audit, 2.21 telemetry) and the site's (`fb_api_version`,
+default 2.16); an array that serves nothing new enough gets status 0 and
+the reason instead of a request, and a pinned `fb_rest_api_version` must
+be served. The modules that speak REST themselves (`purefb_alert_flag`,
+`purefb_qos`, `purefb_telemetry_target`, `purefb_telemetry_policy`)
+negotiate the same way when `api_version` is not given. On the lab every
+endpoint the playbooks read answers the same fields at its floor and at
+2.30.
 
 ## Moving the content into everpure.flashblade
 

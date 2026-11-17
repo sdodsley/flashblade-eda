@@ -527,10 +527,13 @@ certs_auto_renew: false
 certs_renew_days: 365
 
 # --- REST ----------------------------------------------------------------
-# REST version tasks/fb_rest.yml asks for where no collection module exists
-# (alert flag, maintenance windows, quota usage). 2.16 is Purity//FB 4.5.2,
-# the first with maintenance windows; the QoS playbooks ask for 2.17
-# themselves. Set it higher for a newer array, never above what it serves.
+# The site's floor for the REST version tasks/fb_rest.yml asks for where no
+# collection module exists (alert flag, maintenance windows, quota usage,
+# QoS, object audit, telemetry): each request takes the newest version the
+# array serves at or above the greater of this and the endpoint's own floor
+# (2.16 maintenance windows, 2.17 QoS, 2.20 object audit, 2.21 telemetry),
+# and refuses an array that serves nothing new enough. 2.16 is Purity//FB
+# 4.5.2. Raise it to hold every request above some version; it never pins.
 fb_api_version: "2.16"
 
 # --- Ansible Automation Platform ------------------------------------------

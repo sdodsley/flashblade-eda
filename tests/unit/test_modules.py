@@ -1862,6 +1862,25 @@ def test_telemetry_modules_ask_for_the_newest_version_the_array_serves():
     assert rest.logins == 0 and rest.calls == []
 
 
+def test_alert_flag_and_qos_ask_for_the_newest_version_the_array_serves():
+    rest = FakeRest(alerts=[alert_row()])
+    rest.api_versions = ["2.16", "2.21", "2.30"]
+    run(ALERT_FLAG, FakeClient(), rest=rest, alert="1042", flagged=False)
+    assert rest.versions == {"2.30"}
+    client = FakeClient(qos=[qos_row()], buckets=[object_row("eda-data")])
+    rest = FakeRest(client=client)
+    rest.api_versions = ["2.17", "2.21", "2.30"]
+    run(QOS, client, rest=rest, name="eda-tarpit", buckets=["eda-data"])
+    assert rest.versions == {"2.30"}
+    # an array below the floor is refused before any login
+    client = FakeClient(qos=[qos_row()], buckets=[object_row("eda-data")])
+    rest = FakeRest(client=client)
+    rest.api_versions = ["2.15", "2.16"]
+    result = run(QOS, client, rest=rest, name="eda-tarpit", buckets=["eda-data"])
+    assert result["failed"] is True and "2.17" in result["msg"]
+    assert rest.logins == 0
+
+
 # ------------------------------------------------------------ telemetry policy
 
 

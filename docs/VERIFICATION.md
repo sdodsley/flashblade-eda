@@ -167,7 +167,7 @@ run from a checkout.
 | 2 | a maintenance window opened and closed, the identify LED lit and cleared on `CH1.FB1`, the audits signal with a ten-minute lookback | `maintenance_active` true on the health event; the LED changes; the audit entries name the window and the LED | passed |
 | 3 | `purity.alert` lines captured during the upgrade | parsed, the multi-word `Waiting To Downgrade` state included | passed after the layout fix; the lines are fixtures of `tests/unit/test_syslog_parse.py` |
 | 4 | the telemetry metric policies at 2.30 | `tools/telemetry_rules.py --check --array-name fb-a` agrees with the committed rule file | passed: twelve rules naming collections at 30 s or 5 min; `prometheus/flashblade.rules.yml` is generated from that listing and loaded by the lab's Prometheus |
-| 5 | `telemetry_check.yml` and the selftest's `rest` and `telemetry` checks against the array | the target is read at the REST version `tasks/fb_api_version.yml` settles (2.30) and the delivery test answers | passed: verdict `healthy`, the test answers 200 with a reachability result per controller; selftest `rest` Purity//FB 4.8.8, `telemetry` target enabled |
+| 5 | `telemetry_check.yml` and the selftest's `rest` and `telemetry` checks against the array | the target is read at the REST version `tasks/fb_rest.yml` settles (2.30) and the delivery test answers | passed: verdict `healthy`, the test answers 200 with a reachability result per controller; selftest `rest` Purity//FB 4.8.8, `telemetry` target enabled |
 | 6 | the older REST versions the playbooks pin (2.16 maintenance windows, 2.17 QoS policies, 2.20 object audit and log targets) | still served | passed |
 
 ## Not verified

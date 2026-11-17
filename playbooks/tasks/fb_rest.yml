@@ -4,7 +4,7 @@
 #
 # One FlashBlade REST request, for what everpure.flashblade has no module
 # for: the alert flag, maintenance windows, QoS policies, per-file-system
-# quota usage. Included with:
+# quota usage, telemetry. Included with:
 #   fb_rest_method        GET | POST | PATCH | DELETE (default GET)
 #   fb_rest_path          path under /api/<version>/, query string included,
 #                         e.g. "maintenance-windows?names=array"
@@ -13,13 +13,25 @@
 #   fb_rest_status_codes  statuses that count as success (default [200])
 #   fb_rest_ignore_errors true leaves the decision to the caller (default
 #                         false: a status outside the list fails the include)
-#   fb_rest_api_version   REST version (default fb_api_version, else "2.16":
-#                         maintenance windows arrived there; QoS policies need
-#                         2.17 and the callers say so)
+#   fb_rest_min_version   the REST version the endpoint arrived with (default
+#                         "2.16", maintenance windows; QoS 2.17, object audit
+#                         2.20, telemetry 2.21). The request asks for the
+#                         newest version the array serves at or above the
+#                         greater of this floor and fb_api_version, the
+#                         site's own floor: an endpoint can stop answering at
+#                         old versions (telemetry does from Purity//FB 4.8,
+#                         below 2.29) while every version keeps the fields
+#                         the playbooks read. The versions list
+#                         (GET /api/api_version, no token) is read once per
+#                         array and play and kept in fb_rest_served.
+#   fb_rest_api_version   a version to pin instead, for a caller that must
+#                         ask for one in particular; the array has to serve it
 #   fb_rest_url, fb_rest_token  default to fb_url and api_token of the host
-# Leaves fb_rest_status (compare it with | int), fb_rest_json (the parsed
-# body, {} when there is none) and fb_rest_error (the array's first error
-# message, "" on success) set.
+# Leaves fb_rest_status (compare it with | int; 0 when the array serves no
+# version the request can use, the reason in fb_rest_error), fb_rest_json
+# (the parsed body, {} when there is none), fb_rest_error (the array's first
+# error message, "" on success) and fb_rest_version (the version asked, ""
+# when none could be) set.
 # Session: POST /api/login with the api-token header returns an x-auth-token
 # header that the request carries; POST /api/logout ends the session, so the
 # array's session list does not grow by one login per playbook run. Every
@@ -35,7 +47,59 @@
       {{ (fb_rest_url | default(fb_url)) | string | regex_replace('/+$', '')
          | regex_replace('^(?!https?://)', 'https://') }}
 
+- name: Ask the array which REST versions it serves
+  when: fb_rest_base not in (fb_rest_served | default({}))
+  ansible.builtin.uri:
+    url: "{{ fb_rest_base }}/api/api_version"
+    method: GET
+    return_content: true
+    validate_certs: "{{ fb_validate_certs | default(false) | bool }}"
+    timeout: 20
+  register: fb_rest_versions_probe
+  failed_when: false
+
+- name: Keep the versions the array serves
+  when: fb_rest_versions_probe is not skipped
+  ansible.builtin.set_fact:
+    fb_rest_served: >-
+      {{ (fb_rest_served | default({}))
+         | combine({fb_rest_base: (fb_rest_versions_probe.json.versions | default([]))}) }}
+
+# the newest 2.x the array serves at or above the floor, or the pinned
+# version when the array serves it; "" when neither can be had
+- name: Settle the REST version for the request
+  ansible.builtin.set_fact:
+    fb_rest_floor: >-
+      2.{{ ['2.16', fb_rest_min_version | default('2.16') | string, fb_api_version | default('2.16') | string]
+           | select('match', '^2[.][0-9]+$') | map('regex_replace', '^2[.]', '') | map('int') | list | max }}
+    fb_rest_newest: >-
+      {{ ((fb_rest_served | default({}))[fb_rest_base] | default([]) | map('string')
+          | select('match', '^2[.][0-9]+$') | list | last) | default('none') }}
+    fb_rest_version: >-
+      {%- set served = (fb_rest_served | default({}))[fb_rest_base] | default([]) | map('string') | select('match', '^2[.][0-9]+$') | list -%}
+      {%- set pin = fb_rest_api_version | default('', true) | string -%}
+      {%- set floor = ['2.16', fb_rest_min_version | default('2.16') | string, fb_api_version | default('2.16') | string]
+                      | select('match', '^2[.][0-9]+$') | map('regex_replace', '^2[.]', '') | map('int') | list | max -%}
+      {%- if pin | length > 0 -%}
+      {{ pin if pin in served else '' }}
+      {%- else -%}
+      {%- set minors = served | map('regex_replace', '^2[.]', '') | map('int') | select('ge', floor) | list -%}
+      {{ ('2.' ~ (minors | max)) if minors else '' }}
+      {%- endif -%}
+
+- name: Say why the request cannot be made
+  when: fb_rest_version | length == 0
+  ansible.builtin.set_fact:
+    fb_rest_status: 0
+    fb_rest_json: {}
+    fb_rest_error: >-
+      {{ (fb_rest_base ~ ' did not list its REST versions') if fb_rest_newest == 'none'
+         else (fb_rest_base ~ ' does not serve REST ' ~ fb_rest_api_version ~ ' (it serves up to ' ~ fb_rest_newest ~ ')')
+         if (fb_rest_api_version | default('', true) | string | length) > 0
+         else (fb_rest_base ~ ' serves REST up to ' ~ fb_rest_newest ~ '; ' ~ fb_rest_path ~ ' needs ' ~ fb_rest_floor ~ ' or newer') }}
+
 - name: Log in to the array
+  when: fb_rest_version | length > 0
   ansible.builtin.uri:
     url: "{{ fb_rest_base }}/api/login"
     method: POST
@@ -48,8 +112,9 @@
   no_log: true
 
 - name: Send the request
+  when: fb_rest_version | length > 0
   ansible.builtin.uri:
-    url: "{{ fb_rest_base }}/api/{{ fb_rest_api_version | default(fb_api_version | default('2.16')) }}/{{ fb_rest_path }}"
+    url: "{{ fb_rest_base }}/api/{{ fb_rest_version }}/{{ fb_rest_path }}"
     method: "{{ fb_rest_method | default('GET') }}"
     headers:
       x-auth-token: "{{ fb_login.x_auth_token }}"
@@ -63,6 +128,7 @@
   no_log: true
 
 - name: Keep the outcome (status, body and error message; never the token)
+  when: fb_rest_version | length > 0
   ansible.builtin.set_fact:
     fb_rest_status: "{{ fb_rest_raw.status | default(-1) }}"
     fb_rest_json: "{{ fb_rest_raw.json | default({}) }}"
@@ -73,6 +139,7 @@
                else fb_rest_raw.msg | default('no response')) | string | truncate(240) }}
 
 - name: Log out of the array
+  when: fb_rest_version | length > 0
   ansible.builtin.uri:
     url: "{{ fb_rest_base }}/api/logout"
     method: POST
@@ -91,4 +158,4 @@
     quiet: true
     fail_msg: >-
       {{ fb_rest_method | default('GET') }} {{ fb_rest_path }} on {{ fb_rest_base }}
-      returned {{ fb_rest_status }}: {{ fb_rest_error | trim }}
+      (REST {{ fb_rest_version | default('none') }}) returned {{ fb_rest_status }}: {{ fb_rest_error | trim }}
