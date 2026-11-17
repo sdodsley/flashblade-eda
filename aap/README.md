@@ -492,7 +492,13 @@ the same flags and environment as the audit, so a oneshot user unit
 ordered after the platform's units (`After=automation-gateway.service
 automation-eda-api.service automation-eda-daphne.service
 automation-eda-activation-worker-1.service`) runs it at boot, reading the
-token from a file at run time rather than carrying it in the unit.
+token from a file at run time rather than carrying it in the unit. It makes
+at least two passes, ninety seconds apart: the first reads after the API
+comes up can show an activation as running from before the reboot, which
+the worker marks failed seconds later. The platform host keeps no user
+journal, so the unit's output is read from the system journal with
+`journalctl _SYSTEMD_USER_UNIT=<unit>.service` and its result with
+`systemctl --user show <unit> -p ExecMainStatus`.
 
 ## Re-running safely
 

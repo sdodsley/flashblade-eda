@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `tools/activation_restart.py` makes at least two passes, ninety seconds
+  apart: the first reads after the EDA API comes up can show an activation
+  as running from before the reboot, which the worker marks failed seconds
+  later. An activation that used its restarts is not restarted again.
+
 ## 0.1.2 (2026-11-17)
 
 Hardening on a shared, containerized platform and the lab array's move to

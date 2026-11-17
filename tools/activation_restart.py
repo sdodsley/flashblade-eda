@@ -16,7 +16,11 @@ rulebook - <file stem>", never the listing), leaves the disabled and the
 running ones alone, waits for one that is starting, and restarts each
 other one through its restart endpoint, waiting for it to run before the
 next, up to three restarts each (an early start can meet the websocket
-service before it is ready). Nothing but these names is touched. The exit
+service before it is ready). It makes at least two passes, ninety seconds
+apart: the first reads after the API comes up can show an activation as
+running from before the reboot, which the worker marks failed seconds
+later; a pass that finds nothing to do ends the run. Nothing but these
+names is touched. The exit
 status is 1 when the API never answered or an activation does not run at
 the end, so a oneshot unit's ExecMainStatus tells the result; a rulebook
 file whose activation is missing is reported and left to the audit. The
@@ -40,6 +44,8 @@ POLL_SECONDS = 10  # between reads while waiting for the API or for a start
 START_WAIT_SECONDS = 300  # for one start to reach running
 RESTARTS = 3  # restarts of one activation before giving up
 GAP_SECONDS = 10  # after a restart, before the next activation
+PASSES = 4  # passes over the names before giving up
+PASS_GAP_SECONDS = 90  # between two passes
 # statuses that end by themselves: the start is under way or being undone
 IN_FLIGHT = ("starting", "pending", "stopping", "workers offline")
 
@@ -127,6 +133,48 @@ def tend(client, aid, name, say):
     return detail, restarts
 
 
+def run_pass(client, names, say, exhausted):
+    """One pass over the names: the enabled activations not running at its
+    end and the restarts issued. An activation that used its restarts in an
+    earlier pass (`exhausted`) is read and reported, not restarted again."""
+    wrong = 0
+    restarted = 0
+    for name in names:
+        try:
+            found = client.activations_named(name)
+        except audit.AuditError as exc:
+            say(f"{name}: {exc}")
+            wrong += 1
+            continue
+        if not found:
+            say(f"{name}: not on the controller")
+            continue
+        for summary in sorted(found, key=lambda a: a["id"]):
+            aid = summary["id"]
+            try:
+                if aid in exhausted:
+                    detail = read(client, aid)
+                    restarts = 0
+                    if detail.get("is_enabled") and detail.get("status") != "running":
+                        say(
+                            f"{name} (id {aid}): still {detail.get('status')}; gave up earlier"
+                        )
+                else:
+                    detail, restarts = tend(client, aid, name, say)
+                    if restarts >= RESTARTS and detail.get("status") != "running":
+                        exhausted.add(aid)
+            except audit.AuditError as exc:
+                say(f"{name} (id {aid}): {exc}")
+                wrong += 1
+                continue
+            if restarts:
+                restarted += 1
+                time.sleep(GAP_SECONDS)
+            if detail.get("is_enabled") and detail.get("status") != "running":
+                wrong += 1
+    return wrong, restarted
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="activation_restart",
@@ -178,33 +226,22 @@ def main(argv=None):
     if not wait_for_api(client, args.wait_minutes, say):
         return 1
 
-    wrong = 0
+    # the first reads after the API comes up can show the state from before
+    # the reboot, so at least two passes, until one has nothing to do
+    exhausted = set()
     restarted = 0
-    for name in names:
-        try:
-            found = client.activations_named(name)
-        except audit.AuditError as exc:
-            say(f"{name}: {exc}")
-            wrong += 1
-            continue
-        if not found:
-            say(f"{name}: not on the controller")
-            continue
-        for summary in sorted(found, key=lambda a: a["id"]):
-            try:
-                detail, restarts = tend(client, summary["id"], name, say)
-            except audit.AuditError as exc:
-                say(f"{name} (id {summary['id']}): {exc}")
-                wrong += 1
-                continue
-            if restarts:
-                restarted += 1
-                time.sleep(GAP_SECONDS)
-            if detail.get("is_enabled") and detail.get("status") != "running":
-                wrong += 1
+    number = 0
+    for number in range(1, PASSES + 1):
+        wrong, now = run_pass(client, names, say, exhausted)
+        restarted += now
+        say(f"pass {number}: {now} restarted, {wrong} not running")
+        if number > 1 and not now and not wrong:
+            break
+        if number < PASSES:
+            time.sleep(PASS_GAP_SECONDS)
     say(
         f"activation_restart: {len(names)} name(s), {restarted} restarted, "
-        f"{wrong} not running"
+        f"{wrong} not running, {number} pass(es)"
     )
     return 1 if wrong else 0
 

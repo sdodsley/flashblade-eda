@@ -45,6 +45,12 @@ class Handler(fake.Handler):
             return self._send(200, {"status": "ok"})
         for a in store.activations:
             if self.path == f"/api/eda/v1/activations/{a['id']}/":
+                # the API, just up, still shows the state from before the reboot
+                stale = store.stale_running.get(a["id"])
+                if stale:
+                    store.stale_running[a["id"]] = stale - 1
+                    store.calls.append(("GET", self.path))
+                    return self._send(200, dict(a, status="running"))
                 # a start under way reaches running after so many reads
                 left = store.reads_to_running.get(a["id"])
                 if left is not None:
@@ -83,6 +89,7 @@ class Store(fake.Store):
         self.restart_fails = {}  # id -> restarts that end failed before one runs
         self.restart_starting = {}  # id -> reads a restart stays "starting"
         self.reads_to_running = {}  # id -> reads until a start reaches running
+        self.stale_running = {}  # id -> reads answered "running" from before a reboot
 
 
 @pytest.fixture
@@ -121,6 +128,7 @@ def _quick(monkeypatch, restart):
     monkeypatch.setenv("AAP_TOKEN", "tok")
     monkeypatch.setattr(restart, "POLL_SECONDS", 0)
     monkeypatch.setattr(restart, "GAP_SECONDS", 0)
+    monkeypatch.setattr(restart, "PASS_GAP_SECONDS", 0)
 
 
 def _posts(store):
@@ -213,3 +221,29 @@ def test_gives_up_when_the_api_never_answers(
     assert code == 1
     assert "the EDA API did not answer within 0 minute(s)" in out
     assert not [p for m, p in store.calls if "activations" in p]
+
+
+def test_a_second_pass_catches_the_state_from_before_the_reboot(
+    restart, store, rulebooks, capsys, monkeypatch
+):
+    _quick(monkeypatch, restart)
+    store.activations = [_activation(2, "alerts", "failed")]
+    store.stale_running = {2: 1}
+    assert restart.main(["--url", store.url, "--rulebooks", str(rulebooks)]) == 0
+    out = capsys.readouterr().out
+    assert "pass 1: 0 restarted, 0 not running" in out
+    assert "pass 2: 1 restarted, 0 not running" in out
+    assert len(_posts(store)) == 1
+    assert "3 pass(es)" in out
+
+
+def test_an_activation_that_used_its_restarts_is_not_restarted_again(
+    restart, store, rulebooks, capsys, monkeypatch
+):
+    _quick(monkeypatch, restart)
+    store.activations = [_activation(2, "alerts", "failed")]
+    store.restart_fails = {2: 9}
+    assert restart.main(["--url", store.url, "--rulebooks", str(rulebooks)]) == 1
+    out = capsys.readouterr().out
+    assert len(_posts(store)) == 3
+    assert "gave up earlier" in out and "4 pass(es)" in out
