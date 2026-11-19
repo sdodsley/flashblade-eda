@@ -6,6 +6,10 @@
   apart: the first reads after the EDA API comes up can show an activation
   as running from before the reboot, which the worker marks failed seconds
   later. An activation that used its restarts is not restarted again.
+- The syslog rulebook notifies an open alert once a day instead of once
+  every ten minutes: the array repeats the alert's line every quarter hour
+  while it stays open, so the throttle now keys on the alert's first-seen
+  time, which a re-opened alert changes.
 
 ## 0.1.2 (2026-11-17)
 

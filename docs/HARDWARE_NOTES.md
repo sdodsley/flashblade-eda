@@ -167,7 +167,9 @@ stated; a legacy FlashBlade on 4.5.6 (REST 2.17) is its replication peer
   Time: ...#012Array Name: ...#012Array ID: ...#012Purity//FB Version:
   ...#012Details: ...#012Suggested Action: ...#012Knowledge Base Article:
   <url>`, the state one or more words (`Open`, `Closing`, `Closed`,
-  `Waiting To Downgrade`) and `Suggested Action` sometimes blank, and
+  `Waiting To Downgrade`) and `Suggested Action` sometimes blank; the array
+  repeats an open alert's line every quarter hour for as long as the alert
+  stays open, with the same `First Seen UTC Time`, and
   `<ts> <fm-host> purity.audit: - Adding audit entry. GUID=<guid>, ID=<n>,
   Time=<yyyy-mm-dd hh:mm:ss.ffffff>, User=<user>, Location=<ip>,
   UI=CLI|GUI|REST, Command=<cmd>, Subcommand=<sub>, Arguments=<args>`,

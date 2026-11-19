@@ -551,3 +551,25 @@ def test_syslog_alerts_are_graded_by_state():
         closing = rules["Alert closing via syslog - log"]
         assert 'state in ["closing", "waiting to downgrade"]' in closing["condition"]
         assert "debug" in closing["action"]
+
+
+def test_syslog_open_alerts_are_notified_once_a_day():
+    """The array repeats an open alert's line every quarter hour; the syslog
+    rulebook holds the notification for a day per alert, keyed by the
+    alert's first-seen time so a re-opened alert is notified again."""
+    for path in (
+        pathlib.Path("extensions/eda/rulebooks/syslog.yml"),
+        pathlib.Path("extensions/eda/rulebooks/platform/syslog.yml"),
+    ):
+        rules = {
+            r["name"]: r
+            for r in yaml.safe_load(path.read_text(encoding="utf-8"))[0]["rules"]
+        }
+        throttle = rules["Alert via syslog - notify"]["throttle"]
+        assert throttle["once_within"] == "24 hours"
+        assert throttle["group_by_attributes"] == [
+            "event.purefb_syslog_alert.array",
+            "event.purefb_syslog_alert.code",
+            "event.purefb_syslog_alert.subject",
+            "event.purefb_syslog_alert.first_seen",
+        ]

@@ -27,11 +27,12 @@
     - name: Alert via syslog - notify
       condition: event.purefb_syslog_alert.severity in ["warning", "critical"] and event.purefb_syslog_alert.state not in ["closing", "closed", "waiting to downgrade"]
       throttle:
-        once_within: 10 minutes
+        once_within: 24 hours
         group_by_attributes:
           - event.purefb_syslog_alert.array
           - event.purefb_syslog_alert.code
           - event.purefb_syslog_alert.subject
+          - event.purefb_syslog_alert.first_seen
       action:
         run_job_template:
           name: FlashBlade - notify

@@ -43,17 +43,21 @@
     # severity is for an open alert (or one whose line the layout did not
     # cover, state unknown); closed gets one notice at info and closing and
     # waiting to downgrade are logged, as alerts.yml does for the REST
-    # transitions.
+    # transitions. The array repeats an open alert's line every quarter
+    # hour for as long as it stays open, so the notification is held for a
+    # day per alert: a repeat carries the same first-seen time, a re-opened
+    # alert a new one.
     - name: Alert via syslog - notify
       condition: >-
         event.purefb_syslog_alert.severity in ["warning", "critical"] and
         event.purefb_syslog_alert.state not in ["closing", "closed", "waiting to downgrade"]
       throttle:
-        once_within: 10 minutes
+        once_within: 24 hours
         group_by_attributes:
           - event.purefb_syslog_alert.array
           - event.purefb_syslog_alert.code
           - event.purefb_syslog_alert.subject
+          - event.purefb_syslog_alert.first_seen
       action:
         run_playbook:
           name: playbooks/notify.yml
