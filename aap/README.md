@@ -500,6 +500,12 @@ journal, so the unit's output is read from the system journal with
 `journalctl _SYSTEMD_USER_UNIT=<unit>.service` and its result with
 `systemctl --user show <unit> -p ExecMainStatus`.
 
+A start is also a load event: the worker gives it sixty seconds to become
+ready and stops it otherwise, so after a storm (a reboot, a recreate of
+several activations) enable or restart activations one at a time and let
+the host settle between them; two activations in restart loops are enough
+to keep a small host too busy for either to make it.
+
 ## Re-running safely
 
 Run the same command again. Objects are matched by name and only

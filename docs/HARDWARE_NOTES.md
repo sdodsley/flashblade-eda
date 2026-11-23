@@ -777,6 +777,14 @@ and write them.
   compares an int by its digits and never matches a dict, and `(x is not
   defined or x is match(...))` accepts an absent or a well-formed field.
 
+- The activation worker gives a start sixty seconds to become ready
+  (`RULEBOOK_READINESS_TIMEOUT_SECONDS`, the platform's default) and stops
+  the container as unresponsive otherwise. A start pays one `ansible-galaxy
+  collection list` for every FQCN the rulebook names (a source or a filter),
+  the rule engine's Java start and the source's imports, so a loaded host
+  misses the budget; the worker's own retries bring the activation up when
+  the host is quieter. Start activations one at a time.
+
 ## Containerized platform
 
 Facts about the containerized Ansible Automation Platform 2.7 topology the
