@@ -74,8 +74,6 @@
         stale_rotations: "{{ stale_rotations }}"
         coverage_exclude: "{{ coverage_exclude }}"
         cursor_dir: "{{ object_audit_cursor_dir }}"
-      filters:
-        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     # A poll that fails once is a blip; one that keeps failing is an array
@@ -507,8 +505,6 @@
         audits_interval: "{{ audits_interval }}"
         automation_users: "{{ automation_users }}"
         automation_user_agents: "{{ automation_user_agents }}"
-      filters:
-        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     - name: Poll failing for many polls - escalate

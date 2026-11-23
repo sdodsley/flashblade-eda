@@ -56,8 +56,6 @@
         telemetry_interval: "{{ telemetry_interval }}"
         fs_quota_warn_pct: "{{ fs_quota_warn_pct }}"
         top_growers: 5
-      filters:
-        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     # A poll that fails once is a blip; one that keeps failing is an array

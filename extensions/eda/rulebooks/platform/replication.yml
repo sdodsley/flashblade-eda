@@ -24,8 +24,6 @@
         replication_lag_warn_s: '{{ replication_lag_warn_s }}'
         replication_ok_statuses: '{{ replication_ok_statuses }}'
         replication_escalate_polls: '{{ replication_escalate_polls }}'
-      filters:
-        - sdodsley.flashblade_eda.jinja_safe: null
   rules:
     - name: Poll failing for many polls - escalate
       condition: event.purefb_poll_error is defined and event.purefb_poll_error.escalate == true

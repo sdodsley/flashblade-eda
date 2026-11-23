@@ -37,8 +37,6 @@
         stale_rotations: '{{ stale_rotations }}'
         coverage_exclude: '{{ coverage_exclude }}'
         cursor_dir: '{{ object_audit_cursor_dir }}'
-      filters:
-        - sdodsley.flashblade_eda.jinja_safe: null
   rules:
     - name: Poll failing for many polls - escalate
       condition: event.purefb_poll_error is defined and event.purefb_poll_error.escalate == true
@@ -359,8 +357,6 @@
         audits_interval: '{{ audits_interval }}'
         automation_users: '{{ automation_users }}'
         automation_user_agents: '{{ automation_user_agents }}'
-      filters:
-        - sdodsley.flashblade_eda.jinja_safe: null
   rules:
     - name: Poll failing for many polls - escalate
       condition: event.purefb_poll_error is defined and event.purefb_poll_error.escalate == true

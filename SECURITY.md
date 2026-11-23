@@ -127,13 +127,15 @@ matters.
   Data-audit records arrive from every blade over the management VIP; a
   syslog server with the `data-audit` service is the audit pipeline, and
   alert 1139 is the array saying it dropped some of it.
-- **Event text is data.** Every source in every rulebook runs the
-  `sdodsley.flashblade_eda.jinja_safe` event filter, which keeps template
-  delimiters in an event's strings inert, so a playbook renders event text
-  (an alert summary, a syslog line, an object key, a webhook body, an LLDP
-  neighbour name) as text. The sources emit plain text themselves, the
-  rules hand it over unchanged and the playbooks keep it as text in their
-  records. The webhook, Alertmanager and syslog rules accept only
+- **Event text is data.** The project's three sources emit every string
+  of an event as plain text (template delimiters broken by a space), and
+  every stock `ansible.eda` source entry (webhook, Alertmanager, tick)
+  runs the `sdodsley.flashblade_eda.jinja_safe` event filter, which does
+  the same, so a playbook renders event text (an alert summary, a syslog
+  line, an object key, a webhook body, an LLDP neighbour name) as text.
+  The rules hand it over unchanged and the playbooks keep it as text in
+  their records. Keep the filter on any stock source a rulebook of your
+  own adds. The webhook, Alertmanager and syslog rules accept only
   well-formed array names, addresses and ids in the fields they hand to a
   playbook; a webhook request or an alert that does not fit is logged by
   the ruleset's last rule, and a syslog line whose array name does not

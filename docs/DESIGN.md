@@ -94,10 +94,12 @@ endpoints and events of the three plugins.
 | `purefb_syslog` | the FlashBlade layouts `purity.alert: <SEVERITY> <State> - <array>: (Alert ID: <uuid>) <subject> [<code>]` and `purity.audit: ... User=, Location=, UI=, Command=, Subcommand=, Arguments=`; a JSON branch for data-audit records keyed on `pf` `fb` or `fa` (one parser for both platforms); sliding windows per (fs, user, client_ip) emitting `purefb_file_activity` on a mass delete or a rename storm (SMB audit now, NFS audit from 4.8.0) | transport, header regexes, allow-list and emitter; the parsers rewritten; the TCP line limit raised from 16 KB to 128 KB |
 | `purefb_object_audit` | boto3 against the data VIP, `list_objects_v2` with `Prefix` and `StartAfter` on the log keys, whose lexical order is time order (`<array id>/<prefix>/<yyyy>/<mm>/<dd>/<HHMMSS>.A<authority>.<sequence>.log`), re-listing the last `late_windows` windows for late authorities; one `purefb_s3_event` per NDJSON record with the derived booleans (canary, landing, evidence, honey, approval, request, denied, delete, `by_automation`), one `purefb_s3_rollup` per log object (counts by event name, access key, source address and error code; the storm and mass-delete flags), one `purefb_audit_health` per poll (log age, quota, policy coverage); suffix, canary and honey matching in the plugin because bucket audit filters only take actions and prefixes; the cursor in a file and, optionally, in the state bucket | new; shares one event filter with `ansible.eda.kafka` so the rulebooks do not change at 4.10 |
 
-Every source entry runs the `jinja_safe` event filter
-(`extensions/eda/plugins/event_filter/`), which puts a space after each
-template delimiter in every string of the event, so event text is data
-when a playbook renders it. A rule whose action hands a sender-chosen
+The project's sources put a space after each template delimiter in every
+string of the events they emit, and every stock `ansible.eda` source entry
+runs the `jinja_safe` event filter (`extensions/eda/plugins/event_filter/`),
+which does the same, so event text is data when a playbook renders it (a
+source named by FQCN costs the activation an `ansible-galaxy` lookup at
+start-up, so the project's own sources carry no filters line). A rule whose action hands a sender-chosen
 field (an array name, a client address, a request id, an approver) to a
 playbook's `hosts:` line or to an object name pins that field in its
 condition with an anchored `is match`: the condition compares the value

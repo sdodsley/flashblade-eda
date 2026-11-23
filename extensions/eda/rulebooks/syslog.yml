@@ -41,8 +41,6 @@
         programs: "{{ syslog_programs }}"
         hostnames: "{{ syslog_hostnames }}"
         automation_users: "{{ automation_users }}"
-      filters:
-        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     # The array repeats the alert's severity word on every state change, so a

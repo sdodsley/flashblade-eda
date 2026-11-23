@@ -36,8 +36,6 @@
         top_clients: 10
         top_file_systems: 10
         top_buckets: 10
-      filters:
-        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     # A poll that fails once is a blip; one that keeps failing is an array

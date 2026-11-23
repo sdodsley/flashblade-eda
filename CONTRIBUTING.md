@@ -59,8 +59,9 @@ throttles included.
   three it has, and README.md's gating paragraph says so.
 - Every record a playbook appends to the alert log carries `time`, `kind`,
   `severity` and `array`.
-- Event text stays text. Every source entry carries the
-  `sdodsley.flashblade_eda.jinja_safe` filters line; an action template
+- Event text stays text. Every stock `ansible.eda` source entry carries
+  the `sdodsley.flashblade_eda.jinja_safe` filters line (the project's own
+  sources emit plain text themselves); an action template
   that opens with an event field is one expression ending in `| pprint`;
   a `set_fact` value built from text a rule handed in is one expression
   ending in `| string` as its last filter (a value that is deliberately a

@@ -23,8 +23,6 @@
           - alerts
         sessions_interval: '{{ sessions_interval }}'
         alerts_interval: '{{ alerts_interval }}'
-      filters:
-        - sdodsley.flashblade_eda.jinja_safe: null
   rules:
     - name: Poll failing for many polls - escalate
       condition: event.purefb_poll_error is defined and event.purefb_poll_error.escalate == true

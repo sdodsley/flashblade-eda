@@ -37,8 +37,6 @@
         cert_warn_days: "{{ cert_warn_days }}"
         coverage_exclude: "{{ coverage_exclude }}"
         posture_exclude_file_systems: "{{ posture_exclude_file_systems }}"
-      filters:
-        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     # A poll that fails once is a blip; one that keeps failing is an array

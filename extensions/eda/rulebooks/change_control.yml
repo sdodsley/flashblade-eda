@@ -35,8 +35,6 @@
         automation_users: "{{ automation_users }}"
         automation_user_agents: "{{ automation_user_agents }}"
         destructive_subcommands: "{{ destructive_subcommands }}"
-      filters:
-        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     # A poll that fails once is a blip; one that keeps failing is an array

@@ -23,8 +23,6 @@
         programs: '{{ syslog_programs }}'
         hostnames: '{{ syslog_hostnames }}'
         automation_users: '{{ automation_users }}'
-      filters:
-        - sdodsley.flashblade_eda.jinja_safe: null
   rules:
     - name: Alert via syslog - notify
       condition: event.purefb_syslog_alert.severity in ["warning", "critical"] and event.purefb_syslog_alert.state not in ["closing", "closed", "waiting to downgrade"] and event.purefb_syslog_alert.array is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$")

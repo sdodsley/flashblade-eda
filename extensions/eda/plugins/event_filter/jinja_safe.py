@@ -6,9 +6,11 @@ An event's strings come from outside the rulebook: an alert's summary from
 the array, a syslog line, an S3 object key, a webhook body, an LLDP
 neighbour name. The playbooks an action starts receive those strings as
 variables and render them, so text that happens to look like a template
-would be evaluated there. This filter runs on every source and puts a space
-after each template delimiter in every string of the event, keys and nested
-values included, so the text stays text wherever it travels:
+would be evaluated there. The project's own sources emit plain text
+themselves; this filter does the same for the stock sources (webhook,
+Alertmanager, tick), putting a space after each template delimiter in every
+string of the event, keys and nested values included, so the text stays text
+wherever it travels:
 
     {{  ->  { {        {%  ->  { %        {#  ->  { #        {{{  ->  { { {
     #jinja2  ->  # jinja2  (the header that would change the delimiters)
@@ -22,7 +24,7 @@ delimiter is reported with the space in it and is never run. Applying the
 filter twice changes nothing.
 
     sources:
-      - sdodsley.flashblade_eda.purefb_events:
+      - ansible.eda.webhook:
           ...
         filters:
           - sdodsley.flashblade_eda.jinja_safe:

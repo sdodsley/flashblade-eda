@@ -24,8 +24,6 @@
         automation_users: '{{ automation_users }}'
         automation_user_agents: '{{ automation_user_agents }}'
         destructive_subcommands: '{{ destructive_subcommands }}'
-      filters:
-        - sdodsley.flashblade_eda.jinja_safe: null
   rules:
     - name: Poll failing for many polls - escalate
       condition: event.purefb_poll_error is defined and event.purefb_poll_error.escalate == true

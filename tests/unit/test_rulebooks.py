@@ -580,9 +580,11 @@ def test_syslog_open_alerts_are_notified_once_a_day():
         ]
 
 
-# Event text is data: every source runs this filter, which keeps the template
+# Event text is data: the project's own sources emit plain text themselves
+# and every stock source runs this filter, which keeps the template
 # delimiters in every string of an event inert before a rule reads it.
 JINJA_SAFE_FILTER = "sdodsley.flashblade_eda.jinja_safe"
+OWN_SOURCE_PREFIX = "sdodsley.flashblade_eda.purefb_"
 JINJA_SAFE_FILE = pathlib.Path("extensions/eda/plugins/event_filter/jinja_safe.py")
 
 # The shape a sender-chosen value must have before a rule passes it to a
@@ -709,16 +711,21 @@ PINNED_CONDITIONS = [
 
 @pytest.mark.parametrize("path", RULEBOOKS + REPLAYS, ids=lambda p: p.name)
 def test_every_source_runs_the_jinja_safe_filter(path, repo_root):
-    """Every source of every ruleset runs the jinja_safe filter, so a template
-    delimiter in any string of an event is inert by the time a rule reads it
-    or hands it to a playbook. The replays' generic sources run it too, since
-    their fixtures stand in for the real sources."""
+    """Every stock source of every ruleset runs the jinja_safe filter, so a
+    template delimiter in any string of an event is inert by the time a rule
+    reads it or hands it to a playbook; the project's own sources emit plain
+    text themselves and carry no filters line (each FQCN costs the activation
+    an ansible-galaxy lookup at start-up). The replays' generic sources run
+    the filter too, since their fixtures stand in for the real sources."""
     assert (repo_root / JINJA_SAFE_FILE).exists(), f"{JINJA_SAFE_FILE} is missing"
     doc = yaml.safe_load(path.read_text())
     for ruleset in doc:
         for source in ruleset.get("sources") or []:
             kind = [k for k in source if k not in ("name", "filters")][0]
             where = f"{path.name}: {ruleset['name']} source {kind}"
+            if kind.startswith(OWN_SOURCE_PREFIX):
+                assert "filters" not in source, f"{where} carries a filters line"
+                continue
             filters = source.get("filters")
             assert isinstance(filters, list), f"{where} has no filters"
             assert any(
