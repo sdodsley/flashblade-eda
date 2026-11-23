@@ -59,6 +59,15 @@ throttles included.
   three it has, and README.md's gating paragraph says so.
 - Every record a playbook appends to the alert log carries `time`, `kind`,
   `severity` and `array`.
+- Event text stays text. Every source entry carries the
+  `sdodsley.flashblade_eda.jinja_safe` filters line; an action template
+  that opens with an event field is one expression ending in `| pprint`;
+  a `set_fact` value built from text a rule handed in is one expression
+  ending in `| string` as its last filter (a value that is deliberately a
+  number, a boolean, a list or a dict keeps its type), and a filter on
+  such text replaces characters, never removes them (a carriage return
+  becomes a space); every sender-chosen field used as a host or an object
+  name is pinned in the rule's condition with an anchored `is match`.
 - State that must survive a rulebook restart lives on the array or in a
   file, never in a rulebook fact. FlashBlade has no tags on file systems
   or buckets, so the array-side state is a name or a bit: QoS policies

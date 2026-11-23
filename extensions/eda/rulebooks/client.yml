@@ -62,9 +62,11 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row"
-            detail: "{{ event.purefb_poll_error.error }}"
-            target_array: "{{ event.purefb_poll_error.array }}"
+            subject: >-
+              {{ (event.purefb_poll_error.array ~ ' ' ~ event.purefb_poll_error.signal ~ ' poll has failed ' ~
+              event.purefb_poll_error.consecutive ~ ' times in a row') | pprint }}
+            detail: "{{ event.purefb_poll_error.error | pprint }}"
+            target_array: "{{ event.purefb_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Poll failed - notify once
@@ -81,9 +83,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed"
-            detail: "{{ event.purefb_poll_error.error }}"
-            target_array: "{{ event.purefb_poll_error.array }}"
+            subject: "{{ (event.purefb_poll_error.array ~ ' ' ~ event.purefb_poll_error.signal ~ ' poll failed') | pprint }}"
+            detail: "{{ event.purefb_poll_error.error | pprint }}"
+            target_array: "{{ event.purefb_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Report poll errors without acting
@@ -108,15 +110,15 @@
         run_playbook:
           name: playbooks/client_diagnose.yml
           extra_vars:
-            target_array: "{{ event.purefb_client_performance.array }}"
-            client: "{{ event.purefb_client_performance.client }}"
-            ops_share_pct: "{{ event.purefb_client_performance.ops_share_pct }}"
-            high_share_polls: "{{ event.purefb_client_performance.high_share_polls }}"
-            reads_per_sec: "{{ event.purefb_client_performance.reads_per_sec }}"
-            writes_per_sec: "{{ event.purefb_client_performance.writes_per_sec }}"
-            usec_per_write_op: "{{ event.purefb_client_performance.usec_per_write_op }}"
-            array_usec_per_write_op: "{{ event.purefb_client_performance.array_usec_per_write_op }}"
-            array_write_latency_ratio: "{{ event.purefb_client_performance.array_write_latency_ratio }}"
+            target_array: "{{ event.purefb_client_performance.array | pprint }}"
+            client: "{{ event.purefb_client_performance.client | pprint }}"
+            ops_share_pct: "{{ event.purefb_client_performance.ops_share_pct | pprint }}"
+            high_share_polls: "{{ event.purefb_client_performance.high_share_polls | pprint }}"
+            reads_per_sec: "{{ event.purefb_client_performance.reads_per_sec | pprint }}"
+            writes_per_sec: "{{ event.purefb_client_performance.writes_per_sec | pprint }}"
+            usec_per_write_op: "{{ event.purefb_client_performance.usec_per_write_op | pprint }}"
+            array_usec_per_write_op: "{{ event.purefb_client_performance.array_usec_per_write_op | pprint }}"
+            array_write_latency_ratio: "{{ event.purefb_client_performance.array_write_latency_ratio | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Noisy client on a slow array - notify
@@ -143,7 +145,7 @@
               for {{ event.purefb_client_performance.high_share_polls }} polls;
               array write={{ event.purefb_client_performance.array_usec_per_write_op }}us,
               {{ event.purefb_client_performance.array_write_latency_ratio }}x the same half hour last week
-            target_array: "{{ event.purefb_client_performance.array }}"
+            target_array: "{{ event.purefb_client_performance.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     # The file system and bucket events carry their share and streak but not
@@ -164,9 +166,9 @@
         run_playbook:
           name: playbooks/qos_cap.yml
           extra_vars:
-            target_array: "{{ event.purefb_fs_performance.array }}"
+            target_array: "{{ event.purefb_fs_performance.array | pprint }}"
             object_kind: file_system
-            object_name: "{{ event.purefb_fs_performance.file_system }}"
+            object_name: "{{ event.purefb_fs_performance.file_system | pprint }}"
             cap_ops_per_sec: "{{ qos_cap_ops_per_sec }}"
             reason: >-
               iops={{ event.purefb_fs_performance.reads_per_sec }}r/{{ event.purefb_fs_performance.writes_per_sec }}w
@@ -188,9 +190,9 @@
         run_playbook:
           name: playbooks/qos_lift.yml
           extra_vars:
-            target_array: "{{ event.purefb_fs_performance.array }}"
+            target_array: "{{ event.purefb_fs_performance.array | pprint }}"
             object_kind: file_system
-            object_name: "{{ event.purefb_fs_performance.file_system }}"
+            object_name: "{{ event.purefb_fs_performance.file_system | pprint }}"
             reason: "share normal for {{ event.purefb_fs_performance.normal_polls }} polls"
             fb_api_version: "{{ fb_api_version }}"
             alert_log: "{{ alert_log }}"
@@ -217,7 +219,7 @@
               iops={{ event.purefb_fs_performance.reads_per_sec }}r/{{ event.purefb_fs_performance.writes_per_sec }}w
               write={{ event.purefb_fs_performance.usec_per_write_op }}us
               for {{ event.purefb_fs_performance.high_share_polls }} polls; qos_policy={{ event.purefb_fs_performance.qos_policy }}
-            target_array: "{{ event.purefb_fs_performance.array }}"
+            target_array: "{{ event.purefb_fs_performance.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Bucket hogging the array - apply a temporary QoS cap
@@ -236,9 +238,9 @@
         run_playbook:
           name: playbooks/qos_cap.yml
           extra_vars:
-            target_array: "{{ event.purefb_bucket_performance.array }}"
+            target_array: "{{ event.purefb_bucket_performance.array | pprint }}"
             object_kind: bucket
-            object_name: "{{ event.purefb_bucket_performance.bucket }}"
+            object_name: "{{ event.purefb_bucket_performance.bucket | pprint }}"
             cap_ops_per_sec: "{{ qos_cap_ops_per_sec }}"
             reason: >-
               iops={{ event.purefb_bucket_performance.reads_per_sec }}r/{{ event.purefb_bucket_performance.writes_per_sec }}w
@@ -260,9 +262,9 @@
         run_playbook:
           name: playbooks/qos_lift.yml
           extra_vars:
-            target_array: "{{ event.purefb_bucket_performance.array }}"
+            target_array: "{{ event.purefb_bucket_performance.array | pprint }}"
             object_kind: bucket
-            object_name: "{{ event.purefb_bucket_performance.bucket }}"
+            object_name: "{{ event.purefb_bucket_performance.bucket | pprint }}"
             reason: "share normal for {{ event.purefb_bucket_performance.normal_polls }} polls"
             fb_api_version: "{{ fb_api_version }}"
             alert_log: "{{ alert_log }}"
@@ -289,7 +291,7 @@
               iops={{ event.purefb_bucket_performance.reads_per_sec }}r/{{ event.purefb_bucket_performance.writes_per_sec }}w
               write={{ event.purefb_bucket_performance.usec_per_write_op }}us
               for {{ event.purefb_bucket_performance.high_share_polls }} polls; qos_policy={{ event.purefb_bucket_performance.qos_policy }}
-            target_array: "{{ event.purefb_bucket_performance.array }}"
+            target_array: "{{ event.purefb_bucket_performance.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Array write latency well above the same time last week - notify
@@ -305,11 +307,13 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "{{ event.purefb_array_performance.array }} write latency is {{ event.purefb_array_performance.write_latency_ratio }}x last week's"
+            subject: >-
+              {{ (event.purefb_array_performance.array ~ ' write latency is ' ~
+              event.purefb_array_performance.write_latency_ratio ~ "x last week's") | pprint }}
             detail: >-
               now write={{ event.purefb_array_performance.usec_per_write_op }}us
               iops={{ event.purefb_array_performance.writes_per_sec }};
               same half hour last week write={{ event.purefb_array_performance.baseline_usec_per_write_op }}us
               iops={{ event.purefb_array_performance.baseline_writes_per_sec }}
-            target_array: "{{ event.purefb_array_performance.array }}"
+            target_array: "{{ event.purefb_array_performance.array | pprint }}"
             alert_log: "{{ alert_log }}"

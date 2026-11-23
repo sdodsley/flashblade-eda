@@ -48,9 +48,11 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row"
-            detail: "{{ event.purefb_poll_error.error }}"
-            target_array: "{{ event.purefb_poll_error.array }}"
+            subject: >-
+              {{ (event.purefb_poll_error.array ~ ' ' ~ event.purefb_poll_error.signal ~ ' poll has failed ' ~
+              event.purefb_poll_error.consecutive ~ ' times in a row') | pprint }}
+            detail: "{{ event.purefb_poll_error.error | pprint }}"
+            target_array: "{{ event.purefb_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Poll failed - notify once
@@ -67,9 +69,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed"
-            detail: "{{ event.purefb_poll_error.error }}"
-            target_array: "{{ event.purefb_poll_error.array }}"
+            subject: "{{ (event.purefb_poll_error.array ~ ' ' ~ event.purefb_poll_error.signal ~ ' poll failed') | pprint }}"
+            detail: "{{ event.purefb_poll_error.error | pprint }}"
+            target_array: "{{ event.purefb_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Report poll errors without acting
@@ -91,16 +93,16 @@
         run_playbook:
           name: playbooks/identify_led.yml
           extra_vars:
-            target_array: "{{ event.purefb_hardware.array }}"
-            component: "{{ event.purefb_hardware.component }}"
-            component_type: "{{ event.purefb_hardware.type }}"
-            component_status: "{{ event.purefb_hardware.status }}"
-            component_details: "{{ event.purefb_hardware.details }}"
-            component_slot: "{{ event.purefb_hardware.slot }}"
-            component_serial: "{{ event.purefb_hardware.serial }}"
-            neighbor_switch: "{{ event.purefb_hardware.neighbor_switch }}"
-            neighbor_switch_address: "{{ event.purefb_hardware.neighbor_switch_address }}"
-            neighbor_port: "{{ event.purefb_hardware.neighbor_port }}"
+            target_array: "{{ event.purefb_hardware.array | pprint }}"
+            component: "{{ event.purefb_hardware.component | pprint }}"
+            component_type: "{{ event.purefb_hardware.type | pprint }}"
+            component_status: "{{ event.purefb_hardware.status | pprint }}"
+            component_details: "{{ event.purefb_hardware.details | pprint }}"
+            component_slot: "{{ event.purefb_hardware.slot | pprint }}"
+            component_serial: "{{ event.purefb_hardware.serial | pprint }}"
+            neighbor_switch: "{{ event.purefb_hardware.neighbor_switch | pprint }}"
+            neighbor_switch_address: "{{ event.purefb_hardware.neighbor_switch_address | pprint }}"
+            neighbor_port: "{{ event.purefb_hardware.neighbor_port | pprint }}"
             led_state: true
             alert_log: "{{ alert_log }}"
 
@@ -131,10 +133,10 @@
         run_playbook:
           name: playbooks/identify_led.yml
           extra_vars:
-            target_array: "{{ event.purefb_hardware_recovered.array }}"
-            component: "{{ event.purefb_hardware_recovered.component }}"
-            component_type: "{{ event.purefb_hardware_recovered.type }}"
-            component_status: "{{ event.purefb_hardware_recovered.status }}"
+            target_array: "{{ event.purefb_hardware_recovered.array | pprint }}"
+            component: "{{ event.purefb_hardware_recovered.component | pprint }}"
+            component_type: "{{ event.purefb_hardware_recovered.type | pprint }}"
+            component_status: "{{ event.purefb_hardware_recovered.status | pprint }}"
             component_details: "recovered from {{ event.purefb_hardware_recovered.previous_status }}"
             led_state: false
             severity: info
@@ -145,10 +147,9 @@
       action:
         debug:
           msg: >-
-            {{ event.purefb_hardware_recovered.array }} {{ event.purefb_hardware_recovered.component }} recovered
-            ({{ event.purefb_hardware_recovered.previous_status }} -> {{ event.purefb_hardware_recovered.status }})
-            during a maintenance window; identify LED left as it is
-
+            {{ (event.purefb_hardware_recovered.array ~ ' ' ~ event.purefb_hardware_recovered.component ~
+            ' recovered (' ~ event.purefb_hardware_recovered.previous_status ~ ' -> ' ~
+            event.purefb_hardware_recovered.status ~ ') during a maintenance window; identify LED left as it is') | pprint }}
     # The plugin compares lag_speed with the sum of the member ports' speeds,
     # so a LAG the array still calls healthy with one link down is degraded
     # here; ports carry the LLDP neighbour, which is the switch port to check.
@@ -168,7 +169,7 @@
             severity: critical
             subject: "LAG {{ event.purefb_lag.lag }} on {{ event.purefb_lag.array }} is {{ event.purefb_lag.status }} at {{ event.purefb_lag.lag_speed }} of {{ event.purefb_lag.expected_speed }} bit/s"
             detail: "ports: {{ event.purefb_lag.ports }}"
-            target_array: "{{ event.purefb_lag.array }}"
+            target_array: "{{ event.purefb_lag.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Link aggregation group recovered - notify
@@ -182,7 +183,7 @@
             severity: info
             subject: "LAG {{ event.purefb_lag.lag }} on {{ event.purefb_lag.array }} is back at {{ event.purefb_lag.lag_speed }} bit/s"
             detail: "ports: {{ event.purefb_lag.ports }}"
-            target_array: "{{ event.purefb_lag.array }}"
+            target_array: "{{ event.purefb_lag.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Blade not healthy - notify
@@ -197,8 +198,8 @@
           extra_vars:
             severity: critical
             subject: "Blade issue on {{ event.purefb_health.array }}"
-            detail: "{{ event.purefb_health.blade_issues }}"
-            target_array: "{{ event.purefb_health.array }}"
+            detail: "{{ event.purefb_health.blade_issues | pprint }}"
+            target_array: "{{ event.purefb_health.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Drive not healthy - notify
@@ -213,8 +214,8 @@
           extra_vars:
             severity: critical
             subject: "Drive issue on {{ event.purefb_health.array }}"
-            detail: "{{ event.purefb_health.drive_issues }}"
-            target_array: "{{ event.purefb_health.array }}"
+            detail: "{{ event.purefb_health.drive_issues | pprint }}"
+            target_array: "{{ event.purefb_health.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Maintenance window active - log

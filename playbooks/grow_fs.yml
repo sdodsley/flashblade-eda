@@ -106,7 +106,7 @@
       block:
         - name: Pin the request id
           ansible.builtin.set_fact:
-            grow_request_id: "{{ inventory_hostname }}-{{ file_system }}-{{ now(utc=true).strftime('%Y%m%d%H%M%S') }}"
+            grow_request_id: "{{ (inventory_hostname ~ '-' ~ file_system ~ '-' ~ now(utc=true).strftime('%Y%m%d%H%M%S')) | string }}"
 
         - name: Make sure the request directory exists
           ansible.builtin.file:
@@ -149,8 +149,8 @@
         - name: Note where the request object went
           ansible.builtin.set_fact:
             request_object: >-
-              {{ ('s3://' ~ object_store[inventory_hostname].log_bucket ~ '/' ~ (request_prefix | default('requests/')) ~ grow_request_id ~ '.json')
-                 if mirror_wanted | bool else '' }}
+              {{ (('s3://' ~ object_store[inventory_hostname].log_bucket ~ '/' ~ (request_prefix | default('requests/')) ~ grow_request_id ~ '.json')
+                  if mirror_wanted | bool else '') | string }}
             request_object_error: "{{ (s3_error | default('') | trim) if mirror_wanted | bool and (s3_status | default(0) | int) != 200 else '' }}"
 
     - name: Grow the file system
@@ -167,10 +167,10 @@
       ansible.builtin.set_fact:
         grown: "{{ not excluded | bool and not over_cap | bool and fb_rest_status | int == 200 }}"
         outcome: >-
-          {{ 'excluded by fs_grow_exclude' if excluded | bool
-             else ('request ' ~ grow_request_id ~ ' written: target above fs_grow_max_bytes') if over_cap | bool
-             else 'grown' if fb_rest_status | int == 200
-             else 'refused by the array: ' ~ fb_rest_error | trim }}
+          {{ ('excluded by fs_grow_exclude' if excluded | bool
+              else ('request ' ~ grow_request_id ~ ' written: target above fs_grow_max_bytes') if over_cap | bool
+              else 'grown' if fb_rest_status | int == 200
+              else 'refused by the array: ' ~ fb_rest_error | trim) | string }}
 
     - name: Record the growth
       ansible.builtin.lineinfile:

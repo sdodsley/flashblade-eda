@@ -39,27 +39,27 @@
         - run_playbook:
             name: playbooks/alert_runbook.yml
             extra_vars:
-              severity: "{{ event.purefb_alert.severity }}"
+              severity: "{{ event.purefb_alert.severity | pprint }}"
               transition: opened
-              subject: "{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }}: {{ event.purefb_alert.summary }}"
-              component: "{{ event.purefb_alert.component_type }}:{{ event.purefb_alert.component_name }}"
-              component_name: "{{ event.purefb_alert.component_name }}"
-              array_action: "{{ event.purefb_alert.action }}"
-              knowledge_base_url: "{{ event.purefb_alert.knowledge_base_url }}"
-              alert_description: "{{ event.purefb_alert.description }}"
-              alert_variables: "{{ event.purefb_alert.variables }}"
-              target_array: "{{ event.purefb_alert.array }}"
-              alert_id: "{{ event.purefb_alert.alert_id }}"
-              alert_code: "{{ event.purefb_alert.code }}"
+              subject: "{{ (event.purefb_alert.array ~ ' alert ' ~ event.purefb_alert.code ~ ': ' ~ event.purefb_alert.summary) | pprint }}"
+              component: "{{ (event.purefb_alert.component_type ~ ':' ~ event.purefb_alert.component_name) | pprint }}"
+              component_name: "{{ event.purefb_alert.component_name | pprint }}"
+              array_action: "{{ event.purefb_alert.action | pprint }}"
+              knowledge_base_url: "{{ event.purefb_alert.knowledge_base_url | pprint }}"
+              alert_description: "{{ event.purefb_alert.description | pprint }}"
+              alert_variables: "{{ event.purefb_alert.variables | pprint }}"
+              target_array: "{{ event.purefb_alert.array | pprint }}"
+              alert_id: "{{ event.purefb_alert.alert_id | pprint }}"
+              alert_code: "{{ event.purefb_alert.code | pprint }}"
               alert_runbooks: "{{ alert_runbooks }}"
               fb_api_version: "{{ fb_api_version }}"
               alert_log: "{{ alert_log }}"
         - run_playbook:
             name: playbooks/flag_alert.yml
             extra_vars:
-              target_array: "{{ event.purefb_alert.array }}"
-              alert_id: "{{ event.purefb_alert.alert_id }}"
-              alert_code: "{{ event.purefb_alert.code }}"
+              target_array: "{{ event.purefb_alert.array | pprint }}"
+              alert_id: "{{ event.purefb_alert.alert_id | pprint }}"
+              alert_code: "{{ event.purefb_alert.code | pprint }}"
               fb_api_version: "{{ fb_api_version }}"
               alert_log: "{{ alert_log }}"
 
@@ -72,27 +72,31 @@
         run_playbook:
           name: playbooks/alert_runbook.yml
           extra_vars:
-            severity: "{{ event.purefb_alert.severity }}"
+            severity: "{{ event.purefb_alert.severity | pprint }}"
             transition: opened
-            subject: "{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }}: {{ event.purefb_alert.summary }}"
-            component: "{{ event.purefb_alert.component_type }}:{{ event.purefb_alert.component_name }}"
-            component_name: "{{ event.purefb_alert.component_name }}"
-            array_action: "{{ event.purefb_alert.action }}"
-            knowledge_base_url: "{{ event.purefb_alert.knowledge_base_url }}"
-            alert_description: "{{ event.purefb_alert.description }}"
-            alert_variables: "{{ event.purefb_alert.variables }}"
-            target_array: "{{ event.purefb_alert.array }}"
-            alert_id: "{{ event.purefb_alert.alert_id }}"
-            alert_code: "{{ event.purefb_alert.code }}"
+            subject: "{{ (event.purefb_alert.array ~ ' alert ' ~ event.purefb_alert.code ~ ': ' ~ event.purefb_alert.summary) | pprint }}"
+            component: "{{ (event.purefb_alert.component_type ~ ':' ~ event.purefb_alert.component_name) | pprint }}"
+            component_name: "{{ event.purefb_alert.component_name | pprint }}"
+            array_action: "{{ event.purefb_alert.action | pprint }}"
+            knowledge_base_url: "{{ event.purefb_alert.knowledge_base_url | pprint }}"
+            alert_description: "{{ event.purefb_alert.description | pprint }}"
+            alert_variables: "{{ event.purefb_alert.variables | pprint }}"
+            target_array: "{{ event.purefb_alert.array | pprint }}"
+            alert_id: "{{ event.purefb_alert.alert_id | pprint }}"
+            alert_code: "{{ event.purefb_alert.code | pprint }}"
             alert_runbooks: "{{ alert_runbooks }}"
             fb_api_version: "{{ fb_api_version }}"
             alert_log: "{{ alert_log }}"
+
+    # An alert whose severity rose since the last poll (a 1101 quota alert
+    # going from 80 % to 100 %, a blade from warning to critical) is worth a
+    # notice at its new severity; the runbook record from its opening stands.
 
     - name: Alert closing - log
       condition: event.purefb_alert.transition == "closing"
       action:
         debug:
-          msg: "{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }} is closing: {{ event.purefb_alert.summary }}"
+          msg: "{{ (event.purefb_alert.array ~ ' alert ' ~ event.purefb_alert.code ~ ' is closing: ' ~ event.purefb_alert.summary) | pprint }}"
 
     - name: Alert closed - notify
       condition: event.purefb_alert.transition == "closed"
@@ -101,9 +105,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }} closed: {{ event.purefb_alert.summary }}"
+            subject: "{{ (event.purefb_alert.array ~ ' alert ' ~ event.purefb_alert.code ~ ' closed: ' ~ event.purefb_alert.summary) | pprint }}"
             detail: "open for {{ event.purefb_alert.resolved_after_s }} s; {{ event.purefb_alert.action }}"
-            target_array: "{{ event.purefb_alert.array }}"
-            alert_id: "{{ event.purefb_alert.alert_id }}"
-            alert_code: "{{ event.purefb_alert.code }}"
+            target_array: "{{ event.purefb_alert.array | pprint }}"
+            alert_id: "{{ event.purefb_alert.alert_id | pprint }}"
+            alert_code: "{{ event.purefb_alert.code | pprint }}"
             alert_log: "{{ alert_log }}"

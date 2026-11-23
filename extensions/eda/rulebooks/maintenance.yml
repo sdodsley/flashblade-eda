@@ -46,10 +46,10 @@
         run_playbook:
           name: playbooks/maintenance_window.yml
           extra_vars:
-            target_array: "{{ event.payload.array }}"
-            window_action: "{{ event.payload.action }}"
-            window_hours: "{{ event.payload.hours | default(maintenance_default_hours) | int }}"
-            requested_by: "{{ event.payload.requested_by | default('unknown') }}"
+            target_array: "{{ event.payload.array | pprint }}"
+            window_action: "{{ event.payload.action | pprint }}"
+            window_hours: "{{ event.payload.hours | default(maintenance_default_hours) | int | pprint }}"
+            requested_by: "{{ event.payload.requested_by | default('unknown') | pprint }}"
             fb_api_version: "{{ fb_api_version }}"
             alert_log: "{{ alert_log }}"
 
@@ -100,9 +100,11 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row"
-            detail: "{{ event.purefb_poll_error.error }}"
-            target_array: "{{ event.purefb_poll_error.array }}"
+            subject: >-
+              {{ (event.purefb_poll_error.array ~ ' ' ~ event.purefb_poll_error.signal ~ ' poll has failed ' ~
+              event.purefb_poll_error.consecutive ~ ' times in a row') | pprint }}
+            detail: "{{ event.purefb_poll_error.error | pprint }}"
+            target_array: "{{ event.purefb_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Poll failed - notify once
@@ -119,9 +121,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed"
-            detail: "{{ event.purefb_poll_error.error }}"
-            target_array: "{{ event.purefb_poll_error.array }}"
+            subject: "{{ (event.purefb_poll_error.array ~ ' ' ~ event.purefb_poll_error.signal ~ ' poll failed') | pprint }}"
+            detail: "{{ event.purefb_poll_error.error | pprint }}"
+            target_array: "{{ event.purefb_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Report poll errors without acting
@@ -142,7 +144,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefb_audit.user }} ran {{ event.purefb_audit.command }} {{ event.purefb_audit.subcommand }} on {{ event.purefb_audit.array }}"
+            subject: >-
+              {{ (event.purefb_audit.user ~ ' ran ' ~ event.purefb_audit.command ~ ' ' ~
+              event.purefb_audit.subcommand ~ ' on ' ~ event.purefb_audit.array) | pprint }}
             detail: "arguments: {{ event.purefb_audit.arguments }} (from {{ event.purefb_audit.ip_address }} over {{ event.purefb_audit.user_interface }}, audit {{ event.purefb_audit.audit_id }})"
-            target_array: "{{ event.purefb_audit.array }}"
+            target_array: "{{ event.purefb_audit.array | pprint }}"
             alert_log: "{{ alert_log }}"

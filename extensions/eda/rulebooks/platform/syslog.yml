@@ -41,11 +41,11 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              severity: '{{ event.purefb_syslog_alert.severity }}'
-              subject: '{{ event.purefb_syslog_alert.array }} alert{{ ('' '' ~ event.purefb_syslog_alert.code) if event.purefb_syslog_alert.code else '''' }}{{ ('' '' ~ event.purefb_syslog_alert.state) if event.purefb_syslog_alert.state else '''' }}: {{ event.purefb_syslog_alert.subject | default(event.purefb_syslog_alert.message, true) }}'
-              detail: '{{ event.purefb_syslog_alert.details | default('''', true) }} {{ (''Action: '' ~ event.purefb_syslog_alert.action) if event.purefb_syslog_alert.action else '''' }} {{ (''KB '' ~ event.purefb_syslog_alert.knowledge_base_url) if event.purefb_syslog_alert.knowledge_base_url else '''' }} (syslog from {{ event.purefb_syslog_alert.source }}, first seen {{ event.purefb_syslog_alert.first_seen | default(event.purefb_syslog_alert.time, true) }})'
-              alert_code: '{{ event.purefb_syslog_alert.code | default('''', true) }}'
-              target_array: '{{ event.purefb_syslog_alert.array }}'
+              severity: '{{ event.purefb_syslog_alert.severity | pprint }}'
+              subject: '{{ (event.purefb_syslog_alert.array ~ '' alert'' ~ (('' '' ~ event.purefb_syslog_alert.code) if event.purefb_syslog_alert.code else '''') ~ (('' '' ~ event.purefb_syslog_alert.state) if event.purefb_syslog_alert.state else '''') ~ '': '' ~ (event.purefb_syslog_alert.subject | default(event.purefb_syslog_alert.message, true))) | pprint }}'
+              detail: '{{ ((event.purefb_syslog_alert.details | default('''', true)) ~ '' '' ~ ((''Action: '' ~ event.purefb_syslog_alert.action) if event.purefb_syslog_alert.action else '''') ~ '' '' ~ ((''KB '' ~ event.purefb_syslog_alert.knowledge_base_url) if event.purefb_syslog_alert.knowledge_base_url else '''') ~ '' (syslog from '' ~ event.purefb_syslog_alert.source ~ '', first seen '' ~ (event.purefb_syslog_alert.first_seen | default(event.purefb_syslog_alert.time, true)) ~ '')'') | pprint }}'
+              alert_code: '{{ event.purefb_syslog_alert.code | default('''', true) | pprint }}'
+              target_array: '{{ event.purefb_syslog_alert.array | pprint }}'
     - name: Alert closed via syslog - notify
       condition: event.purefb_syslog_alert.state == "closed" and event.purefb_syslog_alert.array is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$")
       throttle:
@@ -61,15 +61,15 @@
           job_args:
             extra_vars:
               severity: info
-              subject: '{{ event.purefb_syslog_alert.array }} alert{{ ('' '' ~ event.purefb_syslog_alert.code) if event.purefb_syslog_alert.code else '''' }} closed: {{ event.purefb_syslog_alert.subject | default(event.purefb_syslog_alert.message, true) }}'
-              detail: (syslog from {{ event.purefb_syslog_alert.source }}, first seen {{ event.purefb_syslog_alert.first_seen | default(event.purefb_syslog_alert.time, true) }})
-              alert_code: '{{ event.purefb_syslog_alert.code | default('''', true) }}'
-              target_array: '{{ event.purefb_syslog_alert.array }}'
+              subject: '{{ (event.purefb_syslog_alert.array ~ '' alert'' ~ (('' '' ~ event.purefb_syslog_alert.code) if event.purefb_syslog_alert.code else '''') ~ '' closed: '' ~ (event.purefb_syslog_alert.subject | default(event.purefb_syslog_alert.message, true))) | pprint }}'
+              detail: '{{ (''(syslog from '' ~ event.purefb_syslog_alert.source ~ '', first seen '' ~ (event.purefb_syslog_alert.first_seen | default(event.purefb_syslog_alert.time, true)) ~ '')'') | pprint }}'
+              alert_code: '{{ event.purefb_syslog_alert.code | default('''', true) | pprint }}'
+              target_array: '{{ event.purefb_syslog_alert.array | pprint }}'
     - name: Alert closing via syslog - log
       condition: event.purefb_syslog_alert.state in ["closing", "waiting to downgrade"]
       action:
         debug:
-          msg: '{{ event.purefb_syslog_alert.array }} alert {{ event.purefb_syslog_alert.code }} {{ event.purefb_syslog_alert.state }}: {{ event.purefb_syslog_alert.subject }}'
+          msg: '{{ (event.purefb_syslog_alert.array ~ '' alert '' ~ event.purefb_syslog_alert.code ~ '' '' ~ event.purefb_syslog_alert.state ~ '': '' ~ event.purefb_syslog_alert.subject) | pprint }}'
     - name: Human action via syslog audit - fast notification
       condition: event.purefb_syslog_audit.by_automation == false and event.purefb_syslog_audit.user is defined and event.purefb_syslog_audit.command is defined and event.purefb_syslog_audit.array is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$")
       action:
@@ -79,9 +79,9 @@
           job_args:
             extra_vars:
               severity: info
-              subject: '{{ event.purefb_syslog_audit.user }} on {{ event.purefb_syslog_audit.array }}: {{ event.purefb_syslog_audit.command }} {{ event.purefb_syslog_audit.subcommand | default('''') }} {{ event.purefb_syslog_audit.arguments | default('''') }}'
-              detail: '{{ event.purefb_syslog_audit.user_interface | default('''') }} from {{ event.purefb_syslog_audit.location | default('''') }}, audit {{ event.purefb_syslog_audit.audit_id | default('''') }} at {{ event.purefb_syslog_audit.time | default('''') }}'
-              target_array: '{{ event.purefb_syslog_audit.array }}'
+              subject: '{{ (event.purefb_syslog_audit.user ~ '' on '' ~ event.purefb_syslog_audit.array ~ '': '' ~ event.purefb_syslog_audit.command ~ '' '' ~ (event.purefb_syslog_audit.subcommand | default('''')) ~ '' '' ~ (event.purefb_syslog_audit.arguments | default(''''))) | pprint }}'
+              detail: '{{ ((event.purefb_syslog_audit.user_interface | default('''')) ~ '' from '' ~ (event.purefb_syslog_audit.location | default('''')) ~ '', audit '' ~ (event.purefb_syslog_audit.audit_id | default('''')) ~ '' at '' ~ (event.purefb_syslog_audit.time | default(''''))) | pprint }}'
+              target_array: '{{ event.purefb_syslog_audit.array | pprint }}'
     - name: File activity over threshold - notify
       condition: "(event.purefb_file_activity.mass_delete == true or\n event.purefb_file_activity.rename_storm == true) and\nevent.purefb_file_activity.array is match(\"^[A-Za-z0-9][A-Za-z0-9_.-]*$\")"
       throttle:
@@ -98,9 +98,9 @@
           job_args:
             extra_vars:
               severity: critical
-              subject: '{{ event.purefb_file_activity.user }} from {{ event.purefb_file_activity.client_ip }} on {{ event.purefb_file_activity.array }}/{{ event.purefb_file_activity.fs }}: {{ ''mass delete'' if event.purefb_file_activity.mass_delete else ''rename storm'' }}'
-              detail: '{{ event.purefb_file_activity.deletes }} deletes, {{ event.purefb_file_activity.create_delete_pairs }} create+delete pairs, {{ event.purefb_file_activity.renames }} extension-changing renames in {{ event.purefb_file_activity.window_seconds }} s over {{ event.purefb_file_activity.proto }} (thresholds {{ event.purefb_file_activity.mass_delete_threshold }} / {{ event.purefb_file_activity.rename_storm_threshold }}); last paths {{ event.purefb_file_activity.sample_paths | join('', '') }}'
-              target_array: '{{ event.purefb_file_activity.array }}'
+              subject: '{{ (event.purefb_file_activity.user ~ '' from '' ~ event.purefb_file_activity.client_ip ~ '' on '' ~ event.purefb_file_activity.array ~ ''/'' ~ event.purefb_file_activity.fs ~ '': '' ~ (''mass delete'' if event.purefb_file_activity.mass_delete else ''rename storm'')) | pprint }}'
+              detail: '{{ (event.purefb_file_activity.deletes ~ '' deletes, '' ~ event.purefb_file_activity.create_delete_pairs ~ '' create+delete pairs, '' ~ event.purefb_file_activity.renames ~ '' extension-changing renames in '' ~ event.purefb_file_activity.window_seconds ~ '' s over '' ~ event.purefb_file_activity.proto ~ '' (thresholds '' ~ event.purefb_file_activity.mass_delete_threshold ~ '' / '' ~ event.purefb_file_activity.rename_storm_threshold ~ ''); last paths '' ~ (event.purefb_file_activity.sample_paths | join('', ''))) | pprint }}'
+              target_array: '{{ event.purefb_file_activity.array | pprint }}'
     - name: Test message - log
       condition: event.purefb_syslog_test is defined
       action:

@@ -63,9 +63,11 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row"
-            detail: "{{ event.purefb_poll_error.error }}"
-            target_array: "{{ event.purefb_poll_error.array }}"
+            subject: >-
+              {{ (event.purefb_poll_error.array ~ ' ' ~ event.purefb_poll_error.signal ~ ' poll has failed ' ~
+              event.purefb_poll_error.consecutive ~ ' times in a row') | pprint }}
+            detail: "{{ event.purefb_poll_error.error | pprint }}"
+            target_array: "{{ event.purefb_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Poll failed - notify once
@@ -82,9 +84,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed"
-            detail: "{{ event.purefb_poll_error.error }}"
-            target_array: "{{ event.purefb_poll_error.array }}"
+            subject: "{{ (event.purefb_poll_error.array ~ ' ' ~ event.purefb_poll_error.signal ~ ' poll failed') | pprint }}"
+            detail: "{{ event.purefb_poll_error.error | pprint }}"
+            target_array: "{{ event.purefb_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Report poll errors without acting
@@ -106,8 +108,8 @@
         run_playbook:
           name: playbooks/posture_revert.yml
           extra_vars:
-            target_array: "{{ event.purefb_posture.array }}"
-            buckets: "{{ event.purefb_posture.public_buckets }}"
+            target_array: "{{ event.purefb_posture.array | pprint }}"
+            buckets: "{{ event.purefb_posture.public_buckets | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Public bucket - notify
@@ -124,9 +126,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "{{ event.purefb_posture.public_count }} public bucket(s) on {{ event.purefb_posture.array }}"
-            detail: "{{ event.purefb_posture.public_buckets }}; posture_auto_revert is off"
-            target_array: "{{ event.purefb_posture.array }}"
+            subject: "{{ (event.purefb_posture.public_count ~ ' public bucket(s) on ' ~ event.purefb_posture.array) | pprint }}"
+            detail: "{{ (event.purefb_posture.public_buckets ~ '; posture_auto_revert is off') | pprint }}"
+            target_array: "{{ event.purefb_posture.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: World-open NFS export - notify
@@ -142,9 +144,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "{{ event.purefb_posture.world_open_export_count }} NFS export rule(s) grant * read-write on {{ event.purefb_posture.array }}"
-            detail: "{{ event.purefb_posture.world_open_exports }}"
-            target_array: "{{ event.purefb_posture.array }}"
+            subject: "{{ (event.purefb_posture.world_open_export_count ~ ' NFS export rule(s) grant * read-write on ' ~ event.purefb_posture.array) | pprint }}"
+            detail: "{{ event.purefb_posture.world_open_exports | pprint }}"
+            target_array: "{{ event.purefb_posture.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Access key older than the limit - notify
@@ -160,9 +162,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "{{ event.purefb_posture.old_key_count }} object store access key(s) older than the limit on {{ event.purefb_posture.array }}"
-            detail: "{{ event.purefb_posture.old_keys }}; {{ event.purefb_posture.disabled_key_count }} key(s) disabled"
-            target_array: "{{ event.purefb_posture.array }}"
+            subject: "{{ (event.purefb_posture.old_key_count ~ ' object store access key(s) older than the limit on ' ~ event.purefb_posture.array) | pprint }}"
+            detail: "{{ (event.purefb_posture.old_keys ~ '; ' ~ event.purefb_posture.disabled_key_count ~ ' key(s) disabled') | pprint }}"
+            target_array: "{{ event.purefb_posture.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Certificate expiring - notify
@@ -178,9 +180,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "{{ event.purefb_posture.expiring_cert_count }} certificate(s) expiring on {{ event.purefb_posture.array }}"
-            detail: "{{ event.purefb_posture.expiring_certs }} (days left; negative once expired)"
-            target_array: "{{ event.purefb_posture.array }}"
+            subject: "{{ (event.purefb_posture.expiring_cert_count ~ ' certificate(s) expiring on ' ~ event.purefb_posture.array) | pprint }}"
+            detail: "{{ (event.purefb_posture.expiring_certs ~ ' (days left; negative once expired)') | pprint }}"
+            target_array: "{{ event.purefb_posture.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     # The whole expiring_certs list travels: the playbook renews the
@@ -200,8 +202,8 @@
         run_playbook:
           name: playbooks/renew_certificate.yml
           extra_vars:
-            target_array: "{{ event.purefb_posture.array }}"
-            certificate: "{{ event.purefb_posture.expiring_certs }}"
+            target_array: "{{ event.purefb_posture.array | pprint }}"
+            certificate: "{{ event.purefb_posture.expiring_certs | pprint }}"
             certs_renew_days: "{{ certs_renew_days }}"
             fb_api_version: "{{ fb_api_version }}"
             alert_log: "{{ alert_log }}"
@@ -219,9 +221,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "{{ event.purefb_posture.uncovered_count }} bucket(s) without an enabled audit policy on {{ event.purefb_posture.array }}"
-            detail: "{{ event.purefb_posture.uncovered_buckets }}"
-            target_array: "{{ event.purefb_posture.array }}"
+            subject: "{{ (event.purefb_posture.uncovered_count ~ ' bucket(s) without an enabled audit policy on ' ~ event.purefb_posture.array) | pprint }}"
+            detail: "{{ event.purefb_posture.uncovered_buckets | pprint }}"
+            target_array: "{{ event.purefb_posture.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: SMB share open to everyone - notify
@@ -237,9 +239,11 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "{{ event.purefb_posture.smb_everyone_full_control_count }} SMB share policy(ies) grant Everyone full control on {{ event.purefb_posture.array }}"
-            detail: "{{ event.purefb_posture.smb_everyone_full_control }}"
-            target_array: "{{ event.purefb_posture.array }}"
+            subject: >-
+              {{ (event.purefb_posture.smb_everyone_full_control_count ~
+              ' SMB share policy(ies) grant Everyone full control on ' ~ event.purefb_posture.array) | pprint }}
+            detail: "{{ event.purefb_posture.smb_everyone_full_control | pprint }}"
+            target_array: "{{ event.purefb_posture.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Posture - log

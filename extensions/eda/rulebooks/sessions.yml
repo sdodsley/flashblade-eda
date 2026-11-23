@@ -55,9 +55,11 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row"
-            detail: "{{ event.purefb_poll_error.error }}"
-            target_array: "{{ event.purefb_poll_error.array }}"
+            subject: >-
+              {{ (event.purefb_poll_error.array ~ ' ' ~ event.purefb_poll_error.signal ~ ' poll has failed ' ~
+              event.purefb_poll_error.consecutive ~ ' times in a row') | pprint }}
+            detail: "{{ event.purefb_poll_error.error | pprint }}"
+            target_array: "{{ event.purefb_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Poll failed - notify once
@@ -74,9 +76,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed"
-            detail: "{{ event.purefb_poll_error.error }}"
-            target_array: "{{ event.purefb_poll_error.array }}"
+            subject: "{{ (event.purefb_poll_error.array ~ ' ' ~ event.purefb_poll_error.signal ~ ' poll failed') | pprint }}"
+            detail: "{{ event.purefb_poll_error.error | pprint }}"
+            target_array: "{{ event.purefb_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Report poll errors without acting
@@ -100,13 +102,13 @@
         run_playbook:
           name: playbooks/session_check.yml
           extra_vars:
-            target_array: "{{ event.purefb_session.array }}"
-            session_id: "{{ event.purefb_session.session_id }}"
-            session_user: "{{ event.purefb_session.user }}"
-            session_location: "{{ event.purefb_session.location }}"
-            session_method: "{{ event.purefb_session.method }}"
-            session_interface: "{{ event.purefb_session.user_interface }}"
-            session_start_time: "{{ event.purefb_session.start_time }}"
+            target_array: "{{ event.purefb_session.array | pprint }}"
+            session_id: "{{ event.purefb_session.session_id | pprint }}"
+            session_user: "{{ event.purefb_session.user | pprint }}"
+            session_location: "{{ event.purefb_session.location | pprint }}"
+            session_method: "{{ event.purefb_session.method | pprint }}"
+            session_interface: "{{ event.purefb_session.user_interface | pprint }}"
+            session_start_time: "{{ event.purefb_session.start_time | pprint }}"
             admin_cidrs: "{{ admin_cidrs }}"
             alert_log: "{{ alert_log }}"
 
@@ -128,9 +130,11 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "{{ event.purefb_session.event_count }} x {{ event.purefb_session.event }} for {{ event.purefb_session.user }} on {{ event.purefb_session.array }}"
+            subject: >-
+              {{ (event.purefb_session.event_count ~ ' x ' ~ event.purefb_session.event ~ ' for ' ~
+              event.purefb_session.user ~ ' on ' ~ event.purefb_session.array) | pprint }}
             detail: "from {{ event.purefb_session.location }} via {{ event.purefb_session.method }} ({{ event.purefb_session.user_interface }}); session {{ event.purefb_session.session_id }}"
-            target_array: "{{ event.purefb_session.array }}"
+            target_array: "{{ event.purefb_session.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Superuser password login or default password - notify
@@ -143,9 +147,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }}: {{ event.purefb_alert.summary }}"
-            detail: "{{ event.purefb_alert.description }} {{ event.purefb_alert.action }}"
-            target_array: "{{ event.purefb_alert.array }}"
-            alert_id: "{{ event.purefb_alert.alert_id }}"
-            alert_code: "{{ event.purefb_alert.code }}"
+            subject: "{{ (event.purefb_alert.array ~ ' alert ' ~ event.purefb_alert.code ~ ': ' ~ event.purefb_alert.summary) | pprint }}"
+            detail: "{{ (event.purefb_alert.description ~ ' ' ~ event.purefb_alert.action) | pprint }}"
+            target_array: "{{ event.purefb_alert.array | pprint }}"
+            alert_id: "{{ event.purefb_alert.alert_id | pprint }}"
+            alert_code: "{{ event.purefb_alert.code | pprint }}"
             alert_log: "{{ alert_log }}"

@@ -46,7 +46,7 @@
     - name: Pin the request id and time
       ansible.builtin.set_fact:
         request_time: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
-        request_id: "{{ at_risk_array }}-{{ now(utc=true).strftime('%Y%m%d%H%M%S') }}"
+        request_id: "{{ (at_risk_array ~ '-' ~ now(utc=true).strftime('%Y%m%d%H%M%S')) | string }}"
 
     - name: Make sure the request directory exists
       ansible.builtin.file:
@@ -91,8 +91,8 @@
           {{ (candidates_cmd.stdout | from_json) if (candidates_cmd.rc | default(1)) == 0
              else {'file_systems': [], 'buckets': [], 'bucket_accounts': {}, 'snapshots': []} }}
         candidates_error: >-
-          {{ '' if (candidates_cmd.rc | default(1)) == 0
-             else (candidates_cmd.stderr_lines | default([]) | last | default(at_risk_array ~ ' is not in the inventory')) }}
+          {{ ('' if (candidates_cmd.rc | default(1)) == 0
+              else (candidates_cmd.stderr_lines | default([]) | last | default(at_risk_array ~ ' is not in the inventory'))) | string }}
 
     - name: Build the request
       ansible.builtin.set_fact:
@@ -101,19 +101,19 @@
           kind: capacity_request
           severity: warning
           status: awaiting_approval
-          request_id: "{{ request_id }}"
-          array: "{{ at_risk_array }}"
-          used_pct: "{{ used_pct | default('') }}"
-          used_bytes: "{{ used_bytes | default('') }}"
-          capacity_bytes: "{{ capacity_bytes | default('') }}"
-          days_to_full: "{{ days_to_full | default('') }}"
-          growth_bytes_per_day: "{{ growth_bytes_per_day | default('') }}"
+          request_id: "{{ request_id | string }}"
+          array: "{{ at_risk_array | string }}"
+          used_pct: "{{ used_pct | default('') | string }}"
+          used_bytes: "{{ used_bytes | default('') | string }}"
+          capacity_bytes: "{{ capacity_bytes | default('') | string }}"
+          days_to_full: "{{ days_to_full | default('') | string }}"
+          growth_bytes_per_day: "{{ growth_bytes_per_day | default('') | string }}"
           top_growers: "{{ top_growers | default([]) }}"
           pending_eradication_file_systems: "{{ pending_eradication_file_systems | default(candidates.file_systems | length) }}"
           pending_eradication_buckets: "{{ pending_eradication_buckets | default(candidates.buckets | length) }}"
           pending_eradication_snapshots: "{{ pending_eradication_snapshots | default(candidates.snapshots | length) }}"
           candidates: "{{ candidates }}"
-          candidates_error: "{{ candidates_error | trim }}"
+          candidates_error: "{{ candidates_error | trim | string }}"
           candidate_targets: "{{ candidate_targets | default([]) }}"
           proposed_actions:
             - eradicate_pending

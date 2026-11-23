@@ -88,9 +88,11 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row"
-            detail: "{{ event.purefb_poll_error.error }}"
-            target_array: "{{ event.purefb_poll_error.array }}"
+            subject: >-
+              {{ (event.purefb_poll_error.array ~ ' ' ~ event.purefb_poll_error.signal ~ ' poll has failed ' ~
+              event.purefb_poll_error.consecutive ~ ' times in a row') | pprint }}
+            detail: "{{ event.purefb_poll_error.error | pprint }}"
+            target_array: "{{ event.purefb_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Poll failed - notify once
@@ -107,9 +109,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed"
-            detail: "{{ event.purefb_poll_error.error }}"
-            target_array: "{{ event.purefb_poll_error.array }}"
+            subject: "{{ (event.purefb_poll_error.array ~ ' ' ~ event.purefb_poll_error.signal ~ ' poll failed') | pprint }}"
+            detail: "{{ event.purefb_poll_error.error | pprint }}"
+            target_array: "{{ event.purefb_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Report poll errors without acting
@@ -138,15 +140,17 @@
         run_playbook:
           name: playbooks/quarantine_client.yml
           extra_vars:
-            target_array: "{{ event.purefb_client_performance.array }}"
-            client: "{{ event.purefb_client_performance.client }}"
+            target_array: "{{ event.purefb_client_performance.array | pprint }}"
+            client: "{{ event.purefb_client_performance.client | pprint }}"
             file_system: ""
             action: quarantine
             reason: >-
-              {{ event.purefb_client_performance.protocol }} client held {{ event.purefb_client_performance.ops_share_pct }}% of the ops
-              (iops={{ event.purefb_client_performance.reads_per_sec }}r/{{ event.purefb_client_performance.writes_per_sec }}w)
-              for {{ event.purefb_client_performance.high_share_polls }} polls while the array's write latency was
-              {{ event.purefb_client_performance.array_write_latency_ratio }}x the same half hour last week
+              {{ (event.purefb_client_performance.protocol ~ ' client held ' ~
+              event.purefb_client_performance.ops_share_pct ~ '% of the ops (iops=' ~
+              event.purefb_client_performance.reads_per_sec ~ 'r/' ~ event.purefb_client_performance.writes_per_sec ~
+              'w) for ' ~ event.purefb_client_performance.high_share_polls ~
+              " polls while the array's write latency was " ~
+              event.purefb_client_performance.array_write_latency_ratio ~ 'x the same half hour last week') | pprint }}
             contain_exclude_clients: "{{ contain_exclude_clients }}"
             contain_exclude_file_systems: "{{ contain_exclude_file_systems }}"
             fb_api_version: "{{ fb_api_version }}"
@@ -178,7 +182,7 @@
               array write={{ event.purefb_client_performance.array_usec_per_write_op }}us,
               {{ event.purefb_client_performance.array_write_latency_ratio }}x the same half hour last week;
               ir_auto_contain is off
-            target_array: "{{ event.purefb_client_performance.array }}"
+            target_array: "{{ event.purefb_client_performance.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     # eda_capped (an eda-cap-<name> policy from client.yml) and eda_tarpit
@@ -200,8 +204,8 @@
         run_playbook:
           name: playbooks/tarpit.yml
           extra_vars:
-            target_array: "{{ event.purefb_fs_performance.array }}"
-            file_system: "{{ event.purefb_fs_performance.file_system }}"
+            target_array: "{{ event.purefb_fs_performance.array | pprint }}"
+            file_system: "{{ event.purefb_fs_performance.file_system | pprint }}"
             action: apply
             tarpit_ops_per_sec: "{{ tarpit_ops_per_sec }}"
             reason: >-
@@ -224,8 +228,8 @@
         run_playbook:
           name: playbooks/tarpit.yml
           extra_vars:
-            target_array: "{{ event.purefb_fs_performance.array }}"
-            file_system: "{{ event.purefb_fs_performance.file_system }}"
+            target_array: "{{ event.purefb_fs_performance.array | pprint }}"
+            file_system: "{{ event.purefb_fs_performance.file_system | pprint }}"
             action: lift
             tarpit_ops_per_sec: "{{ tarpit_ops_per_sec }}"
             reason: "share normal for {{ event.purefb_fs_performance.normal_polls }} polls"
@@ -260,11 +264,11 @@
         run_playbook:
           name: playbooks/quarantine_client.yml
           extra_vars:
-            target_array: "{{ event.payload.array }}"
-            client: "{{ event.payload.client }}"
-            file_system: "{{ event.payload.file_system | default('') }}"
-            action: "{{ event.payload.action }}"
-            reason: "{{ event.payload.action }} approved by {{ event.payload.approver | default('unknown') }}"
+            target_array: "{{ event.payload.array | pprint }}"
+            client: "{{ event.payload.client | pprint }}"
+            file_system: "{{ event.payload.file_system | default('') | pprint }}"
+            action: "{{ event.payload.action | pprint }}"
+            reason: "{{ (event.payload.action ~ ' approved by ' ~ (event.payload.approver | default('unknown'))) | pprint }}"
             contain_exclude_clients: "{{ contain_exclude_clients }}"
             contain_exclude_file_systems: "{{ contain_exclude_file_systems }}"
             fb_api_version: "{{ fb_api_version }}"
@@ -288,11 +292,11 @@
         run_playbook:
           name: playbooks/release_locks.yml
           extra_vars:
-            target_array: "{{ event.payload.array }}"
-            client: "{{ event.payload.client }}"
-            file_system: "{{ event.payload.file_system | default('') }}"
-            kind: "{{ event.payload.kind | default('both') }}"
-            approver: "{{ event.payload.approver | default('unknown') }}"
+            target_array: "{{ event.payload.array | pprint }}"
+            client: "{{ event.payload.client | pprint }}"
+            file_system: "{{ event.payload.file_system | default('') | pprint }}"
+            kind: "{{ event.payload.kind | default('both') | pprint }}"
+            approver: "{{ event.payload.approver | default('unknown') | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Approved tarpit - apply it
@@ -309,10 +313,10 @@
         run_playbook:
           name: playbooks/tarpit.yml
           extra_vars:
-            target_array: "{{ event.payload.array }}"
-            file_system: "{{ event.payload.file_system }}"
+            target_array: "{{ event.payload.array | pprint }}"
+            file_system: "{{ event.payload.file_system | pprint }}"
             action: apply
-            tarpit_ops_per_sec: "{{ event.payload.ops_per_sec | default(tarpit_ops_per_sec) | int }}"
+            tarpit_ops_per_sec: "{{ event.payload.ops_per_sec | default(tarpit_ops_per_sec) | int | pprint }}"
             reason: "tarpit approved by {{ event.payload.approver | default('unknown') }}"
             fb_api_version: "{{ fb_api_version }}"
             alert_log: "{{ alert_log }}"
@@ -331,8 +335,8 @@
         run_playbook:
           name: playbooks/tarpit.yml
           extra_vars:
-            target_array: "{{ event.payload.array }}"
-            file_system: "{{ event.payload.file_system }}"
+            target_array: "{{ event.payload.array | pprint }}"
+            file_system: "{{ event.payload.file_system | pprint }}"
             action: lift
             tarpit_ops_per_sec: "{{ tarpit_ops_per_sec }}"
             reason: "lift approved by {{ event.payload.approver | default('unknown') }}"

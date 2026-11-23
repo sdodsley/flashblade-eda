@@ -150,14 +150,14 @@
     - name: Describe the outcome
       ansible.builtin.set_fact:
         outcome: >-
-          {{ ('already tarpitted' if already_tarpitted | bool
-              else ('left alone: carries its own policy ' ~ previous_policy) if has_own_policy | bool
-              else 'tarpitted at ' ~ tarpit_ops_per_sec ~ ' ops/s' if tarpit_changed | bool
-              else 'refused by the array: ' ~ (apply_error | default('')))
-             if action == 'apply'
-             else ('not tarpitted' ~ ((': carries ' ~ previous_policy) if previous_policy else '') if not already_tarpitted | bool
-                   else ('lifted (' ~ clear_form ~ ')') if tarpit_changed | bool
-                   else 'clearing refused by the array: ' ~ clear_error) }}
+          {{ (('already tarpitted' if already_tarpitted | bool
+               else ('left alone: carries its own policy ' ~ previous_policy) if has_own_policy | bool
+               else 'tarpitted at ' ~ tarpit_ops_per_sec ~ ' ops/s' if tarpit_changed | bool
+               else 'refused by the array: ' ~ (apply_error | default('')))
+              if action == 'apply'
+              else ('not tarpitted' ~ ((': carries ' ~ previous_policy) if previous_policy else '') if not already_tarpitted | bool
+                    else ('lifted (' ~ clear_form ~ ')') if tarpit_changed | bool
+                    else 'clearing refused by the array: ' ~ clear_error)) | string }}
 
     - name: Record the action
       ansible.builtin.lineinfile:

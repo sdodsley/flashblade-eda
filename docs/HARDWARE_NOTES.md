@@ -760,6 +760,22 @@ and write them.
   marker object per day and file system. On the platform `housekeeping.yml`
   has no activation; three controller schedules launch the selftest, the
   showback and the DR drill templates instead.
+- A source or filter named by FQCN resolves from the installed collection
+  only; `--source-dir` and `--filter-dir` serve bare names. A change to a
+  plugin or a filter reaches a standalone run after `make collection`.
+- An event filter is `main(event, **args)`, run in the source's process
+  on every event before it reaches the ruleset queue and before the
+  built-in filter that adds `meta`; a filter without arguments is written
+  `- <fqcn>:`, the colon and nothing after it.
+- Action arguments are rendered with a Jinja native environment: a single
+  expression keeps the value's type, and a string result is parsed as a
+  Python literal. The tree's action templates that open with an event
+  field are therefore one expression ending in `| pprint`, which hands the
+  value over exactly, text as text and numbers and lists typed; a template
+  that opens with a literal word is unaffected.
+- Rules are first-match unless `match_multiple_rules` is set. `is match`
+  compares an int by its digits and never matches a dict, and `(x is not
+  defined or x is match(...))` accepts an absent or a well-formed field.
 
 ## Containerized platform
 
@@ -939,6 +955,12 @@ seed, the two images and the activations are written around;
   turned back into JSON first) and decodes them in the helper, and
   `s3_approval.yml` treats an object that parses to an empty dict as
   missing.
+- Before ansible-core 2.19 a `set_fact` value that renders to text
+  starting with `[` or `{` is evaluated as a literal, and the stored fact
+  is templated again on its next use. Every text fact the playbooks build from
+  event text ends in `| string` as its last filter, and a value that is deliberately a number, a boolean, a list or a dict keeps its type, and no
+  filter removes characters from such text: a carriage return in a detail
+  becomes a space.
 
 ## State
 

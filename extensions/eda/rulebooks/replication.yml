@@ -65,9 +65,11 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row"
-            detail: "{{ event.purefb_poll_error.error }}"
-            target_array: "{{ event.purefb_poll_error.array }}"
+            subject: >-
+              {{ (event.purefb_poll_error.array ~ ' ' ~ event.purefb_poll_error.signal ~ ' poll has failed ' ~
+              event.purefb_poll_error.consecutive ~ ' times in a row') | pprint }}
+            detail: "{{ event.purefb_poll_error.error | pprint }}"
+            target_array: "{{ event.purefb_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Poll failed - notify once
@@ -84,9 +86,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed"
-            detail: "{{ event.purefb_poll_error.error }}"
-            target_array: "{{ event.purefb_poll_error.array }}"
+            subject: "{{ (event.purefb_poll_error.array ~ ' ' ~ event.purefb_poll_error.signal ~ ' poll failed') | pprint }}"
+            detail: "{{ event.purefb_poll_error.error | pprint }}"
+            target_array: "{{ event.purefb_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Report poll errors without acting
@@ -110,13 +112,13 @@
           extra_vars:
             severity: critical
             subject: >-
-              {{ event.purefb_array_connection.array }} connection to {{ event.purefb_array_connection.remote }}
-              is {{ event.purefb_array_connection.status }}
+              {{ (event.purefb_array_connection.array ~ ' connection to ' ~ event.purefb_array_connection.remote ~
+              ' is ' ~ event.purefb_array_connection.status) | pprint }}
             detail: >-
               type={{ event.purefb_array_connection.type }} version={{ event.purefb_array_connection.version }}
               replication addresses {{ event.purefb_array_connection.replication_addresses }};
               was {{ event.purefb_array_connection.previous_status | default('unknown') }}
-            target_array: "{{ event.purefb_array_connection.array }}"
+            target_array: "{{ event.purefb_array_connection.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     # previous_status is absent on the first poll, so a connection that is
@@ -132,9 +134,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefb_array_connection.array }} connection to {{ event.purefb_array_connection.remote }} is connected again"
+            subject: "{{ (event.purefb_array_connection.array ~ ' connection to ' ~ event.purefb_array_connection.remote ~ ' is connected again') | pprint }}"
             detail: "was {{ event.purefb_array_connection.previous_status }}; type={{ event.purefb_array_connection.type }}"
-            target_array: "{{ event.purefb_array_connection.array }}"
+            target_array: "{{ event.purefb_array_connection.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     # With orchestrator_enabled true (vars) a paused bucket link is handed to
@@ -157,8 +159,8 @@
         run_playbook:
           name: playbooks/replication_resume.yml
           extra_vars:
-            target_array: "{{ event.purefb_replica_link.array }}"
-            bucket: "{{ event.purefb_replica_link.local }}"
+            target_array: "{{ event.purefb_replica_link.array | pprint }}"
+            bucket: "{{ event.purefb_replica_link.local | pprint }}"
             reason: >-
               link to {{ event.purefb_replica_link.remote }}:{{ event.purefb_replica_link.remote_object }} paused,
               status={{ event.purefb_replica_link.status }}, recovery point {{ event.purefb_replica_link.recovery_point_age_s }}s old
@@ -186,8 +188,8 @@
             orchestrator_url: "{{ orchestrator_url }}"
             orchestrator_webhook_path: "{{ orchestrator_paths.replication }}"
             orchestrator_validate_certs: "{{ orchestrator_validate_certs }}"
-            event: "{{ event }}"
-            array: "{{ event.purefb_replica_link.array }}"
+            event: "{{ event | pprint }}"
+            array: "{{ event.purefb_replica_link.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     # file system links have no pause flag to clear from here; a paused one
@@ -212,10 +214,11 @@
               Replica link {{ event.purefb_replica_link.local }} ->
               {{ event.purefb_replica_link.remote }}:{{ event.purefb_replica_link.remote_object }} is paused
             detail: >-
-              {{ event.purefb_replica_link.kind }} link, direction={{ event.purefb_replica_link.direction }},
-              status={{ event.purefb_replica_link.status }}, recovery point {{ event.purefb_replica_link.recovery_point_age_s }}s old;
-              replication_auto_resume={{ replication_auto_resume }}
-            target_array: "{{ event.purefb_replica_link.array }}"
+              {{ (event.purefb_replica_link.kind ~ ' link, direction=' ~ event.purefb_replica_link.direction ~
+              ', status=' ~ event.purefb_replica_link.status ~ ', recovery point ' ~
+              event.purefb_replica_link.recovery_point_age_s ~ 's old; replication_auto_resume=' ~
+              replication_auto_resume) | pprint }}
+            target_array: "{{ event.purefb_replica_link.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Replica link still unhealthy - escalate
@@ -236,10 +239,11 @@
               Replica link {{ event.purefb_replica_link.local }} -> {{ event.purefb_replica_link.remote }}
               has had an issue ({{ event.purefb_replica_link.status }}, lag {{ event.purefb_replica_link.lag_s }} s) for {{ event.purefb_replica_link.consecutive_issue_polls }} polls
             detail: >-
-              {{ event.purefb_replica_link.kind }} link, direction={{ event.purefb_replica_link.direction }},
-              lag {{ event.purefb_replica_link.lag_s }}s, recovery point {{ event.purefb_replica_link.recovery_point_age_s }}s old,
-              details={{ event.purefb_replica_link.status_details }}
-            target_array: "{{ event.purefb_replica_link.array }}"
+              {{ (event.purefb_replica_link.kind ~ ' link, direction=' ~ event.purefb_replica_link.direction ~
+              ', lag ' ~ event.purefb_replica_link.lag_s ~ 's, recovery point ' ~
+              event.purefb_replica_link.recovery_point_age_s ~ 's old, details=' ~
+              event.purefb_replica_link.status_details) | pprint }}
+            target_array: "{{ event.purefb_replica_link.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Replica link unhealthy or lagging - notify
@@ -261,12 +265,12 @@
               Replica link {{ event.purefb_replica_link.local }} -> {{ event.purefb_replica_link.remote }}
               is {{ event.purefb_replica_link.status }}, lag {{ event.purefb_replica_link.lag_s }}s
             detail: >-
-              {{ event.purefb_replica_link.kind }} link, direction={{ event.purefb_replica_link.direction }},
-              unhealthy={{ event.purefb_replica_link.unhealthy }} lagging={{ event.purefb_replica_link.lagging }}
-              for {{ event.purefb_replica_link.consecutive_issue_polls }} polls,
-              recovery point {{ event.purefb_replica_link.recovery_point_age_s }}s old,
-              details={{ event.purefb_replica_link.status_details }}
-            target_array: "{{ event.purefb_replica_link.array }}"
+              {{ (event.purefb_replica_link.kind ~ ' link, direction=' ~ event.purefb_replica_link.direction ~
+              ', unhealthy=' ~ event.purefb_replica_link.unhealthy ~ ' lagging=' ~
+              event.purefb_replica_link.lagging ~ ' for ' ~ event.purefb_replica_link.consecutive_issue_polls ~
+              ' polls, recovery point ' ~ event.purefb_replica_link.recovery_point_age_s ~ 's old, details=' ~
+              event.purefb_replica_link.status_details) | pprint }}
+            target_array: "{{ event.purefb_replica_link.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Replica link recovered - log
@@ -280,9 +284,10 @@
             severity: info
             subject: "Replica link {{ event.purefb_replica_link.local }} -> {{ event.purefb_replica_link.remote }} recovered"
             detail: >-
-              {{ event.purefb_replica_link.kind }} link, status={{ event.purefb_replica_link.status }},
-              lag {{ event.purefb_replica_link.lag_s }}s, recovery point {{ event.purefb_replica_link.recovery_point_age_s }}s old
-            target_array: "{{ event.purefb_replica_link.array }}"
+              {{ (event.purefb_replica_link.kind ~ ' link, status=' ~ event.purefb_replica_link.status ~ ', lag ' ~
+              event.purefb_replica_link.lag_s ~ 's, recovery point ' ~
+              event.purefb_replica_link.recovery_point_age_s ~ 's old') | pprint }}
+            target_array: "{{ event.purefb_replica_link.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Replication summary - log

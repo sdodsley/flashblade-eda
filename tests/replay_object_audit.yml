@@ -48,14 +48,14 @@
         run_playbook:
           name: playbooks/canary.yml
           extra_vars:
-            target_array: "{{ event.purefb_s3_event.array }}"
-            access_key_id: "{{ event.purefb_s3_event.access_key_id }}"
-            user: "{{ event.purefb_s3_event.user }}"
-            bucket: "{{ event.purefb_s3_event.bucket }}"
-            key: "{{ event.purefb_s3_event.key }}"
-            source_ip: "{{ event.purefb_s3_event.source_ip }}"
-            event_time: "{{ event.purefb_s3_event.event_time }}"
-            log_object: "{{ event.purefb_s3_event.log_object }}"
+            target_array: "{{ event.purefb_s3_event.array | pprint }}"
+            access_key_id: "{{ event.purefb_s3_event.access_key_id | pprint }}"
+            user: "{{ event.purefb_s3_event.user | pprint }}"
+            bucket: "{{ event.purefb_s3_event.bucket | pprint }}"
+            key: "{{ event.purefb_s3_event.key | pprint }}"
+            source_ip: "{{ event.purefb_s3_event.source_ip | pprint }}"
+            event_time: "{{ event.purefb_s3_event.event_time | pprint }}"
+            log_object: "{{ event.purefb_s3_event.log_object | pprint }}"
             canary_readers: "{{ canary_readers }}"
             automation_keys: "{{ automation_keys }}"
             fb_api_version: "{{ fb_api_version }}"
@@ -80,11 +80,14 @@
             severity: critical
             subject: "Canary {{ event.purefb_s3_event.bucket }}/{{ event.purefb_s3_event.key }} read by {{ event.purefb_s3_event.user }} ({{ event.purefb_s3_event.access_key_id }}) on {{ event.purefb_s3_event.array }}"
             detail: >-
-              {{ event.purefb_s3_event.event_name }} from {{ event.purefb_s3_event.source_ip }}
-              at {{ event.purefb_s3_event.event_time }}, agent {{ event.purefb_s3_event.user_agent }};
-              canary_auto_disable_key is off; log object {{ event.purefb_s3_event.log_object }}
-            target_array: "{{ event.purefb_s3_event.array }}"
+              {{ (event.purefb_s3_event.event_name ~ ' from ' ~ event.purefb_s3_event.source_ip ~ ' at ' ~
+              event.purefb_s3_event.event_time ~ ', agent ' ~ event.purefb_s3_event.user_agent ~
+              '; canary_auto_disable_key is off; log object ' ~ event.purefb_s3_event.log_object) | pprint }}
+            target_array: "{{ event.purefb_s3_event.array | pprint }}"
             alert_log: "{{ alert_log }}"
+
+    # Any request naming a honey key counts, a failed one included: the name
+    # was guessed or listed.
 
     - name: Landing marker arrived - start the ingest
       condition: >-
@@ -100,14 +103,14 @@
         run_playbook:
           name: playbooks/landing.yml
           extra_vars:
-            target_array: "{{ event.purefb_s3_event.array }}"
-            bucket: "{{ event.purefb_s3_event.bucket }}"
-            key: "{{ event.purefb_s3_event.key }}"
-            dataset: "{{ event.purefb_s3_event.dataset }}"
-            user: "{{ event.purefb_s3_event.user }}"
-            access_key_id: "{{ event.purefb_s3_event.access_key_id }}"
-            source_ip: "{{ event.purefb_s3_event.source_ip }}"
-            event_time: "{{ event.purefb_s3_event.event_time }}"
+            target_array: "{{ event.purefb_s3_event.array | pprint }}"
+            bucket: "{{ event.purefb_s3_event.bucket | pprint }}"
+            key: "{{ event.purefb_s3_event.key | pprint }}"
+            dataset: "{{ event.purefb_s3_event.dataset | pprint }}"
+            user: "{{ event.purefb_s3_event.user | pprint }}"
+            access_key_id: "{{ event.purefb_s3_event.access_key_id | pprint }}"
+            source_ip: "{{ event.purefb_s3_event.source_ip | pprint }}"
+            event_time: "{{ event.purefb_s3_event.event_time | pprint }}"
             landing_command: "{{ landing_command }}"
             alert_log: "{{ alert_log }}"
 
@@ -121,16 +124,20 @@
         run_playbook:
           name: playbooks/lock_on_arrival.yml
           extra_vars:
-            target_array: "{{ event.purefb_s3_event.array }}"
-            bucket: "{{ event.purefb_s3_event.bucket }}"
-            key: "{{ event.purefb_s3_event.key }}"
-            version_id: "{{ event.purefb_s3_event.version_id }}"
-            user: "{{ event.purefb_s3_event.user }}"
-            access_key_id: "{{ event.purefb_s3_event.access_key_id }}"
-            source_ip: "{{ event.purefb_s3_event.source_ip }}"
-            event_time: "{{ event.purefb_s3_event.event_time }}"
+            target_array: "{{ event.purefb_s3_event.array | pprint }}"
+            bucket: "{{ event.purefb_s3_event.bucket | pprint }}"
+            key: "{{ event.purefb_s3_event.key | pprint }}"
+            version_id: "{{ event.purefb_s3_event.version_id | pprint }}"
+            user: "{{ event.purefb_s3_event.user | pprint }}"
+            access_key_id: "{{ event.purefb_s3_event.access_key_id | pprint }}"
+            source_ip: "{{ event.purefb_s3_event.source_ip | pprint }}"
+            event_time: "{{ event.purefb_s3_event.event_time | pprint }}"
             object_store: "{{ object_store }}"
             alert_log: "{{ alert_log }}"
+
+    # The playbook refuses a writer outside approval_keys or among the
+    # automation's keys and records the attempt, so every approval object is
+    # worth a run.
 
     - name: Access-denied storm - notify or disable the key
       condition: >-
@@ -145,18 +152,18 @@
         run_playbook:
           name: playbooks/s3_anomaly.yml
           extra_vars:
-            target_array: "{{ event.purefb_s3_rollup.array }}"
-            access_key_id: "{{ event.purefb_s3_rollup.top_access_key }}"
+            target_array: "{{ event.purefb_s3_rollup.array | pprint }}"
+            access_key_id: "{{ event.purefb_s3_rollup.top_access_key | pprint }}"
             kind: denied_storm
-            window: "{{ event.purefb_s3_rollup.window }}"
-            log_object: "{{ event.purefb_s3_rollup.log_object }}"
-            record_count: "{{ event.purefb_s3_rollup.record_count }}"
-            error_count: "{{ event.purefb_s3_rollup.error_count }}"
-            error_pct: "{{ event.purefb_s3_rollup.error_pct }}"
-            denied_count: "{{ event.purefb_s3_rollup.denied_count }}"
-            top_access_key_count: "{{ event.purefb_s3_rollup.top_access_key_count }}"
-            top_source_ip: "{{ event.purefb_s3_rollup.top_source_ip }}"
-            by_error_code: "{{ event.purefb_s3_rollup.by_error_code }}"
+            window: "{{ event.purefb_s3_rollup.window | pprint }}"
+            log_object: "{{ event.purefb_s3_rollup.log_object | pprint }}"
+            record_count: "{{ event.purefb_s3_rollup.record_count | pprint }}"
+            error_count: "{{ event.purefb_s3_rollup.error_count | pprint }}"
+            error_pct: "{{ event.purefb_s3_rollup.error_pct | pprint }}"
+            denied_count: "{{ event.purefb_s3_rollup.denied_count | pprint }}"
+            top_access_key_count: "{{ event.purefb_s3_rollup.top_access_key_count | pprint }}"
+            top_source_ip: "{{ event.purefb_s3_rollup.top_source_ip | pprint }}"
+            by_error_code: "{{ event.purefb_s3_rollup.by_error_code | pprint }}"
             anomaly_auto_disable_key: "{{ anomaly_auto_disable_key }}"
             automation_keys: "{{ automation_keys }}"
             fb_api_version: "{{ fb_api_version }}"
@@ -175,7 +182,7 @@
         run_playbook:
           name: playbooks/auditor_guard.yml
           extra_vars:
-            target_array: "{{ event.purefb_audit_health.array }}"
+            target_array: "{{ event.purefb_audit_health.array | pprint }}"
             mode: quota
             reason: >-
               log bucket {{ event.purefb_audit_health.log_bucket }} at {{ event.purefb_audit_health.log_bucket_used_pct }}%
@@ -185,24 +192,33 @@
             log_bucket_quota_step_pct: "{{ log_bucket_quota_step_pct }}"
             log_bucket_quota_max_bytes: "{{ log_bucket_quota_max_bytes }}"
             audit_auto_reattach: "{{ audit_auto_reattach }}"
-            log_bucket: "{{ event.purefb_audit_health.log_bucket }}"
-            log_bucket_used_bytes: "{{ event.purefb_audit_health.log_bucket_used_bytes }}"
-            log_bucket_quota_bytes: "{{ event.purefb_audit_health.log_bucket_quota_bytes }}"
-            log_bucket_used_pct: "{{ event.purefb_audit_health.log_bucket_used_pct }}"
-            uncovered_buckets: "{{ event.purefb_audit_health.uncovered_buckets }}"
-            policies_disabled: "{{ event.purefb_audit_health.policies_disabled }}"
-            members_without_filters: "{{ event.purefb_audit_health.members_without_filters }}"
+            log_bucket: "{{ event.purefb_audit_health.log_bucket | pprint }}"
+            log_bucket_used_bytes: "{{ event.purefb_audit_health.log_bucket_used_bytes | pprint }}"
+            log_bucket_quota_bytes: "{{ event.purefb_audit_health.log_bucket_quota_bytes | pprint }}"
+            log_bucket_used_pct: "{{ event.purefb_audit_health.log_bucket_used_pct | pprint }}"
+            uncovered_buckets: "{{ event.purefb_audit_health.uncovered_buckets | pprint }}"
+            policies_disabled: "{{ event.purefb_audit_health.policies_disabled | pprint }}"
+            members_without_filters: "{{ event.purefb_audit_health.members_without_filters | pprint }}"
             fb_api_version: "{{ fb_api_version }}"
             alert_log: "{{ alert_log }}"
+
+    # stale is only set once a log object has been seen, so a bucket that is
+    # quiet at night needs audit_log_expected_continuous false.
 
     - name: Audit rollup - log
       condition: event.purefb_s3_rollup.record_count is defined
       action:
         debug:
           msg: >-
-            {{ event.purefb_s3_rollup.array }} {{ event.purefb_s3_rollup.log_object }}:
-            {{ event.purefb_s3_rollup.record_count }} records, {{ event.purefb_s3_rollup.error_count }} errors
-            ({{ event.purefb_s3_rollup.error_pct }}%), {{ event.purefb_s3_rollup.denied_count }} denied,
-            {{ event.purefb_s3_rollup.delete_count }} deletes, canary {{ event.purefb_s3_rollup.canary_hits }},
-            honey {{ event.purefb_s3_rollup.honey_hits }}; by event {{ event.purefb_s3_rollup.by_event_name }};
-            top key {{ event.purefb_s3_rollup.top_access_key }} from {{ event.purefb_s3_rollup.top_source_ip }}
+            {{ (event.purefb_s3_rollup.array ~ ' ' ~ event.purefb_s3_rollup.log_object ~ ': ' ~
+            event.purefb_s3_rollup.record_count ~ ' records, ' ~ event.purefb_s3_rollup.error_count ~ ' errors (' ~
+            event.purefb_s3_rollup.error_pct ~ '%), ' ~ event.purefb_s3_rollup.denied_count ~ ' denied, ' ~
+            event.purefb_s3_rollup.delete_count ~ ' deletes, canary ' ~ event.purefb_s3_rollup.canary_hits ~
+            ', honey ' ~ event.purefb_s3_rollup.honey_hits ~ '; by event ' ~ event.purefb_s3_rollup.by_event_name ~
+            '; top key ' ~ event.purefb_s3_rollup.top_access_key ~ ' from ' ~ event.purefb_s3_rollup.top_source_ip) | pprint }}
+# The audit record of a purepolicy, purelog or purebucket command that
+# removes, disables or rewrites something with "audit" in its subcommand
+# (or any purelog change: the log targets are the audit sink) by a person,
+# not the automation, re-attaches the baseline and pages naming that person.
+# The same audits signal change_control.yml polls; this ruleset keeps the
+# audit configuration rule next to the rules it protects.

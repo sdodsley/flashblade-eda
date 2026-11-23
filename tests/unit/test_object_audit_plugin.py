@@ -1887,3 +1887,59 @@ def test_poll_loop_polls_each_array_under_its_lock(
     assert got[0]["purefb_poll_error"]["array"] == "fb-b"
     assert got[1]["purefb_audit_health"]["array"] == "fb-a"
     assert sorted(p.name for p in (tmp_path / "cursors").iterdir()) == ["fb-a.json"]
+
+
+# --- plain text ------------------------------------------------------------
+def test_clean_breaks_every_delimiter_and_keeps_other_types(object_audit):
+    event = {
+        "{{ key": ["{% a", "{# b", 7, {"#jinja2: c": "{{{ d"}],
+        "count": 3,
+        "nested": {"deep": ["{{ e", True, None]},
+    }
+    assert object_audit.clean(event) == {
+        "{ { key": ["{ % a", "{ # b", 7, {"#jinja2 : c": "{ { { d"}],
+        "count": 3,
+        "nested": {"deep": ["{ { e", True, None]},
+    }
+    text = "a {{ b {% c {# d #jinja2: e"
+    assert object_audit.clean_text(text) == "a { { b { % c { # d #jinja2 : e"
+    assert object_audit.clean_text(PREFIX) == PREFIX
+
+
+def test_poll_loop_queues_every_event_as_plain_text(
+    object_audit, monkeypatch, tmp_path, clock
+):
+    """A record whose bucket, key, user and access key carry template
+    delimiters reaches the queue with each delimiter broken by a space, in
+    the event's own fields and in the rollup's list and counts; the
+    integers and booleans are as logged."""
+    s3 = FakeS3(object_audit)
+    s3.add(
+        log_key("200500", 1),
+        ndjson(
+            record(
+                name="GetObject",
+                bucket="{{ bucket",
+                key="{% dir %}/{# file #}.txt",
+                user="#jinja2: user",
+                access_key="{{{ key",
+                event_id=11,
+            )
+        ),
+    )
+    arr = make_array(object_audit, monkeypatch, s3, log_key_prefix=PREFIX)
+    got = _run_loop(
+        object_audit,
+        [arr],
+        cursor_args(tmp_path, interval=1, replay_objects=1),
+        lambda got: any("purefb_audit_health" in e for e in got),
+    )
+    assert kinds(got) == ["purefb_s3_event", "purefb_s3_rollup", "purefb_audit_health"]
+    ev = got[0]["purefb_s3_event"]
+    assert ev["bucket"] == "{ { bucket" and ev["key"] == "{ % dir %}/{ # file #}.txt"
+    assert ev["user"] == "#jinja2 : user" and ev["access_key_id"] == "{ { { key"
+    assert ev["event_id"] == 11 and ev["ok"] is True and ev["read_only"] is True
+    rollup = got[1]["purefb_s3_rollup"]
+    assert rollup["buckets"] == ["{ { bucket"]
+    assert rollup["by_access_key"] == {"{ { { key": 1}
+    assert rollup["top_access_key"] == "{ { { key" and rollup["record_count"] == 1

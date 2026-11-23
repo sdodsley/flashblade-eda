@@ -37,7 +37,7 @@
   gather_facts: false
   vars:
     store: "{{ object_store[inventory_hostname] }}"
-    request_file: "{{ request_dir }}/{{ request_id }}.json"
+    request_file: "{{ (request_dir ~ '/' ~ request_id ~ '.json') | string }}"
   tasks:
     - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
       ansible.builtin.include_tasks:
@@ -176,23 +176,25 @@
       when: (refusal | trim | length) == 0 and approved_action == 'eradicate_pending'
       ansible.builtin.set_fact:
         performed: false
-        outcome: "approved: run capacity_reclaim.yml with request_id {{ request_id }} and reclaim_action eradicate_pending (not run here)"
+        outcome: >-
+          {{ ('approved: run capacity_reclaim.yml with request_id ' ~ request_id
+              ~ ' and reclaim_action eradicate_pending (not run here)') | string }}
 
     - name: Settle the outcome
       ansible.builtin.set_fact:
         performed: "{{ performed | default(false) }}"
         outcome: >-
-          {{ outcome | default(('refused: ' ~ (refusal | trim)) if (refusal | trim | length) > 0
-                               else 'approved action ' ~ approved_action ~ ' has no handler here') }}
+          {{ (outcome | default(('refused: ' ~ (refusal | trim)) if (refusal | trim | length) > 0
+                                else 'approved action ' ~ approved_action ~ ' has no handler here')) | string }}
 
     - name: Build the receipt
       ansible.builtin.set_fact:
         receipt: >-
           {{ {'time': now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kind': 's3_approval_receipt',
-              'request_id': request_id, 'array': inventory_hostname, 'action': approved_action,
-              'approver': approval.approver | default(''), 'approver_key': approver_key,
-              'approver_user': approver_user | default(''), 'source_ip': source_ip | default(''),
-              'request_source': request_source | trim, 'performed': performed | bool, 'outcome': outcome | trim} }}
+              'request_id': request_id | string, 'array': inventory_hostname, 'action': approved_action,
+              'approver': approval.approver | default(''), 'approver_key': approver_key | string,
+              'approver_user': approver_user | default('') | string, 'source_ip': source_ip | default('') | string,
+              'request_source': request_source | trim, 'performed': performed | bool, 'outcome': outcome | trim | string} }}
 
     - name: Write the receipt to the log bucket
       ansible.builtin.include_tasks:

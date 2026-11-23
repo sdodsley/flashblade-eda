@@ -38,9 +38,9 @@
           job_args:
             extra_vars:
               severity: critical
-              subject: '{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row'
-              detail: '{{ event.purefb_poll_error.error }}'
-              target_array: '{{ event.purefb_poll_error.array }}'
+              subject: '{{ (event.purefb_poll_error.array ~ '' '' ~ event.purefb_poll_error.signal ~ '' poll has failed '' ~ event.purefb_poll_error.consecutive ~ '' times in a row'') | pprint }}'
+              detail: '{{ event.purefb_poll_error.error | pprint }}'
+              target_array: '{{ event.purefb_poll_error.array | pprint }}'
     - name: Poll failed - notify once
       condition: event.purefb_poll_error is defined and event.purefb_poll_error.consecutive == 1
       throttle:
@@ -55,9 +55,9 @@
           job_args:
             extra_vars:
               severity: info
-              subject: '{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed'
-              detail: '{{ event.purefb_poll_error.error }}'
-              target_array: '{{ event.purefb_poll_error.array }}'
+              subject: '{{ (event.purefb_poll_error.array ~ '' '' ~ event.purefb_poll_error.signal ~ '' poll failed'') | pprint }}'
+              detail: '{{ event.purefb_poll_error.error | pprint }}'
+              target_array: '{{ event.purefb_poll_error.array | pprint }}'
     - name: Report poll errors without acting
       condition: event.purefb_poll_error is defined
       action:
@@ -81,18 +81,18 @@
             organization: '{{ aap_organization }}'
             job_args:
               extra_vars:
-                severity: '{{ event.purefb_alert.severity }}'
+                severity: '{{ event.purefb_alert.severity | pprint }}'
                 transition: opened
-                subject: '{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }}: {{ event.purefb_alert.summary }}'
-                component: '{{ event.purefb_alert.component_type }}:{{ event.purefb_alert.component_name }}'
-                component_name: '{{ event.purefb_alert.component_name }}'
-                array_action: '{{ event.purefb_alert.action }}'
-                knowledge_base_url: '{{ event.purefb_alert.knowledge_base_url }}'
-                alert_description: '{{ event.purefb_alert.description }}'
-                alert_variables: '{{ event.purefb_alert.variables }}'
-                target_array: '{{ event.purefb_alert.array }}'
-                alert_id: '{{ event.purefb_alert.alert_id }}'
-                alert_code: '{{ event.purefb_alert.code }}'
+                subject: '{{ (event.purefb_alert.array ~ '' alert '' ~ event.purefb_alert.code ~ '': '' ~ event.purefb_alert.summary) | pprint }}'
+                component: '{{ (event.purefb_alert.component_type ~ '':'' ~ event.purefb_alert.component_name) | pprint }}'
+                component_name: '{{ event.purefb_alert.component_name | pprint }}'
+                array_action: '{{ event.purefb_alert.action | pprint }}'
+                knowledge_base_url: '{{ event.purefb_alert.knowledge_base_url | pprint }}'
+                alert_description: '{{ event.purefb_alert.description | pprint }}'
+                alert_variables: '{{ event.purefb_alert.variables | pprint }}'
+                target_array: '{{ event.purefb_alert.array | pprint }}'
+                alert_id: '{{ event.purefb_alert.alert_id | pprint }}'
+                alert_code: '{{ event.purefb_alert.code | pprint }}'
                 alert_runbooks: '{{ alert_runbooks }}'
                 fb_api_version: '{{ fb_api_version }}'
         - run_job_template:
@@ -100,9 +100,9 @@
             organization: '{{ aap_organization }}'
             job_args:
               extra_vars:
-                target_array: '{{ event.purefb_alert.array }}'
-                alert_id: '{{ event.purefb_alert.alert_id }}'
-                alert_code: '{{ event.purefb_alert.code }}'
+                target_array: '{{ event.purefb_alert.array | pprint }}'
+                alert_id: '{{ event.purefb_alert.alert_id | pprint }}'
+                alert_code: '{{ event.purefb_alert.code | pprint }}'
                 fb_api_version: '{{ fb_api_version }}'
     - name: Alert opened - route through the runbook map
       condition: event.purefb_alert.transition == "opened" and event.purefb_alert.maintenance_active == false and vars.alert_flag_handled == false
@@ -112,18 +112,18 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              severity: '{{ event.purefb_alert.severity }}'
+              severity: '{{ event.purefb_alert.severity | pprint }}'
               transition: opened
-              subject: '{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }}: {{ event.purefb_alert.summary }}'
-              component: '{{ event.purefb_alert.component_type }}:{{ event.purefb_alert.component_name }}'
-              component_name: '{{ event.purefb_alert.component_name }}'
-              array_action: '{{ event.purefb_alert.action }}'
-              knowledge_base_url: '{{ event.purefb_alert.knowledge_base_url }}'
-              alert_description: '{{ event.purefb_alert.description }}'
-              alert_variables: '{{ event.purefb_alert.variables }}'
-              target_array: '{{ event.purefb_alert.array }}'
-              alert_id: '{{ event.purefb_alert.alert_id }}'
-              alert_code: '{{ event.purefb_alert.code }}'
+              subject: '{{ (event.purefb_alert.array ~ '' alert '' ~ event.purefb_alert.code ~ '': '' ~ event.purefb_alert.summary) | pprint }}'
+              component: '{{ (event.purefb_alert.component_type ~ '':'' ~ event.purefb_alert.component_name) | pprint }}'
+              component_name: '{{ event.purefb_alert.component_name | pprint }}'
+              array_action: '{{ event.purefb_alert.action | pprint }}'
+              knowledge_base_url: '{{ event.purefb_alert.knowledge_base_url | pprint }}'
+              alert_description: '{{ event.purefb_alert.description | pprint }}'
+              alert_variables: '{{ event.purefb_alert.variables | pprint }}'
+              target_array: '{{ event.purefb_alert.array | pprint }}'
+              alert_id: '{{ event.purefb_alert.alert_id | pprint }}'
+              alert_code: '{{ event.purefb_alert.code | pprint }}'
               alert_runbooks: '{{ alert_runbooks }}'
               fb_api_version: '{{ fb_api_version }}'
     - name: Alert severity raised - notify
@@ -134,17 +134,17 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              severity: '{{ event.purefb_alert.severity }}'
-              subject: '{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }} raised to {{ event.purefb_alert.severity }}: {{ event.purefb_alert.summary }}'
+              severity: '{{ event.purefb_alert.severity | pprint }}'
+              subject: '{{ (event.purefb_alert.array ~ '' alert '' ~ event.purefb_alert.code ~ '' raised to '' ~ event.purefb_alert.severity ~ '': '' ~ event.purefb_alert.summary) | pprint }}'
               detail: was {{ event.purefb_alert.previous_severity }}; {{ event.purefb_alert.action }}
-              target_array: '{{ event.purefb_alert.array }}'
-              alert_id: '{{ event.purefb_alert.alert_id }}'
-              alert_code: '{{ event.purefb_alert.code }}'
+              target_array: '{{ event.purefb_alert.array | pprint }}'
+              alert_id: '{{ event.purefb_alert.alert_id | pprint }}'
+              alert_code: '{{ event.purefb_alert.code | pprint }}'
     - name: Alert closing - log
       condition: event.purefb_alert.transition == "closing"
       action:
         debug:
-          msg: '{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }} is closing: {{ event.purefb_alert.summary }}'
+          msg: '{{ (event.purefb_alert.array ~ '' alert '' ~ event.purefb_alert.code ~ '' is closing: '' ~ event.purefb_alert.summary) | pprint }}'
     - name: Alert closed - notify
       condition: event.purefb_alert.transition == "closed"
       action:
@@ -154,8 +154,8 @@
           job_args:
             extra_vars:
               severity: info
-              subject: '{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }} closed: {{ event.purefb_alert.summary }}'
+              subject: '{{ (event.purefb_alert.array ~ '' alert '' ~ event.purefb_alert.code ~ '' closed: '' ~ event.purefb_alert.summary) | pprint }}'
               detail: open for {{ event.purefb_alert.resolved_after_s }} s; {{ event.purefb_alert.action }}
-              target_array: '{{ event.purefb_alert.array }}'
-              alert_id: '{{ event.purefb_alert.alert_id }}'
-              alert_code: '{{ event.purefb_alert.code }}'
+              target_array: '{{ event.purefb_alert.array | pprint }}'
+              alert_id: '{{ event.purefb_alert.alert_id | pprint }}'
+              alert_code: '{{ event.purefb_alert.code | pprint }}'

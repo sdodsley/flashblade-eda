@@ -342,7 +342,8 @@ is data when a playbook renders it: an alert summary, a syslog line, an
 object key, a webhook body or an LLDP neighbour name is reported as text
 and never evaluated. Numbers, booleans and null are unchanged, the names
 FlashBlade allows carry no brace, and applying the filter twice changes
-nothing.
+nothing. The rules hand event text to the playbooks as text and the
+playbooks keep it as text in their records.
 
 The push path needs no plugin of this repository. `purefb_telemetry_target`
 points the array's OTLP push at a Prometheus 3.x OTLP receiver (the

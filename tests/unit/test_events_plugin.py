@@ -2885,3 +2885,41 @@ def test_signal_loop_runs_replication_on_its_own_interval(events):
     assert got[1]["purefb_array_connection"]["connected"] is False
     assert got[4]["purefb_replica_link"]["consecutive_issue_polls"] == 2
     assert arr.resets == 0
+
+
+# --- plain text ------------------------------------------------------------
+def test_clean_breaks_every_delimiter_and_keeps_other_types(events):
+    event = {
+        "{{ key": ["{% a", "{# b", 7, {"#jinja2: c": "{{{ d"}],
+        "count": 3,
+        "nested": {"deep": ("{{ e", True, None)},
+    }
+    assert events.clean(event) == {
+        "{ { key": ["{ % a", "{ # b", 7, {"#jinja2 : c": "{ { { d"}],
+        "count": 3,
+        "nested": {"deep": ("{ { e", True, None)},
+    }
+    assert events.clean(events.clean(event)) == events.clean(event)
+    text = "a {{ b {% c {# d #jinja2: e"
+    assert events.clean_text(text) == "a { { b { % c { # d #jinja2 : e"
+    assert events.clean_text("fb-a: fs-01 is 91% full") == "fb-a: fs-01 is 91% full"
+
+
+def test_signal_loop_queues_every_event_as_plain_text(events):
+    """An alert whose summary, component name and variables carry template
+    delimiters comes off the queue with each delimiter broken by a space;
+    its numbers and booleans are as the array sent them."""
+    marked = alert(
+        "1",
+        summary="{{ summary }} on {% raw %} #jinja2: x",
+        component_name="{# CH1.FB1 #}",
+        variables={"{{ blade": "{{{ CH1.FB1", "count": 2},
+    )
+    arr = LockedArray(FakeClient(alerts=[marked]), "fb-a")
+    got = _run_loop(events, "alerts", [arr], {}, lambda got: len(got) >= 1)
+    row = got[0]["purefb_alert"]
+    assert row["summary"] == "{ { summary }} on { % raw %} #jinja2 : x"
+    assert row["component_name"] == "{ # CH1.FB1 #}"
+    assert row["variables"] == {"{ { blade": "{ { { CH1.FB1", "count": 2}
+    assert row["code"] == 1000 and row["flagged"] is False
+    assert row["alert_id"] == "1" and row["transition"] == "initial"

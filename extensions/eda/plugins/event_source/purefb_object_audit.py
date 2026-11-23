@@ -13,6 +13,9 @@ reads each new object once and emits one event per record, one rollup per
 object and one health event per poll. Thresholds and policy live in the
 rulebook, not here.
 
+Every string in an emitted event is plain text: a template delimiter in it
+is broken by a space before the event is queued.
+
 Written against Purity//FB 4.6.4 (REST 2.21) with boto3 1.44 and
 py-pure-client 1.98.0. The REST reads (array id, log target, audit policies
 and members, bucket space, audit filters) exist from REST 2.20 and run only
@@ -320,6 +323,7 @@ import time
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from typing import Any
 
 import urllib3
 
@@ -343,6 +347,43 @@ except ImportError:  # ansible-rulebook ships PyYAML; a bare interpreter may not
     yaml = None
 
 logger = logging.getLogger(__name__)
+
+# The plain-text helpers of the jinja_safe event filter, copied because
+# ansible-rulebook loads each plugin from its own file; the copy is kept
+# identical to the filter's and a unit test compares the four.
+
+# a brace that starts a delimiter: followed by another brace, % or #
+DELIMITER_BRACE = re.compile(r"\{(?=[{%#])")
+# the header that would change the delimiters
+HEADER = "#jinja2:"
+HEADER_SAFE = "#jinja2 :"
+
+
+def clean_text(value: str) -> str:
+    """The string with every template delimiter broken by a space: each
+    brace that starts one gets a space after it (so a run of braces becomes
+    "{ { {", with nothing left to open a template) and the override header
+    is split."""
+    if "{" in value:
+        value = DELIMITER_BRACE.sub("{ ", value)
+    if HEADER in value:
+        value = value.replace(HEADER, HEADER_SAFE)
+    return value
+
+
+def clean(value: Any) -> Any:
+    """`value` with every string in it, however deep, passed through
+    clean_text; other types unchanged."""
+    if isinstance(value, str):
+        return clean_text(value)
+    if isinstance(value, dict):
+        return {clean(k): clean(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [clean(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(clean(v) for v in value)
+    return value
+
 
 PLUGIN = "purefb_object_audit"
 SIGNAL = "object_audit"
@@ -1255,7 +1296,7 @@ async def _poll_loop(queue, arrays, state, args, executor):
             except Exception as exc:  # noqa: BLE001 - report and keep polling
                 events = failed(arr, exc)
             for event in events:
-                await queue.put(event)
+                await queue.put(clean(event))
         elapsed = time.monotonic() - started
         await asyncio.sleep(max(1.0, interval - elapsed))
 

@@ -48,15 +48,17 @@
         run_playbook:
           name: playbooks/quarantine_client.yml
           extra_vars:
-            target_array: "{{ event.purefb_client_performance.array }}"
-            client: "{{ event.purefb_client_performance.client }}"
+            target_array: "{{ event.purefb_client_performance.array | pprint }}"
+            client: "{{ event.purefb_client_performance.client | pprint }}"
             file_system: ""
             action: quarantine
             reason: >-
-              {{ event.purefb_client_performance.protocol }} client held {{ event.purefb_client_performance.ops_share_pct }}% of the ops
-              (iops={{ event.purefb_client_performance.reads_per_sec }}r/{{ event.purefb_client_performance.writes_per_sec }}w)
-              for {{ event.purefb_client_performance.high_share_polls }} polls while the array's write latency was
-              {{ event.purefb_client_performance.array_write_latency_ratio }}x the same half hour last week
+              {{ (event.purefb_client_performance.protocol ~ ' client held ' ~
+              event.purefb_client_performance.ops_share_pct ~ '% of the ops (iops=' ~
+              event.purefb_client_performance.reads_per_sec ~ 'r/' ~ event.purefb_client_performance.writes_per_sec ~
+              'w) for ' ~ event.purefb_client_performance.high_share_polls ~
+              " polls while the array's write latency was " ~
+              event.purefb_client_performance.array_write_latency_ratio ~ 'x the same half hour last week') | pprint }}
             contain_exclude_clients: "{{ contain_exclude_clients }}"
             contain_exclude_file_systems: "{{ contain_exclude_file_systems }}"
             fb_api_version: "{{ fb_api_version }}"
@@ -88,8 +90,11 @@
               array write={{ event.purefb_client_performance.array_usec_per_write_op }}us,
               {{ event.purefb_client_performance.array_write_latency_ratio }}x the same half hour last week;
               ir_auto_contain is off
-            target_array: "{{ event.purefb_client_performance.array }}"
+            target_array: "{{ event.purefb_client_performance.array | pprint }}"
             alert_log: "{{ alert_log }}"
+
+    # eda_capped (an eda-cap-<name> policy from client.yml) and eda_tarpit
+    # are distinct: a file system already capped is not tarpitted on top
 
     - name: File system hogging - tarpit
       condition: >-
@@ -108,8 +113,8 @@
         run_playbook:
           name: playbooks/tarpit.yml
           extra_vars:
-            target_array: "{{ event.purefb_fs_performance.array }}"
-            file_system: "{{ event.purefb_fs_performance.file_system }}"
+            target_array: "{{ event.purefb_fs_performance.array | pprint }}"
+            file_system: "{{ event.purefb_fs_performance.file_system | pprint }}"
             action: apply
             tarpit_ops_per_sec: "{{ tarpit_ops_per_sec }}"
             reason: >-
@@ -132,8 +137,8 @@
         run_playbook:
           name: playbooks/tarpit.yml
           extra_vars:
-            target_array: "{{ event.purefb_fs_performance.array }}"
-            file_system: "{{ event.purefb_fs_performance.file_system }}"
+            target_array: "{{ event.purefb_fs_performance.array | pprint }}"
+            file_system: "{{ event.purefb_fs_performance.file_system | pprint }}"
             action: lift
             tarpit_ops_per_sec: "{{ tarpit_ops_per_sec }}"
             reason: "share normal for {{ event.purefb_fs_performance.normal_polls }} polls"

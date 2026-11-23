@@ -43,15 +43,15 @@
         run_playbook:
           name: playbooks/client_diagnose.yml
           extra_vars:
-            target_array: "{{ event.purefb_client_performance.array }}"
-            client: "{{ event.purefb_client_performance.client }}"
-            ops_share_pct: "{{ event.purefb_client_performance.ops_share_pct }}"
-            high_share_polls: "{{ event.purefb_client_performance.high_share_polls }}"
-            reads_per_sec: "{{ event.purefb_client_performance.reads_per_sec }}"
-            writes_per_sec: "{{ event.purefb_client_performance.writes_per_sec }}"
-            usec_per_write_op: "{{ event.purefb_client_performance.usec_per_write_op }}"
-            array_usec_per_write_op: "{{ event.purefb_client_performance.array_usec_per_write_op }}"
-            array_write_latency_ratio: "{{ event.purefb_client_performance.array_write_latency_ratio }}"
+            target_array: "{{ event.purefb_client_performance.array | pprint }}"
+            client: "{{ event.purefb_client_performance.client | pprint }}"
+            ops_share_pct: "{{ event.purefb_client_performance.ops_share_pct | pprint }}"
+            high_share_polls: "{{ event.purefb_client_performance.high_share_polls | pprint }}"
+            reads_per_sec: "{{ event.purefb_client_performance.reads_per_sec | pprint }}"
+            writes_per_sec: "{{ event.purefb_client_performance.writes_per_sec | pprint }}"
+            usec_per_write_op: "{{ event.purefb_client_performance.usec_per_write_op | pprint }}"
+            array_usec_per_write_op: "{{ event.purefb_client_performance.array_usec_per_write_op | pprint }}"
+            array_write_latency_ratio: "{{ event.purefb_client_performance.array_write_latency_ratio | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Noisy client on a slow array - notify
@@ -78,8 +78,11 @@
               for {{ event.purefb_client_performance.high_share_polls }} polls;
               array write={{ event.purefb_client_performance.array_usec_per_write_op }}us,
               {{ event.purefb_client_performance.array_write_latency_ratio }}x the same half hour last week
-            target_array: "{{ event.purefb_client_performance.array }}"
+            target_array: "{{ event.purefb_client_performance.array | pprint }}"
             alert_log: "{{ alert_log }}"
+
+    # The file system and bucket events carry their share and streak but not
+    # the array baseline; the client rule above holds the latency gate.
 
     - name: File system hogging the array - apply a temporary QoS cap
       condition: >-
@@ -97,9 +100,9 @@
         run_playbook:
           name: playbooks/qos_cap.yml
           extra_vars:
-            target_array: "{{ event.purefb_fs_performance.array }}"
+            target_array: "{{ event.purefb_fs_performance.array | pprint }}"
             object_kind: file_system
-            object_name: "{{ event.purefb_fs_performance.file_system }}"
+            object_name: "{{ event.purefb_fs_performance.file_system | pprint }}"
             cap_ops_per_sec: "{{ qos_cap_ops_per_sec }}"
             reason: >-
               iops={{ event.purefb_fs_performance.reads_per_sec }}r/{{ event.purefb_fs_performance.writes_per_sec }}w
@@ -129,5 +132,5 @@
               iops={{ event.purefb_fs_performance.reads_per_sec }}r/{{ event.purefb_fs_performance.writes_per_sec }}w
               write={{ event.purefb_fs_performance.usec_per_write_op }}us
               for {{ event.purefb_fs_performance.high_share_polls }} polls; qos_policy={{ event.purefb_fs_performance.qos_policy }}
-            target_array: "{{ event.purefb_fs_performance.array }}"
+            target_array: "{{ event.purefb_fs_performance.array | pprint }}"
             alert_log: "{{ alert_log }}"

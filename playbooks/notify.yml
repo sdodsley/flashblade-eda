@@ -33,11 +33,13 @@
         alert_record:
           time: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
           kind: notify
-          severity: "{{ severity | default('warning') }}"
-          array: "{{ target_array | default('') }}"
-          subject: "{{ subject }}"
-          detail: "{{ detail | default('') | trim }}"
-          alert_id: "{{ (alert_id | default('')) or omit }}"
+          severity: "{{ severity | default('warning') | string }}"
+          array: "{{ target_array | default('') | string }}"
+          subject: "{{ subject | string }}"
+          detail: >-
+            {{ (detail | default('')) if (detail | default('')) is not string
+            else detail | default('') | trim | string }}
+          alert_id: "{{ ((alert_id | default('')) or omit) | string }}"
           alert_code: "{{ (alert_code | default('')) or omit }}"
 
     - name: Append to the alert log
@@ -74,16 +76,24 @@
       ansible.builtin.debug:
         msg: "not posted to Slack: severity {{ alert_record.severity }} is below the floor {{ slack_floor }}"
 
-    # A literal block scalar carries the line break between the subject line
-    # and the detail: inside a Jinja expression Ansible doubles backslashes,
-    # so a '\n' written there is two characters, not a newline. Slack wants
-    # &, < and > escaped in message text; carriage returns are dropped.
+    # The line break between the subject line and the detail comes from a
+    # task var: inside a Jinja expression Ansible doubles backslashes, so a
+    # '\n' written there is two characters, not a newline. Slack wants &, <
+    # and > escaped in message text; a carriage return in the detail becomes
+    # a space. The message is one expression, so the record's text reaches
+    # Slack as text.
     - name: Format the Slack message
       when: slack_wanted | bool
+      vars:
+        line_break: "\n"
       ansible.builtin.set_fact:
-        slack_text: |-
-          {{ slack_icons[alert_record.severity] | default(':information_source:') }} *{{ alert_record.severity | upper }}* {{ alert_record.subject | replace('&', '&amp;') | replace('<', '&lt;') | replace('>', '&gt;') }}{{ (' (' ~ alert_record.array ~ ')') if alert_record.array and alert_record.array not in alert_record.subject else '' }}
-          {{ alert_record.detail | regex_replace('\r', '') | replace('&', '&amp;') | replace('<', '&lt;') | replace('>', '&gt;') }}
+        slack_text: >-
+          {{ (slack_icons[alert_record.severity] | default(':information_source:')
+              ~ ' *' ~ alert_record.severity | upper ~ '* '
+              ~ alert_record.subject | replace('&', '&amp;') | replace('<', '&lt;') | replace('>', '&gt;')
+              ~ ((' (' ~ alert_record.array ~ ')') if alert_record.array and alert_record.array not in alert_record.subject else '')
+              ~ line_break
+              ~ alert_record.detail | regex_replace('\r', ' ') | replace('&', '&amp;') | replace('<', '&lt;') | replace('>', '&gt;')) | string }}
 
     - name: Post the alert to Slack
       when: slack_wanted | bool

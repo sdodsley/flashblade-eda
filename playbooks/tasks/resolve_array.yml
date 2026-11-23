@@ -67,7 +67,7 @@
   ansible.builtin.set_fact:
     fb_url: "{{ resolve_array_entries[0].fb_url }}"
     api_token: "{{ resolve_array_entries[0].api_token }}"
-    credential_array: "{{ resolve_array_name }}"
+    credential_array: "{{ resolve_array_name | string }}"
   delegate_to: "{{ resolve_array_name }}"
   delegate_facts: true
   no_log: true

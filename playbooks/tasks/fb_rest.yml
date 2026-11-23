@@ -93,10 +93,10 @@
     fb_rest_status: 0
     fb_rest_json: {}
     fb_rest_error: >-
-      {{ (fb_rest_base ~ ' did not list its REST versions') if fb_rest_newest == 'none'
-         else (fb_rest_base ~ ' does not serve REST ' ~ fb_rest_api_version ~ ' (it serves up to ' ~ fb_rest_newest ~ ')')
-         if (fb_rest_api_version | default('', true) | string | length) > 0
-         else (fb_rest_base ~ ' serves REST up to ' ~ fb_rest_newest ~ '; ' ~ fb_rest_path ~ ' needs ' ~ fb_rest_floor ~ ' or newer') }}
+      {{ ((fb_rest_base ~ ' did not list its REST versions') if fb_rest_newest == 'none'
+          else (fb_rest_base ~ ' does not serve REST ' ~ fb_rest_api_version ~ ' (it serves up to ' ~ fb_rest_newest ~ ')')
+          if (fb_rest_api_version | default('', true) | string | length) > 0
+          else (fb_rest_base ~ ' serves REST up to ' ~ fb_rest_newest ~ '; ' ~ fb_rest_path ~ ' needs ' ~ fb_rest_floor ~ ' or newer')) | string }}
 
 - name: Log in to the array
   when: fb_rest_version | length > 0

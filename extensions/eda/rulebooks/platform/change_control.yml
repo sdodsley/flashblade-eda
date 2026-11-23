@@ -41,9 +41,9 @@
           job_args:
             extra_vars:
               severity: critical
-              subject: '{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row'
-              detail: '{{ event.purefb_poll_error.error }}'
-              target_array: '{{ event.purefb_poll_error.array }}'
+              subject: '{{ (event.purefb_poll_error.array ~ '' '' ~ event.purefb_poll_error.signal ~ '' poll has failed '' ~ event.purefb_poll_error.consecutive ~ '' times in a row'') | pprint }}'
+              detail: '{{ event.purefb_poll_error.error | pprint }}'
+              target_array: '{{ event.purefb_poll_error.array | pprint }}'
     - name: Poll failed - notify once
       condition: event.purefb_poll_error is defined and event.purefb_poll_error.consecutive == 1
       throttle:
@@ -58,9 +58,9 @@
           job_args:
             extra_vars:
               severity: info
-              subject: '{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed'
-              detail: '{{ event.purefb_poll_error.error }}'
-              target_array: '{{ event.purefb_poll_error.array }}'
+              subject: '{{ (event.purefb_poll_error.array ~ '' '' ~ event.purefb_poll_error.signal ~ '' poll failed'') | pprint }}'
+              detail: '{{ event.purefb_poll_error.error | pprint }}'
+              target_array: '{{ event.purefb_poll_error.array | pprint }}'
     - name: Report poll errors without acting
       condition: event.purefb_poll_error is defined
       action:
@@ -79,14 +79,14 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_audit.array }}'
-              audit_user: '{{ event.purefb_audit.user }}'
-              audit_interface: '{{ event.purefb_audit.user_interface }}'
-              audit_ip_address: '{{ event.purefb_audit.ip_address }}'
-              audit_command: '{{ event.purefb_audit.command }}'
-              audit_subcommand: '{{ event.purefb_audit.subcommand }}'
-              audit_arguments: '{{ event.purefb_audit.arguments }}'
-              audit_time: '{{ event.purefb_audit.time }}'
+              target_array: '{{ event.purefb_audit.array | pprint }}'
+              audit_user: '{{ event.purefb_audit.user | pprint }}'
+              audit_interface: '{{ event.purefb_audit.user_interface | pprint }}'
+              audit_ip_address: '{{ event.purefb_audit.ip_address | pprint }}'
+              audit_command: '{{ event.purefb_audit.command | pprint }}'
+              audit_subcommand: '{{ event.purefb_audit.subcommand | pprint }}'
+              audit_arguments: '{{ event.purefb_audit.arguments | pprint }}'
+              audit_time: '{{ event.purefb_audit.time | pprint }}'
     - name: Governed setting changed during a maintenance window - log only
       condition: event.purefb_audit.command is defined and event.purefb_audit.command in vars.governed_commands and event.purefb_audit.by_automation == false and event.purefb_audit.maintenance_active == true
       action:
@@ -101,9 +101,9 @@
           job_args:
             extra_vars:
               severity: warning
-              subject: '{{ event.purefb_audit.user }} ran {{ event.purefb_audit.command }} {{ event.purefb_audit.subcommand }} on {{ event.purefb_audit.array }}'
+              subject: '{{ (event.purefb_audit.user ~ '' ran '' ~ event.purefb_audit.command ~ '' '' ~ event.purefb_audit.subcommand ~ '' on '' ~ event.purefb_audit.array) | pprint }}'
               detail: 'arguments: {{ event.purefb_audit.arguments }} (from {{ event.purefb_audit.ip_address }} over {{ event.purefb_audit.user_interface }}, audit {{ event.purefb_audit.audit_id }})'
-              target_array: '{{ event.purefb_audit.array }}'
+              target_array: '{{ event.purefb_audit.array | pprint }}'
     - name: Change by the automation account - log
       condition: event.purefb_audit.by_automation == true
       action:

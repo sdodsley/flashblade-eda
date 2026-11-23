@@ -14,7 +14,7 @@
 # alert's variables may carry it too, so both are tried.
 - name: Pick the file system the alert names
   ansible.builtin.set_fact:
-    quota_fs: "{{ alert_variables.file_system | default(component_name | default(''), true) }}"
+    quota_fs: "{{ alert_variables.file_system | default(component_name | default(''), true) | string }}"
 
 - name: Read the file system
   when: quota_fs is match('^[A-Za-z0-9][A-Za-z0-9_.:-]*$')
@@ -30,7 +30,7 @@
 - name: Keep what the array said
   ansible.builtin.set_fact:
     quota_fs_item: "{{ (fb_rest_json['items'] | default([{}]))[0] | default({}) }}"
-    quota_fs_error: "{{ fb_rest_error | default('file system name not recognised: ' ~ quota_fs) }}"
+    quota_fs_error: "{{ fb_rest_error | default('file system name not recognised: ' ~ quota_fs) | string }}"
 
 - name: Say what the runbook found
   ansible.builtin.debug:

@@ -47,8 +47,8 @@
         quota_fs: >-
           {{ (alert_variables | default({}))['File System Name']
              | default((alert_variables | default({})).FileSystemName
-                       | default((component_name | default('')) | regex_replace('^(users|groups) of ', ''), true), true)
-             | trim }}
+                       | default((component_name | default('')) | regex_replace('^(users|groups) of ', ' '), true), true)
+             | trim | string }}
 
     - name: Decide whether the alert can be read back
       ansible.builtin.set_fact:

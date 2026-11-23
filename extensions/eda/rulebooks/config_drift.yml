@@ -54,9 +54,11 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row"
-            detail: "{{ event.purefb_poll_error.error }}"
-            target_array: "{{ event.purefb_poll_error.array }}"
+            subject: >-
+              {{ (event.purefb_poll_error.array ~ ' ' ~ event.purefb_poll_error.signal ~ ' poll has failed ' ~
+              event.purefb_poll_error.consecutive ~ ' times in a row') | pprint }}
+            detail: "{{ event.purefb_poll_error.error | pprint }}"
+            target_array: "{{ event.purefb_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Poll failed - notify once
@@ -73,9 +75,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed"
-            detail: "{{ event.purefb_poll_error.error }}"
-            target_array: "{{ event.purefb_poll_error.array }}"
+            subject: "{{ (event.purefb_poll_error.array ~ ' ' ~ event.purefb_poll_error.signal ~ ' poll failed') | pprint }}"
+            detail: "{{ event.purefb_poll_error.error | pprint }}"
+            target_array: "{{ event.purefb_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Report poll errors without acting
@@ -96,8 +98,8 @@
         run_playbook:
           name: playbooks/remediate_ntp.yml
           extra_vars:
-            target_array: "{{ event.purefb_config.array }}"
-            observed_ntp_servers: "{{ event.purefb_config.ntp_servers_csv }}"
+            target_array: "{{ event.purefb_config.array | pprint }}"
+            observed_ntp_servers: "{{ event.purefb_config.ntp_servers_csv | pprint }}"
             baseline_ntp_servers_csv: "{{ baseline_ntp_servers_csv }}"
             alert_log: "{{ alert_log }}"
 
@@ -114,9 +116,9 @@
         run_playbook:
           name: playbooks/remediate_dns.yml
           extra_vars:
-            target_array: "{{ event.purefb_config.array }}"
-            observed_dns_domain: "{{ event.purefb_config.dns_domain }}"
-            observed_dns_nameservers: "{{ event.purefb_config.dns_nameservers_csv }}"
+            target_array: "{{ event.purefb_config.array | pprint }}"
+            observed_dns_domain: "{{ event.purefb_config.dns_domain | pprint }}"
+            observed_dns_nameservers: "{{ event.purefb_config.dns_nameservers_csv | pprint }}"
             baseline_dns_domain: "{{ baseline_dns_domain }}"
             baseline_dns_nameservers_csv: "{{ baseline_dns_nameservers_csv }}"
             alert_log: "{{ alert_log }}"
@@ -142,7 +144,7 @@
               base_dn={{ event.purefb_config.ds_management_base_dn }} bind_user={{ event.purefb_config.ds_management_bind_user }};
               baseline enabled={{ baseline_ds_management_enabled }} uris={{ baseline_ds_management_uris_csv }}
               base_dn={{ baseline_ds_management_base_dn }}
-            target_array: "{{ event.purefb_config.array }}"
+            target_array: "{{ event.purefb_config.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Eradication settings drift - notify only, never remediate
@@ -165,7 +167,7 @@
               eradication_delay_ms={{ event.purefb_config.eradication_delay_ms }};
               baseline manual_eradication={{ baseline_manual_eradication }}
               minimum delay={{ baseline_min_eradication_delay_ms }}
-            target_array: "{{ event.purefb_config.array }}"
+            target_array: "{{ event.purefb_config.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Admin authentication settings drift - notify only
@@ -190,7 +192,7 @@
               lockout_duration_ms={{ event.purefb_config.lockout_duration_ms }} (baseline {{ baseline_lockout_duration_ms }})
               min_password_length={{ event.purefb_config.min_password_length }} (baseline at least {{ baseline_min_password_length }})
               sso_enabled={{ event.purefb_config.sso_enabled }} (baseline {{ baseline_sso_enabled }})
-            target_array: "{{ event.purefb_config.array }}"
+            target_array: "{{ event.purefb_config.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     # Joining or leaving Active Directory changes who can reach every SMB
@@ -210,7 +212,7 @@
             severity: warning
             subject: "Active Directory membership changed on {{ event.purefb_config.array }}"
             detail: "ad_joined={{ event.purefb_config.ad_joined }}; baseline ad_joined={{ baseline_ad_joined }}"
-            target_array: "{{ event.purefb_config.array }}"
+            target_array: "{{ event.purefb_config.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: No syslog target carries the data-audit service - notify
@@ -231,5 +233,5 @@
             detail: >-
               no syslog server has the data-audit service (servers: {{ event.purefb_config.syslog_servers_csv }});
               require_data_audit_syslog is true
-            target_array: "{{ event.purefb_config.array }}"
+            target_array: "{{ event.purefb_config.array | pprint }}"
             alert_log: "{{ alert_log }}"

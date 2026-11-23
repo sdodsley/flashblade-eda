@@ -28,7 +28,7 @@
   hosts: "{{ target_array }}"
   gather_facts: false
   vars:
-    guard_bucket: "{{ log_bucket | default(audit_baseline.log_bucket) }}"
+    guard_bucket: "{{ log_bucket | default(audit_baseline.log_bucket) | string }}"
   tasks:
     - name: Resolve this array's credentials (inventory, per-array credential or fleet credential)
       ansible.builtin.include_tasks:
@@ -113,14 +113,14 @@
 
         - name: Describe the quota outcome
           ansible.builtin.set_fact:
-            changed_objects: "{{ ['bucket ' ~ guard_bucket] if quota_raise_wanted | bool and (fb_rest_status | int) == 200 else [] }}"
+            changed_objects: "{{ [('bucket ' ~ guard_bucket) | string] if quota_raise_wanted | bool and (fb_rest_status | int) == 200 else [] }}"
             outcome: >-
-              {{ ('log bucket ' ~ guard_bucket ~ ' not read: ' ~ bucket_error) if bucket_now.name is not defined
-                 else 'notify only: log_bucket_quota_max_bytes is 0' if (quota_ceiling | int) == 0
-                 else 'notify only: the bucket has no quota to step' if (quota_now | int) == 0
-                 else ('notify only: quota ' ~ quota_now ~ ' bytes is already at the ceiling ' ~ quota_ceiling) if (quota_new | int) <= (quota_now | int)
-                 else ('quota raised from ' ~ quota_now ~ ' to ' ~ quota_new ~ ' bytes') if (fb_rest_status | int) == 200
-                 else ('quota raise refused by the array: ' ~ (fb_rest_error | trim)) }}
+              {{ (('log bucket ' ~ guard_bucket ~ ' not read: ' ~ bucket_error) if bucket_now.name is not defined
+                  else 'notify only: log_bucket_quota_max_bytes is 0' if (quota_ceiling | int) == 0
+                  else 'notify only: the bucket has no quota to step' if (quota_now | int) == 0
+                  else ('notify only: quota ' ~ quota_now ~ ' bytes is already at the ceiling ' ~ quota_ceiling) if (quota_new | int) <= (quota_now | int)
+                  else ('quota raised from ' ~ quota_now ~ ' to ' ~ quota_new ~ ' bytes') if (fb_rest_status | int) == 200
+                  else ('quota raise refused by the array: ' ~ (fb_rest_error | trim))) | string }}
 
     - name: Re-attach the audit configuration from the baseline
       when: mode == 'reattach' and audit_auto_reattach | default(false) | bool

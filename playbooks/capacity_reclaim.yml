@@ -38,7 +38,7 @@
   hosts: localhost
   gather_facts: false
   vars:
-    request_file: "{{ request_dir }}/{{ request_id }}.json"
+    request_file: "{{ (request_dir ~ '/' ~ request_id ~ '.json') | string }}"
   tasks:
     - name: Refuse a request id that is not a plain file name
       ansible.builtin.assert:

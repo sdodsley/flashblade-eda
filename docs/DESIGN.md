@@ -102,7 +102,13 @@ field (an array name, a client address, a request id, an approver) to a
 playbook's `hosts:` line or to an object name pins that field in its
 condition with an anchored `is match`: the condition compares the value
 and never renders it, and a value that does not fit starts nothing (the
-webhook and Alertmanager rulesets log it in their last rule).
+webhook and Alertmanager rulesets log it in their last rule). Two more
+rules hold for every rule and playbook in the tree: an action template
+that opens with an event field is one expression ending in `| pprint`, so
+the playbook receives the value as it was, and a fact a playbook builds
+from text a rule handed it is one expression ending in `| string`, so the
+record keeps that text as text; nothing removes characters from such
+text, and a carriage return in a detail becomes a space.
 
 ## 4. Ideas by domain
 

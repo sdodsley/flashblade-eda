@@ -6,6 +6,12 @@
   `sdodsley.flashblade_eda.jinja_safe` event filter, which puts a space
   after each template delimiter in every string of an event so a playbook
   renders event text as text.
+- Every action template that opens with an event field is one expression
+  ending in `| pprint`, so the playbook receives the value as it was.
+- The playbooks' records keep event text as text: every text fact built
+  from it ends in `| string` (a number, a boolean, a list or a dict keeps
+  its type), and a carriage return in a detail becomes a space. The three event sources emit plain text themselves, so a
+  rulebook that names them without the filters line gets the same text.
 - The webhook, Alertmanager and syslog rules accept only well-formed array
   names, addresses and ids in the fields they hand to a playbook, pinned in
   the rule conditions; the webhook and Alertmanager rulesets end with a

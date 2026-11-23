@@ -16,6 +16,9 @@ severity without regexes, and the data-audit records are tallied per file
 system, user and client into sliding windows so a mass delete or a rename
 storm is one event, not ten thousand.
 
+Every string in an emitted event is plain text: a template delimiter in it
+is broken by a space before the event is queued.
+
 Arguments
 ---------
 host                    bind address (default 0.0.0.0; bind to the interface
@@ -258,6 +261,7 @@ import json
 import logging
 import re
 import time
+from typing import Any
 
 try:
     import yaml
@@ -265,6 +269,43 @@ except ImportError:  # ansible-rulebook ships PyYAML; a bare interpreter may not
     yaml = None
 
 logger = logging.getLogger(__name__)
+
+# The plain-text helpers of the jinja_safe event filter, copied because
+# ansible-rulebook loads each plugin from its own file; the copy is kept
+# identical to the filter's and a unit test compares the four.
+
+# a brace that starts a delimiter: followed by another brace, % or #
+DELIMITER_BRACE = re.compile(r"\{(?=[{%#])")
+# the header that would change the delimiters
+HEADER = "#jinja2:"
+HEADER_SAFE = "#jinja2 :"
+
+
+def clean_text(value: str) -> str:
+    """The string with every template delimiter broken by a space: each
+    brace that starts one gets a space after it (so a run of braces becomes
+    "{ { {", with nothing left to open a template) and the override header
+    is split."""
+    if "{" in value:
+        value = DELIMITER_BRACE.sub("{ ", value)
+    if HEADER in value:
+        value = value.replace(HEADER, HEADER_SAFE)
+    return value
+
+
+def clean(value: Any) -> Any:
+    """`value` with every string in it, however deep, passed through
+    clean_text; other types unchanged."""
+    if isinstance(value, str):
+        return clean_text(value)
+    if isinstance(value, dict):
+        return {clean(k): clean(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [clean(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(clean(v) for v in value)
+    return value
+
 
 SEVERITIES = ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"]
 # Purity's own alert severity words -> the words the REST purefb_alert event
@@ -859,6 +900,13 @@ def _decode_mapping(value, plugin):
     )
 
 
+async def _forward(local, queue):
+    """Hand each event of the local queue on to ansible-rulebook's queue,
+    every string in it plain text."""
+    while True:
+        await queue.put(clean(await local.get()))
+
+
 async def main(queue: asyncio.Queue, args: dict) -> None:
     host = args.get("host") or "0.0.0.0"
     port = int(args.get("port", 5140))
@@ -884,12 +932,7 @@ async def main(queue: asyncio.Queue, args: dict) -> None:
     # own (one-slot) queue applies back-pressure to the forwarder only.
     local: asyncio.Queue = asyncio.Queue()
     emit = _emitter(local, hostnames, automation, networks, programs, windows)
-
-    async def forward():
-        while True:
-            await queue.put(await local.get())
-
-    forwarder = asyncio.create_task(forward())
+    forwarder = asyncio.create_task(_forward(local, queue))
     servers = []
     if "udp" in protocols:
         transport, _ = await loop.create_datagram_endpoint(

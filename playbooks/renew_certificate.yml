@@ -150,11 +150,11 @@
     - name: Describe the outcome
       ansible.builtin.set_fact:
         outcome: >-
-          {{ (('renewed ' ~ (renewed | join(', ')) ~ ' for ' ~ certs_renew_days ~ ' days') if (renewed | length) > 0 else '')
-             ~ (('; needs a human (not self-signed by the array): ' ~ (foreign | join(', '))) if (foreign | length) > 0 else '')
-             ~ (('; not on the array: ' ~ (unknown | join(', ')) ~ (' (' ~ read_error ~ ')' if read_error else '')) if (unknown | length) > 0 else '')
-             ~ (('; refused: ' ~ (renew_errors | join('; '))) if (renew_errors | length) > 0 else '')
-             ~ ('nothing to renew' if (renewed | length) == 0 and (foreign | length) == 0 and (unknown | length) == 0 and (renew_errors | length) == 0 else '') }}
+          {{ ((('renewed ' ~ (renewed | join(', ')) ~ ' for ' ~ certs_renew_days ~ ' days') if (renewed | length) > 0 else '')
+              ~ (('; needs a human (not self-signed by the array): ' ~ (foreign | join(', '))) if (foreign | length) > 0 else '')
+              ~ (('; not on the array: ' ~ (unknown | join(', ')) ~ (' (' ~ read_error ~ ')' if read_error else '')) if (unknown | length) > 0 else '')
+              ~ (('; refused: ' ~ (renew_errors | join('; '))) if (renew_errors | length) > 0 else '')
+              ~ ('nothing to renew' if (renewed | length) == 0 and (foreign | length) == 0 and (unknown | length) == 0 and (renew_errors | length) == 0 else '')) | string }}
 
     - name: Record the renewal
       ansible.builtin.lineinfile:

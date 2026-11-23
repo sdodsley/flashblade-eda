@@ -54,9 +54,9 @@
           job_args:
             extra_vars:
               severity: critical
-              subject: '{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row'
-              detail: '{{ event.purefb_poll_error.error }}'
-              target_array: '{{ event.purefb_poll_error.array }}'
+              subject: '{{ (event.purefb_poll_error.array ~ '' '' ~ event.purefb_poll_error.signal ~ '' poll has failed '' ~ event.purefb_poll_error.consecutive ~ '' times in a row'') | pprint }}'
+              detail: '{{ event.purefb_poll_error.error | pprint }}'
+              target_array: '{{ event.purefb_poll_error.array | pprint }}'
     - name: Poll failed - notify once
       condition: event.purefb_poll_error is defined and event.purefb_poll_error.consecutive == 1
       throttle:
@@ -71,9 +71,9 @@
           job_args:
             extra_vars:
               severity: info
-              subject: '{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed'
-              detail: '{{ event.purefb_poll_error.error }}'
-              target_array: '{{ event.purefb_poll_error.array }}'
+              subject: '{{ (event.purefb_poll_error.array ~ '' '' ~ event.purefb_poll_error.signal ~ '' poll failed'') | pprint }}'
+              detail: '{{ event.purefb_poll_error.error | pprint }}'
+              target_array: '{{ event.purefb_poll_error.array | pprint }}'
     - name: Report poll errors without acting
       condition: event.purefb_poll_error is defined
       action:
@@ -92,14 +92,14 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_s3_event.array }}'
-              access_key_id: '{{ event.purefb_s3_event.access_key_id }}'
-              user: '{{ event.purefb_s3_event.user }}'
-              bucket: '{{ event.purefb_s3_event.bucket }}'
-              key: '{{ event.purefb_s3_event.key }}'
-              source_ip: '{{ event.purefb_s3_event.source_ip }}'
-              event_time: '{{ event.purefb_s3_event.event_time }}'
-              log_object: '{{ event.purefb_s3_event.log_object }}'
+              target_array: '{{ event.purefb_s3_event.array | pprint }}'
+              access_key_id: '{{ event.purefb_s3_event.access_key_id | pprint }}'
+              user: '{{ event.purefb_s3_event.user | pprint }}'
+              bucket: '{{ event.purefb_s3_event.bucket | pprint }}'
+              key: '{{ event.purefb_s3_event.key | pprint }}'
+              source_ip: '{{ event.purefb_s3_event.source_ip | pprint }}'
+              event_time: '{{ event.purefb_s3_event.event_time | pprint }}'
+              log_object: '{{ event.purefb_s3_event.log_object | pprint }}'
               canary_readers: '{{ canary_readers }}'
               automation_keys: '{{ automation_keys }}'
               fb_api_version: '{{ fb_api_version }}'
@@ -118,8 +118,8 @@
             extra_vars:
               severity: critical
               subject: Canary {{ event.purefb_s3_event.bucket }}/{{ event.purefb_s3_event.key }} read by {{ event.purefb_s3_event.user }} ({{ event.purefb_s3_event.access_key_id }}) on {{ event.purefb_s3_event.array }}
-              detail: '{{ event.purefb_s3_event.event_name }} from {{ event.purefb_s3_event.source_ip }} at {{ event.purefb_s3_event.event_time }}, agent {{ event.purefb_s3_event.user_agent }}; canary_auto_disable_key is off; log object {{ event.purefb_s3_event.log_object }}'
-              target_array: '{{ event.purefb_s3_event.array }}'
+              detail: '{{ (event.purefb_s3_event.event_name ~ '' from '' ~ event.purefb_s3_event.source_ip ~ '' at '' ~ event.purefb_s3_event.event_time ~ '', agent '' ~ event.purefb_s3_event.user_agent ~ ''; canary_auto_disable_key is off; log object '' ~ event.purefb_s3_event.log_object) | pprint }}'
+              target_array: '{{ event.purefb_s3_event.array | pprint }}'
     - name: Honey object touched - notify
       condition: event.purefb_s3_event.honey is defined and event.purefb_s3_event.honey == true and event.purefb_s3_event.by_automation == false
       throttle:
@@ -136,7 +136,7 @@
               severity: critical
               subject: Honey object {{ event.purefb_s3_event.bucket }}/{{ event.purefb_s3_event.key }} {{ event.purefb_s3_event.event_name }} by {{ event.purefb_s3_event.user }} ({{ event.purefb_s3_event.access_key_id }}) on {{ event.purefb_s3_event.array }}
               detail: from {{ event.purefb_s3_event.source_ip }} at {{ event.purefb_s3_event.event_time }}, error={{ event.purefb_s3_event.error_code }}; log object {{ event.purefb_s3_event.log_object }}
-              target_array: '{{ event.purefb_s3_event.array }}'
+              target_array: '{{ event.purefb_s3_event.array | pprint }}'
     - name: Landing marker arrived - start the ingest
       condition: event.purefb_s3_event.landing is defined and event.purefb_s3_event.landing == true and vars.landing_enabled == true
       throttle:
@@ -150,14 +150,14 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_s3_event.array }}'
-              bucket: '{{ event.purefb_s3_event.bucket }}'
-              key: '{{ event.purefb_s3_event.key }}'
-              dataset: '{{ event.purefb_s3_event.dataset }}'
-              user: '{{ event.purefb_s3_event.user }}'
-              access_key_id: '{{ event.purefb_s3_event.access_key_id }}'
-              source_ip: '{{ event.purefb_s3_event.source_ip }}'
-              event_time: '{{ event.purefb_s3_event.event_time }}'
+              target_array: '{{ event.purefb_s3_event.array | pprint }}'
+              bucket: '{{ event.purefb_s3_event.bucket | pprint }}'
+              key: '{{ event.purefb_s3_event.key | pprint }}'
+              dataset: '{{ event.purefb_s3_event.dataset | pprint }}'
+              user: '{{ event.purefb_s3_event.user | pprint }}'
+              access_key_id: '{{ event.purefb_s3_event.access_key_id | pprint }}'
+              source_ip: '{{ event.purefb_s3_event.source_ip | pprint }}'
+              event_time: '{{ event.purefb_s3_event.event_time | pprint }}'
               landing_command: '{{ landing_command }}'
     - name: Landing marker arrived - log
       condition: event.purefb_s3_event.landing is defined and event.purefb_s3_event.landing == true and vars.landing_enabled == false
@@ -172,14 +172,14 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_s3_event.array }}'
-              bucket: '{{ event.purefb_s3_event.bucket }}'
-              key: '{{ event.purefb_s3_event.key }}'
-              version_id: '{{ event.purefb_s3_event.version_id }}'
-              user: '{{ event.purefb_s3_event.user }}'
-              access_key_id: '{{ event.purefb_s3_event.access_key_id }}'
-              source_ip: '{{ event.purefb_s3_event.source_ip }}'
-              event_time: '{{ event.purefb_s3_event.event_time }}'
+              target_array: '{{ event.purefb_s3_event.array | pprint }}'
+              bucket: '{{ event.purefb_s3_event.bucket | pprint }}'
+              key: '{{ event.purefb_s3_event.key | pprint }}'
+              version_id: '{{ event.purefb_s3_event.version_id | pprint }}'
+              user: '{{ event.purefb_s3_event.user | pprint }}'
+              access_key_id: '{{ event.purefb_s3_event.access_key_id | pprint }}'
+              source_ip: '{{ event.purefb_s3_event.source_ip | pprint }}'
+              event_time: '{{ event.purefb_s3_event.event_time | pprint }}'
               object_store: '{{ object_store }}'
     - name: Approval object written - act on it
       condition: event.purefb_s3_event.approval is defined and event.purefb_s3_event.approval == true
@@ -189,11 +189,11 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_s3_event.array }}'
-              request_id: '{{ event.purefb_s3_event.request_id }}'
-              approver_key: '{{ event.purefb_s3_event.access_key_id }}'
-              approver_user: '{{ event.purefb_s3_event.user }}'
-              source_ip: '{{ event.purefb_s3_event.source_ip }}'
+              target_array: '{{ event.purefb_s3_event.array | pprint }}'
+              request_id: '{{ event.purefb_s3_event.request_id | pprint }}'
+              approver_key: '{{ event.purefb_s3_event.access_key_id | pprint }}'
+              approver_user: '{{ event.purefb_s3_event.user | pprint }}'
+              source_ip: '{{ event.purefb_s3_event.source_ip | pprint }}'
               object_store: '{{ object_store }}'
               approval_keys: '{{ approval_keys }}'
               automation_keys: '{{ automation_keys }}'
@@ -214,18 +214,18 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_s3_rollup.array }}'
-              access_key_id: '{{ event.purefb_s3_rollup.top_access_key }}'
+              target_array: '{{ event.purefb_s3_rollup.array | pprint }}'
+              access_key_id: '{{ event.purefb_s3_rollup.top_access_key | pprint }}'
               kind: denied_storm
-              window: '{{ event.purefb_s3_rollup.window }}'
-              log_object: '{{ event.purefb_s3_rollup.log_object }}'
-              record_count: '{{ event.purefb_s3_rollup.record_count }}'
-              error_count: '{{ event.purefb_s3_rollup.error_count }}'
-              error_pct: '{{ event.purefb_s3_rollup.error_pct }}'
-              denied_count: '{{ event.purefb_s3_rollup.denied_count }}'
-              top_access_key_count: '{{ event.purefb_s3_rollup.top_access_key_count }}'
-              top_source_ip: '{{ event.purefb_s3_rollup.top_source_ip }}'
-              by_error_code: '{{ event.purefb_s3_rollup.by_error_code }}'
+              window: '{{ event.purefb_s3_rollup.window | pprint }}'
+              log_object: '{{ event.purefb_s3_rollup.log_object | pprint }}'
+              record_count: '{{ event.purefb_s3_rollup.record_count | pprint }}'
+              error_count: '{{ event.purefb_s3_rollup.error_count | pprint }}'
+              error_pct: '{{ event.purefb_s3_rollup.error_pct | pprint }}'
+              denied_count: '{{ event.purefb_s3_rollup.denied_count | pprint }}'
+              top_access_key_count: '{{ event.purefb_s3_rollup.top_access_key_count | pprint }}'
+              top_source_ip: '{{ event.purefb_s3_rollup.top_source_ip | pprint }}'
+              by_error_code: '{{ event.purefb_s3_rollup.by_error_code | pprint }}'
               anomaly_auto_disable_key: '{{ anomaly_auto_disable_key }}'
               automation_keys: '{{ automation_keys }}'
               fb_api_version: '{{ fb_api_version }}'
@@ -242,18 +242,18 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_s3_rollup.array }}'
-              access_key_id: '{{ event.purefb_s3_rollup.top_access_key }}'
+              target_array: '{{ event.purefb_s3_rollup.array | pprint }}'
+              access_key_id: '{{ event.purefb_s3_rollup.top_access_key | pprint }}'
               kind: error_storm
-              window: '{{ event.purefb_s3_rollup.window }}'
-              log_object: '{{ event.purefb_s3_rollup.log_object }}'
-              record_count: '{{ event.purefb_s3_rollup.record_count }}'
-              error_count: '{{ event.purefb_s3_rollup.error_count }}'
-              error_pct: '{{ event.purefb_s3_rollup.error_pct }}'
-              denied_count: '{{ event.purefb_s3_rollup.denied_count }}'
-              top_access_key_count: '{{ event.purefb_s3_rollup.top_access_key_count }}'
-              top_source_ip: '{{ event.purefb_s3_rollup.top_source_ip }}'
-              by_error_code: '{{ event.purefb_s3_rollup.by_error_code }}'
+              window: '{{ event.purefb_s3_rollup.window | pprint }}'
+              log_object: '{{ event.purefb_s3_rollup.log_object | pprint }}'
+              record_count: '{{ event.purefb_s3_rollup.record_count | pprint }}'
+              error_count: '{{ event.purefb_s3_rollup.error_count | pprint }}'
+              error_pct: '{{ event.purefb_s3_rollup.error_pct | pprint }}'
+              denied_count: '{{ event.purefb_s3_rollup.denied_count | pprint }}'
+              top_access_key_count: '{{ event.purefb_s3_rollup.top_access_key_count | pprint }}'
+              top_source_ip: '{{ event.purefb_s3_rollup.top_source_ip | pprint }}'
+              by_error_code: '{{ event.purefb_s3_rollup.by_error_code | pprint }}'
               anomaly_auto_disable_key: '{{ anomaly_auto_disable_key }}'
               automation_keys: '{{ automation_keys }}'
               fb_api_version: '{{ fb_api_version }}'
@@ -271,9 +271,9 @@
           job_args:
             extra_vars:
               severity: critical
-              subject: '{{ event.purefb_s3_rollup.delete_count }} deletes in one audit window on {{ event.purefb_s3_rollup.array }}'
+              subject: '{{ (event.purefb_s3_rollup.delete_count ~ '' deletes in one audit window on '' ~ event.purefb_s3_rollup.array) | pprint }}'
               detail: window {{ event.purefb_s3_rollup.window }}, buckets {{ event.purefb_s3_rollup.buckets }}; top key {{ event.purefb_s3_rollup.top_access_key }} ({{ event.purefb_s3_rollup.top_access_key_count }} of {{ event.purefb_s3_rollup.record_count }} records) from {{ event.purefb_s3_rollup.top_source_ip }}; log object {{ event.purefb_s3_rollup.log_object }}
-              target_array: '{{ event.purefb_s3_rollup.array }}'
+              target_array: '{{ event.purefb_s3_rollup.array | pprint }}'
     - name: Audit log bucket near its quota - raise it or page
       condition: event.purefb_audit_health.log_bucket_quota_known is defined and event.purefb_audit_health.log_bucket_quota_known == true and event.purefb_audit_health.log_bucket_used_pct >= vars.log_bucket_quota_warn_pct
       throttle:
@@ -286,20 +286,20 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_audit_health.array }}'
+              target_array: '{{ event.purefb_audit_health.array | pprint }}'
               mode: quota
               reason: log bucket {{ event.purefb_audit_health.log_bucket }} at {{ event.purefb_audit_health.log_bucket_used_pct }}% of its quota ({{ event.purefb_audit_health.log_bucket_used_bytes }} of {{ event.purefb_audit_health.log_bucket_quota_bytes }} bytes, {{ event.purefb_audit_health.log_bucket_object_count }} objects)
               audit_baseline: '{{ audit_baseline }}'
               log_bucket_quota_step_pct: '{{ log_bucket_quota_step_pct }}'
               log_bucket_quota_max_bytes: '{{ log_bucket_quota_max_bytes }}'
               audit_auto_reattach: '{{ audit_auto_reattach }}'
-              log_bucket: '{{ event.purefb_audit_health.log_bucket }}'
-              log_bucket_used_bytes: '{{ event.purefb_audit_health.log_bucket_used_bytes }}'
-              log_bucket_quota_bytes: '{{ event.purefb_audit_health.log_bucket_quota_bytes }}'
-              log_bucket_used_pct: '{{ event.purefb_audit_health.log_bucket_used_pct }}'
-              uncovered_buckets: '{{ event.purefb_audit_health.uncovered_buckets }}'
-              policies_disabled: '{{ event.purefb_audit_health.policies_disabled }}'
-              members_without_filters: '{{ event.purefb_audit_health.members_without_filters }}'
+              log_bucket: '{{ event.purefb_audit_health.log_bucket | pprint }}'
+              log_bucket_used_bytes: '{{ event.purefb_audit_health.log_bucket_used_bytes | pprint }}'
+              log_bucket_quota_bytes: '{{ event.purefb_audit_health.log_bucket_quota_bytes | pprint }}'
+              log_bucket_used_pct: '{{ event.purefb_audit_health.log_bucket_used_pct | pprint }}'
+              uncovered_buckets: '{{ event.purefb_audit_health.uncovered_buckets | pprint }}'
+              policies_disabled: '{{ event.purefb_audit_health.policies_disabled | pprint }}'
+              members_without_filters: '{{ event.purefb_audit_health.members_without_filters | pprint }}'
               fb_api_version: '{{ fb_api_version }}'
     - name: No audit log for two rotations - page
       condition: event.purefb_audit_health.stale is defined and event.purefb_audit_health.stale == true and vars.audit_log_expected_continuous == true
@@ -316,7 +316,7 @@
               severity: critical
               subject: No audit log object on {{ event.purefb_audit_health.array }} for {{ event.purefb_audit_health.newest_log_age_s }} s
               detail: newest {{ event.purefb_audit_health.newest_log_object }}; rotation {{ event.purefb_audit_health.rotation_ms }} ms; bucket {{ event.purefb_audit_health.log_bucket }} prefix {{ event.purefb_audit_health.log_key_prefix }}; policies enabled {{ event.purefb_audit_health.policies_enabled }}, disabled {{ event.purefb_audit_health.policies_disabled }}
-              target_array: '{{ event.purefb_audit_health.array }}'
+              target_array: '{{ event.purefb_audit_health.array | pprint }}'
     - name: Bucket without an enabled audit policy - re-attach or notify
       condition: "event.purefb_audit_health.uncovered_count is defined and (event.purefb_audit_health.uncovered_count > 0 or\n event.purefb_audit_health.policies_disabled > 0 or\n event.purefb_audit_health.members_without_filters_count > 0)"
       throttle:
@@ -329,26 +329,26 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_audit_health.array }}'
+              target_array: '{{ event.purefb_audit_health.array | pprint }}'
               mode: reattach
               reason: buckets without an enabled audit policy {{ event.purefb_audit_health.uncovered_buckets }}; disabled policies {{ event.purefb_audit_health.policies_disabled }}; members without a filter {{ event.purefb_audit_health.members_without_filters }}
               audit_baseline: '{{ audit_baseline }}'
               log_bucket_quota_step_pct: '{{ log_bucket_quota_step_pct }}'
               log_bucket_quota_max_bytes: '{{ log_bucket_quota_max_bytes }}'
               audit_auto_reattach: '{{ audit_auto_reattach }}'
-              log_bucket: '{{ event.purefb_audit_health.log_bucket }}'
-              log_bucket_used_bytes: '{{ event.purefb_audit_health.log_bucket_used_bytes }}'
-              log_bucket_quota_bytes: '{{ event.purefb_audit_health.log_bucket_quota_bytes }}'
-              log_bucket_used_pct: '{{ event.purefb_audit_health.log_bucket_used_pct }}'
-              uncovered_buckets: '{{ event.purefb_audit_health.uncovered_buckets }}'
-              policies_disabled: '{{ event.purefb_audit_health.policies_disabled }}'
-              members_without_filters: '{{ event.purefb_audit_health.members_without_filters }}'
+              log_bucket: '{{ event.purefb_audit_health.log_bucket | pprint }}'
+              log_bucket_used_bytes: '{{ event.purefb_audit_health.log_bucket_used_bytes | pprint }}'
+              log_bucket_quota_bytes: '{{ event.purefb_audit_health.log_bucket_quota_bytes | pprint }}'
+              log_bucket_used_pct: '{{ event.purefb_audit_health.log_bucket_used_pct | pprint }}'
+              uncovered_buckets: '{{ event.purefb_audit_health.uncovered_buckets | pprint }}'
+              policies_disabled: '{{ event.purefb_audit_health.policies_disabled | pprint }}'
+              members_without_filters: '{{ event.purefb_audit_health.members_without_filters | pprint }}'
               fb_api_version: '{{ fb_api_version }}'
     - name: Audit rollup - log
       condition: event.purefb_s3_rollup.record_count is defined
       action:
         debug:
-          msg: '{{ event.purefb_s3_rollup.array }} {{ event.purefb_s3_rollup.log_object }}: {{ event.purefb_s3_rollup.record_count }} records, {{ event.purefb_s3_rollup.error_count }} errors ({{ event.purefb_s3_rollup.error_pct }}%), {{ event.purefb_s3_rollup.denied_count }} denied, {{ event.purefb_s3_rollup.delete_count }} deletes, canary {{ event.purefb_s3_rollup.canary_hits }}, honey {{ event.purefb_s3_rollup.honey_hits }}; by event {{ event.purefb_s3_rollup.by_event_name }}; top key {{ event.purefb_s3_rollup.top_access_key }} from {{ event.purefb_s3_rollup.top_source_ip }}'
+          msg: '{{ (event.purefb_s3_rollup.array ~ '' '' ~ event.purefb_s3_rollup.log_object ~ '': '' ~ event.purefb_s3_rollup.record_count ~ '' records, '' ~ event.purefb_s3_rollup.error_count ~ '' errors ('' ~ event.purefb_s3_rollup.error_pct ~ ''%), '' ~ event.purefb_s3_rollup.denied_count ~ '' denied, '' ~ event.purefb_s3_rollup.delete_count ~ '' deletes, canary '' ~ event.purefb_s3_rollup.canary_hits ~ '', honey '' ~ event.purefb_s3_rollup.honey_hits ~ ''; by event '' ~ event.purefb_s3_rollup.by_event_name ~ ''; top key '' ~ event.purefb_s3_rollup.top_access_key ~ '' from '' ~ event.purefb_s3_rollup.top_source_ip) | pprint }}'
 - name: FlashBlade audit configuration change control
   hosts: all
   sources:
@@ -376,9 +376,9 @@
           job_args:
             extra_vars:
               severity: critical
-              subject: '{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row'
-              detail: '{{ event.purefb_poll_error.error }}'
-              target_array: '{{ event.purefb_poll_error.array }}'
+              subject: '{{ (event.purefb_poll_error.array ~ '' '' ~ event.purefb_poll_error.signal ~ '' poll has failed '' ~ event.purefb_poll_error.consecutive ~ '' times in a row'') | pprint }}'
+              detail: '{{ event.purefb_poll_error.error | pprint }}'
+              target_array: '{{ event.purefb_poll_error.array | pprint }}'
     - name: Poll failed - notify once
       condition: event.purefb_poll_error is defined and event.purefb_poll_error.consecutive == 1
       throttle:
@@ -393,9 +393,9 @@
           job_args:
             extra_vars:
               severity: info
-              subject: '{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed'
-              detail: '{{ event.purefb_poll_error.error }}'
-              target_array: '{{ event.purefb_poll_error.array }}'
+              subject: '{{ (event.purefb_poll_error.array ~ '' '' ~ event.purefb_poll_error.signal ~ '' poll failed'') | pprint }}'
+              detail: '{{ event.purefb_poll_error.error | pprint }}'
+              target_array: '{{ event.purefb_poll_error.array | pprint }}'
     - name: Report poll errors without acting
       condition: event.purefb_poll_error is defined
       action:
@@ -413,9 +413,9 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_audit.array }}'
+              target_array: '{{ event.purefb_audit.array | pprint }}'
               mode: reattach
-              reason: '{{ event.purefb_audit.user }} ran {{ event.purefb_audit.command }} {{ event.purefb_audit.subcommand }} {{ event.purefb_audit.arguments }} from {{ event.purefb_audit.ip_address }} over {{ event.purefb_audit.user_interface }} at {{ event.purefb_audit.time }} (audit {{ event.purefb_audit.audit_id }})'
+              reason: '{{ (event.purefb_audit.user ~ '' ran '' ~ event.purefb_audit.command ~ '' '' ~ event.purefb_audit.subcommand ~ '' '' ~ event.purefb_audit.arguments ~ '' from '' ~ event.purefb_audit.ip_address ~ '' over '' ~ event.purefb_audit.user_interface ~ '' at '' ~ event.purefb_audit.time ~ '' (audit '' ~ event.purefb_audit.audit_id ~ '')'') | pprint }}'
               audit_baseline: '{{ audit_baseline }}'
               log_bucket_quota_step_pct: '{{ log_bucket_quota_step_pct }}'
               log_bucket_quota_max_bytes: '{{ log_bucket_quota_max_bytes }}'

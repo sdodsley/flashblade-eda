@@ -291,12 +291,12 @@
     - name: Settle the outcome text
       ansible.builtin.set_fact:
         outcome: >-
-          {{ ('refused: ' ~ refusal | trim) if (refusal | trim | length) > 0
-             else ('no live file system exports to ' ~ client ~ (': ' ~ file_systems_error if file_systems_error else '')) if (plan | length) == 0
-             else (action ~ 'd ' ~ (touched | join(', ')) if (touched | length) > 0 else 'nothing changed')
-                  ~ ((' (' ~ action ~ ' refused by the array on ' ~ (failed | join(', ')) ~ ')') if (failed | length) > 0 else '')
-                  ~ (('; excluded ' ~ (excluded | join(', '))) if (excluded | length) > 0 else '')
-                  ~ (('; already as wanted ' ~ (unchanged | join(', '))) if (unchanged | length) > 0 else '') }}
+          {{ (('refused: ' ~ refusal | trim) if (refusal | trim | length) > 0
+              else ('no live file system exports to ' ~ client ~ (': ' ~ file_systems_error if file_systems_error else '')) if (plan | length) == 0
+              else (action ~ 'd ' ~ (touched | join(', ')) if (touched | length) > 0 else 'nothing changed')
+                   ~ ((' (' ~ action ~ ' refused by the array on ' ~ (failed | join(', ')) ~ ')') if (failed | length) > 0 else '')
+                   ~ (('; excluded ' ~ (excluded | join(', '))) if (excluded | length) > 0 else '')
+                   ~ (('; already as wanted ' ~ (unchanged | join(', '))) if (unchanged | length) > 0 else '')) | string }}
 
     - name: Record the action
       ansible.builtin.lineinfile:

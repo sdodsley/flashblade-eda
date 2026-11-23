@@ -42,9 +42,9 @@
           job_args:
             extra_vars:
               severity: critical
-              subject: '{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row'
-              detail: '{{ event.purefb_poll_error.error }}'
-              target_array: '{{ event.purefb_poll_error.array }}'
+              subject: '{{ (event.purefb_poll_error.array ~ '' '' ~ event.purefb_poll_error.signal ~ '' poll has failed '' ~ event.purefb_poll_error.consecutive ~ '' times in a row'') | pprint }}'
+              detail: '{{ event.purefb_poll_error.error | pprint }}'
+              target_array: '{{ event.purefb_poll_error.array | pprint }}'
     - name: Poll failed - notify once
       condition: event.purefb_poll_error is defined and event.purefb_poll_error.consecutive == 1
       throttle:
@@ -59,9 +59,9 @@
           job_args:
             extra_vars:
               severity: info
-              subject: '{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed'
-              detail: '{{ event.purefb_poll_error.error }}'
-              target_array: '{{ event.purefb_poll_error.array }}'
+              subject: '{{ (event.purefb_poll_error.array ~ '' '' ~ event.purefb_poll_error.signal ~ '' poll failed'') | pprint }}'
+              detail: '{{ event.purefb_poll_error.error | pprint }}'
+              target_array: '{{ event.purefb_poll_error.array | pprint }}'
     - name: Report poll errors without acting
       condition: event.purefb_poll_error is defined
       action:
@@ -80,15 +80,15 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_client_performance.array }}'
-              client: '{{ event.purefb_client_performance.client }}'
-              ops_share_pct: '{{ event.purefb_client_performance.ops_share_pct }}'
-              high_share_polls: '{{ event.purefb_client_performance.high_share_polls }}'
-              reads_per_sec: '{{ event.purefb_client_performance.reads_per_sec }}'
-              writes_per_sec: '{{ event.purefb_client_performance.writes_per_sec }}'
-              usec_per_write_op: '{{ event.purefb_client_performance.usec_per_write_op }}'
-              array_usec_per_write_op: '{{ event.purefb_client_performance.array_usec_per_write_op }}'
-              array_write_latency_ratio: '{{ event.purefb_client_performance.array_write_latency_ratio }}'
+              target_array: '{{ event.purefb_client_performance.array | pprint }}'
+              client: '{{ event.purefb_client_performance.client | pprint }}'
+              ops_share_pct: '{{ event.purefb_client_performance.ops_share_pct | pprint }}'
+              high_share_polls: '{{ event.purefb_client_performance.high_share_polls | pprint }}'
+              reads_per_sec: '{{ event.purefb_client_performance.reads_per_sec | pprint }}'
+              writes_per_sec: '{{ event.purefb_client_performance.writes_per_sec | pprint }}'
+              usec_per_write_op: '{{ event.purefb_client_performance.usec_per_write_op | pprint }}'
+              array_usec_per_write_op: '{{ event.purefb_client_performance.array_usec_per_write_op | pprint }}'
+              array_write_latency_ratio: '{{ event.purefb_client_performance.array_write_latency_ratio | pprint }}'
     - name: Noisy client on a slow array - notify
       condition: event.purefb_client_performance.high_share_polls is defined and event.purefb_client_performance.high_share_polls >= vars.client_consecutive_polls and event.purefb_client_performance.baseline_known == true and event.purefb_client_performance.array_write_latency_ratio >= vars.baseline_latency_ratio and vars.client_actions_enabled == false
       throttle:
@@ -105,7 +105,7 @@
               severity: warning
               subject: Client {{ event.purefb_client_performance.client }} holds {{ event.purefb_client_performance.ops_share_pct }}% of the ops on {{ event.purefb_client_performance.array }}
               detail: iops={{ event.purefb_client_performance.reads_per_sec }}r/{{ event.purefb_client_performance.writes_per_sec }}w write={{ event.purefb_client_performance.usec_per_write_op }}us for {{ event.purefb_client_performance.high_share_polls }} polls; array write={{ event.purefb_client_performance.array_usec_per_write_op }}us, {{ event.purefb_client_performance.array_write_latency_ratio }}x the same half hour last week
-              target_array: '{{ event.purefb_client_performance.array }}'
+              target_array: '{{ event.purefb_client_performance.array | pprint }}'
     - name: File system hogging the array - apply a temporary QoS cap
       condition: event.purefb_fs_performance.high_share_polls is defined and event.purefb_fs_performance.high_share_polls >= vars.client_consecutive_polls and event.purefb_fs_performance.ops_share_pct >= vars.qos_cap_min_share_pct and event.purefb_fs_performance.eda_capped == false and vars.qos_auto_cap == true
       throttle:
@@ -119,9 +119,9 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_fs_performance.array }}'
+              target_array: '{{ event.purefb_fs_performance.array | pprint }}'
               object_kind: file_system
-              object_name: '{{ event.purefb_fs_performance.file_system }}'
+              object_name: '{{ event.purefb_fs_performance.file_system | pprint }}'
               cap_ops_per_sec: '{{ qos_cap_ops_per_sec }}'
               reason: iops={{ event.purefb_fs_performance.reads_per_sec }}r/{{ event.purefb_fs_performance.writes_per_sec }}w ({{ event.purefb_fs_performance.ops_share_pct }}% of the array) for {{ event.purefb_fs_performance.high_share_polls }} polls
               fb_api_version: '{{ fb_api_version }}'
@@ -138,9 +138,9 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_fs_performance.array }}'
+              target_array: '{{ event.purefb_fs_performance.array | pprint }}'
               object_kind: file_system
-              object_name: '{{ event.purefb_fs_performance.file_system }}'
+              object_name: '{{ event.purefb_fs_performance.file_system | pprint }}'
               reason: share normal for {{ event.purefb_fs_performance.normal_polls }} polls
               fb_api_version: '{{ fb_api_version }}'
     - name: File system hogging the array - notify
@@ -159,7 +159,7 @@
               severity: warning
               subject: File system {{ event.purefb_fs_performance.file_system }} holds {{ event.purefb_fs_performance.ops_share_pct }}% of the ops on {{ event.purefb_fs_performance.array }}
               detail: iops={{ event.purefb_fs_performance.reads_per_sec }}r/{{ event.purefb_fs_performance.writes_per_sec }}w write={{ event.purefb_fs_performance.usec_per_write_op }}us for {{ event.purefb_fs_performance.high_share_polls }} polls; qos_policy={{ event.purefb_fs_performance.qos_policy }}
-              target_array: '{{ event.purefb_fs_performance.array }}'
+              target_array: '{{ event.purefb_fs_performance.array | pprint }}'
     - name: Bucket hogging the array - apply a temporary QoS cap
       condition: event.purefb_bucket_performance.high_share_polls is defined and event.purefb_bucket_performance.high_share_polls >= vars.client_consecutive_polls and event.purefb_bucket_performance.ops_share_pct >= vars.qos_cap_min_share_pct and event.purefb_bucket_performance.eda_capped == false and vars.qos_auto_cap == true
       throttle:
@@ -173,9 +173,9 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_bucket_performance.array }}'
+              target_array: '{{ event.purefb_bucket_performance.array | pprint }}'
               object_kind: bucket
-              object_name: '{{ event.purefb_bucket_performance.bucket }}'
+              object_name: '{{ event.purefb_bucket_performance.bucket | pprint }}'
               cap_ops_per_sec: '{{ qos_cap_ops_per_sec }}'
               reason: iops={{ event.purefb_bucket_performance.reads_per_sec }}r/{{ event.purefb_bucket_performance.writes_per_sec }}w ({{ event.purefb_bucket_performance.ops_share_pct }}% of the array) for {{ event.purefb_bucket_performance.high_share_polls }} polls
               fb_api_version: '{{ fb_api_version }}'
@@ -192,9 +192,9 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_bucket_performance.array }}'
+              target_array: '{{ event.purefb_bucket_performance.array | pprint }}'
               object_kind: bucket
-              object_name: '{{ event.purefb_bucket_performance.bucket }}'
+              object_name: '{{ event.purefb_bucket_performance.bucket | pprint }}'
               reason: share normal for {{ event.purefb_bucket_performance.normal_polls }} polls
               fb_api_version: '{{ fb_api_version }}'
     - name: Bucket hogging the array - notify
@@ -213,7 +213,7 @@
               severity: warning
               subject: Bucket {{ event.purefb_bucket_performance.bucket }} holds {{ event.purefb_bucket_performance.ops_share_pct }}% of the ops on {{ event.purefb_bucket_performance.array }}
               detail: iops={{ event.purefb_bucket_performance.reads_per_sec }}r/{{ event.purefb_bucket_performance.writes_per_sec }}w write={{ event.purefb_bucket_performance.usec_per_write_op }}us for {{ event.purefb_bucket_performance.high_share_polls }} polls; qos_policy={{ event.purefb_bucket_performance.qos_policy }}
-              target_array: '{{ event.purefb_bucket_performance.array }}'
+              target_array: '{{ event.purefb_bucket_performance.array | pprint }}'
     - name: Array write latency well above the same time last week - notify
       condition: event.purefb_array_performance.baseline_known == true and event.purefb_array_performance.write_latency_ratio >= vars.baseline_latency_ratio
       throttle:
@@ -227,6 +227,6 @@
           job_args:
             extra_vars:
               severity: warning
-              subject: '{{ event.purefb_array_performance.array }} write latency is {{ event.purefb_array_performance.write_latency_ratio }}x last week''s'
+              subject: '{{ (event.purefb_array_performance.array ~ '' write latency is '' ~ event.purefb_array_performance.write_latency_ratio ~ "x last week''s") | pprint }}'
               detail: now write={{ event.purefb_array_performance.usec_per_write_op }}us iops={{ event.purefb_array_performance.writes_per_sec }}; same half hour last week write={{ event.purefb_array_performance.baseline_usec_per_write_op }}us iops={{ event.purefb_array_performance.baseline_writes_per_sec }}
-              target_array: '{{ event.purefb_array_performance.array }}'
+              target_array: '{{ event.purefb_array_performance.array | pprint }}'

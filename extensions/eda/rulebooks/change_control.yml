@@ -61,9 +61,11 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: critical
-            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row"
-            detail: "{{ event.purefb_poll_error.error }}"
-            target_array: "{{ event.purefb_poll_error.array }}"
+            subject: >-
+              {{ (event.purefb_poll_error.array ~ ' ' ~ event.purefb_poll_error.signal ~ ' poll has failed ' ~
+              event.purefb_poll_error.consecutive ~ ' times in a row') | pprint }}
+            detail: "{{ event.purefb_poll_error.error | pprint }}"
+            target_array: "{{ event.purefb_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Poll failed - notify once
@@ -80,9 +82,9 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: info
-            subject: "{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed"
-            detail: "{{ event.purefb_poll_error.error }}"
-            target_array: "{{ event.purefb_poll_error.array }}"
+            subject: "{{ (event.purefb_poll_error.array ~ ' ' ~ event.purefb_poll_error.signal ~ ' poll failed') | pprint }}"
+            detail: "{{ event.purefb_poll_error.error | pprint }}"
+            target_array: "{{ event.purefb_poll_error.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Report poll errors without acting
@@ -106,15 +108,15 @@
         run_playbook:
           name: playbooks/reconcile.yml
           extra_vars:
-            target_array: "{{ event.purefb_audit.array }}"
+            target_array: "{{ event.purefb_audit.array | pprint }}"
             baseline_dir: "{{ baseline_dir }}"
-            audit_user: "{{ event.purefb_audit.user }}"
-            audit_interface: "{{ event.purefb_audit.user_interface }}"
-            audit_ip_address: "{{ event.purefb_audit.ip_address }}"
-            audit_command: "{{ event.purefb_audit.command }}"
-            audit_subcommand: "{{ event.purefb_audit.subcommand }}"
-            audit_arguments: "{{ event.purefb_audit.arguments }}"
-            audit_time: "{{ event.purefb_audit.time }}"
+            audit_user: "{{ event.purefb_audit.user | pprint }}"
+            audit_interface: "{{ event.purefb_audit.user_interface | pprint }}"
+            audit_ip_address: "{{ event.purefb_audit.ip_address | pprint }}"
+            audit_command: "{{ event.purefb_audit.command | pprint }}"
+            audit_subcommand: "{{ event.purefb_audit.subcommand | pprint }}"
+            audit_arguments: "{{ event.purefb_audit.arguments | pprint }}"
+            audit_time: "{{ event.purefb_audit.time | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Governed setting changed during a maintenance window - log only
@@ -144,12 +146,14 @@
           name: playbooks/notify.yml
           extra_vars:
             severity: warning
-            subject: "{{ event.purefb_audit.user }} ran {{ event.purefb_audit.command }} {{ event.purefb_audit.subcommand }} on {{ event.purefb_audit.array }}"
+            subject: >-
+              {{ (event.purefb_audit.user ~ ' ran ' ~ event.purefb_audit.command ~ ' ' ~
+              event.purefb_audit.subcommand ~ ' on ' ~ event.purefb_audit.array) | pprint }}
             detail: >-
               arguments: {{ event.purefb_audit.arguments }}
               (from {{ event.purefb_audit.ip_address }} over {{ event.purefb_audit.user_interface }},
               audit {{ event.purefb_audit.audit_id }})
-            target_array: "{{ event.purefb_audit.array }}"
+            target_array: "{{ event.purefb_audit.array | pprint }}"
             alert_log: "{{ alert_log }}"
 
     - name: Change by the automation account - log
@@ -190,8 +194,8 @@
           name: playbooks/apply_baseline.yml
           extra_vars:
             baseline_dir: "{{ baseline_dir }}"
-            git_ref: "{{ event.payload.ref }}"
-            git_after: "{{ event.payload.after | default('') }}"
+            git_ref: "{{ event.payload.ref | pprint }}"
+            git_after: "{{ event.payload.after | default('') | pprint }}"
             alert_log: "{{ alert_log }}"
 
     # Reached by a signed body without a well-formed ref and commit id (a

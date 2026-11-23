@@ -775,3 +775,70 @@ def test_audit_origin_pairs_are_fields_not_arguments(syslog):
     assert n["arguments"] == "--timeout '4h' array"
     # a line without the pairs still carries the keys
     assert syslog.parse(AUDIT, {}, set())["origin_name"] is None
+
+
+# --- plain text ------------------------------------------------------------
+MARKED_AUDIT = AUDIT.replace(
+    "Arguments=cnfs-fixer-pol", "Arguments={{ x }} {% y %} {# z #} #jinja2: w"
+)
+
+
+def _strings(value):
+    """Every string in an event, however deep, keys included."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            yield from _strings(k)
+            yield from _strings(v)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            yield from _strings(v)
+
+
+def test_clean_breaks_every_delimiter_and_keeps_other_types(syslog):
+    event = {
+        "{{ key": ["{% a", "{# b", 7, {"#jinja2: c": "{{{ d"}],
+        "count": 3,
+        "nested": {"deep": ["{{ e", True, None]},
+    }
+    assert syslog.clean(event) == {
+        "{ { key": ["{ % a", "{ # b", 7, {"#jinja2 : c": "{ { { d"}],
+        "count": 3,
+        "nested": {"deep": ["{ { e", True, None]},
+    }
+    text = "a {{ b {% c {# d #jinja2: e"
+    assert syslog.clean_text(text) == "a { { b { % c { # d #jinja2 : e"
+    assert syslog.clean_text(AUDIT) == AUDIT
+
+
+def test_forwarder_queues_every_event_as_plain_text(syslog):
+    """A line whose arguments carry template delimiters is parsed with them
+    as the array wrote them and reaches the rulebook's queue with each
+    delimiter broken by a space, its other fields as they were."""
+    parsed = syslog.parse(MARKED_AUDIT, {}, set())
+    assert parsed["arguments"] == "{{ x }} {% y %} {# z #} #jinja2: w"
+    activity = {"deletes": 3, "sample_paths": ["{{ p", "{# q"], "fs": "fs-01"}
+
+    async def go():
+        local, queue = asyncio.Queue(), asyncio.Queue()
+        emit = syslog._emitter(local, {}, set(), [])
+        assert emit(MARKED_AUDIT, "198.51.100.9", "tcp") is True
+        local.put_nowait({"purefb_file_activity": activity})
+        task = asyncio.create_task(syslog._forward(local, queue))
+        try:
+            first = await asyncio.wait_for(queue.get(), 5)
+            second = await asyncio.wait_for(queue.get(), 5)
+        finally:
+            task.cancel()
+        return first["purefb_syslog_audit"], second["purefb_file_activity"]
+
+    audit, act = asyncio.run(go())
+    assert audit["arguments"] == "{ { x }} { % y %} { # z #} #jinja2 : w"
+    assert audit["raw"].endswith("Arguments={ { x }} { % y %} { # z #} #jinja2 : w")
+    assert audit["user"] == "pureuser" and audit["audit_id"] == "6683"
+    assert audit["facility"] is None and audit["by_automation"] is False
+    for mark in ("{{", "{%", "{#", "#jinja2:"):
+        assert not any(mark in s for s in _strings(audit)), mark
+    assert act == {"deletes": 3, "sample_paths": ["{ { p", "{ # q"], "fs": "fs-01"}
+    assert activity["sample_paths"] == ["{{ p", "{# q"]  # the input is left as it was

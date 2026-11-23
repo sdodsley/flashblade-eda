@@ -90,9 +90,9 @@
       ansible.builtin.set_fact:
         changed: "{{ attempted | bool and write_status | int == 200 }}"
         outcome: >-
-          {{ 'no window to close' if not attempted | bool
-             else (window_action ~ 'ed' if window_action != 'close' else 'closed') if write_status | int == 200
-             else 'refused by the array: ' ~ write_error }}
+          {{ ('no window to close' if not attempted | bool
+              else (window_action ~ 'ed' if window_action != 'close' else 'closed') if write_status | int == 200
+              else 'refused by the array: ' ~ write_error) | string }}
 
     - name: Record the window
       ansible.builtin.lineinfile:

@@ -24,7 +24,7 @@
   hosts: "{{ target_array }}"
   gather_facts: false
   vars:
-    policy_name: "eda-cap-{{ object_name }}"
+    policy_name: "{{ ('eda-cap-' ~ object_name) | string }}"
     object_path: "{{ 'file-systems' if object_kind == 'file_system' else 'buckets' }}"
     qos_api_version: "2.17"
   tasks:

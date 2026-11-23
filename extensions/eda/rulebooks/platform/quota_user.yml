@@ -38,9 +38,9 @@
           job_args:
             extra_vars:
               severity: critical
-              subject: '{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row'
-              detail: '{{ event.purefb_poll_error.error }}'
-              target_array: '{{ event.purefb_poll_error.array }}'
+              subject: '{{ (event.purefb_poll_error.array ~ '' '' ~ event.purefb_poll_error.signal ~ '' poll has failed '' ~ event.purefb_poll_error.consecutive ~ '' times in a row'') | pprint }}'
+              detail: '{{ event.purefb_poll_error.error | pprint }}'
+              target_array: '{{ event.purefb_poll_error.array | pprint }}'
     - name: Poll failed - notify once
       condition: event.purefb_poll_error is defined and event.purefb_poll_error.consecutive == 1
       throttle:
@@ -55,9 +55,9 @@
           job_args:
             extra_vars:
               severity: info
-              subject: '{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed'
-              detail: '{{ event.purefb_poll_error.error }}'
-              target_array: '{{ event.purefb_poll_error.array }}'
+              subject: '{{ (event.purefb_poll_error.array ~ '' '' ~ event.purefb_poll_error.signal ~ '' poll failed'') | pprint }}'
+              detail: '{{ event.purefb_poll_error.error | pprint }}'
+              target_array: '{{ event.purefb_poll_error.array | pprint }}'
     - name: Report poll errors without acting
       condition: event.purefb_poll_error is defined
       action:
@@ -76,15 +76,15 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_alert.array }}'
-              alert_id: '{{ event.purefb_alert.alert_id }}'
-              alert_code: '{{ event.purefb_alert.code }}'
-              severity: '{{ event.purefb_alert.severity }}'
-              subject: '{{ event.purefb_alert.array }} alert {{ event.purefb_alert.code }}: {{ event.purefb_alert.summary }}'
-              component_name: '{{ event.purefb_alert.component_name }}'
-              alert_description: '{{ event.purefb_alert.description }}'
-              alert_variables: '{{ event.purefb_alert.variables }}'
-              array_action: '{{ event.purefb_alert.action }}'
+              target_array: '{{ event.purefb_alert.array | pprint }}'
+              alert_id: '{{ event.purefb_alert.alert_id | pprint }}'
+              alert_code: '{{ event.purefb_alert.code | pprint }}'
+              severity: '{{ event.purefb_alert.severity | pprint }}'
+              subject: '{{ (event.purefb_alert.array ~ '' alert '' ~ event.purefb_alert.code ~ '': '' ~ event.purefb_alert.summary) | pprint }}'
+              component_name: '{{ event.purefb_alert.component_name | pprint }}'
+              alert_description: '{{ event.purefb_alert.description | pprint }}'
+              alert_variables: '{{ event.purefb_alert.variables | pprint }}'
+              array_action: '{{ event.purefb_alert.action | pprint }}'
               auto_raise_user_quota: '{{ auto_raise_user_quota }}'
               user_quota_step_pct: '{{ user_quota_step_pct }}'
               user_quota_max_bytes: '{{ user_quota_max_bytes }}'

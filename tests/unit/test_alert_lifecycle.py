@@ -67,7 +67,7 @@ def test_alerts_rulebook_logs_initial_routes_opened_and_notifies_rise_and_closed
     assert "severity_raised == true" in raised["condition"]
     assert _playbooks(raised) == ["playbooks/notify.yml"]
     extra = raised["action"]["run_playbook"]["extra_vars"]
-    assert extra["severity"] == "{{ event.purefb_alert.severity }}"
+    assert extra["severity"] == "{{ event.purefb_alert.severity | pprint }}"
     assert "previous_severity" in extra["detail"]
     # closed is the resolved signal: info, with the time it was open
     closed = rules["Alert closed - notify"]

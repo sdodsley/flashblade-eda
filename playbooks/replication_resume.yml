@@ -59,7 +59,7 @@
         link_found: "{{ link.local_bucket is defined }}"
         link_paused: "{{ link.paused | default(false) | bool }}"
         remote_name: "{{ link.remote.name | default('') }}"
-        remote_bucket: "{{ link.remote_bucket.name | default(bucket) }}"
+        remote_bucket: "{{ link.remote_bucket.name | default(bucket) | string }}"
         remote_credential: "{{ link.remote_credentials.name | default('') | regex_replace('^[^/]*/', '') }}"
 
     - name: Resume the link
@@ -81,11 +81,11 @@
       ansible.builtin.set_fact:
         resumed: "{{ link_found | bool and link_paused | bool and not (resume_result.failed | default(false)) and (resume_result.changed | default(false)) }}"
         outcome: >-
-          {{ ('no replica link for bucket ' ~ bucket ~ (': ' ~ read_error if read_error else '')) if not link_found | bool
-             else 'link is not paused (status ' ~ (link.status | default('')) ~ '); nothing to resume' if not link_paused | bool
-             else ('resume refused by the array: ' ~ (resume_result.msg | default('failed') | string | truncate(200))) if resume_result.failed | default(false)
-             else 'resumed' if resume_result.changed | default(false)
-             else 'already running' }}
+          {{ (('no replica link for bucket ' ~ bucket ~ (': ' ~ read_error if read_error else '')) if not link_found | bool
+              else 'link is not paused (status ' ~ (link.status | default('')) ~ '); nothing to resume' if not link_paused | bool
+              else ('resume refused by the array: ' ~ (resume_result.msg | default('failed') | string | truncate(200))) if resume_result.failed | default(false)
+              else 'resumed' if resume_result.changed | default(false)
+              else 'already running') | string }}
 
     - name: Record the resume
       ansible.builtin.lineinfile:

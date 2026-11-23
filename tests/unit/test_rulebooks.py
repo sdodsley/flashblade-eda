@@ -3,8 +3,10 @@
 """Static checks over the rulebooks: they validate against ansible-rulebook's
 own schema, name their sources by FQCN, every variable they reference is in
 vars/example.yml, every playbook they run exists and receives the extra vars
-it needs, nothing from the FlashArray project is left behind, and the replay
-copies in tests/ have not drifted from the real rules."""
+it needs, nothing from the FlashArray project is left behind, the replay
+copies in tests/ have not drifted from the real rules, and every action
+string built from an event field is one expression that hands the playbook
+the field's value as it was."""
 
 import json
 import pathlib
@@ -465,10 +467,11 @@ def test_replay_rules_match_the_real_rulebook(replay):
 
 def test_syslog_alert_templates_never_print_none():
     """An alert line outside the layout arrives with every alert field None
-    and the severity from the PRI; the notify templates then render the
-    message, never the word None (Jinja's default() leaves a None alone
-    unless told otherwise)."""
-    jinja2 = pytest.importorskip("jinja2")
+    and the severity from the PRI; the notify templates, rendered the way
+    ansible-rulebook renders an action's arguments, then carry the message,
+    never the word None (Jinja's default() leaves a None alone unless told
+    otherwise)."""
+    util = pytest.importorskip("ansible_rulebook.util")
     alert = dict.fromkeys(
         (
             "severity",
@@ -513,10 +516,12 @@ def test_syslog_alert_templates_never_print_none():
             if "run_playbook" in action
             else action["run_job_template"]["job_args"]["extra_vars"]
         )
-        for key, template in extra.items():
-            text = jinja2.Template(str(template)).render(
-                event={"purefb_syslog_alert": alert}, alert_log="/tmp/alerts.log"
-            )
+        rendered = util.substitute_variables(
+            extra,
+            {"event": {"purefb_syslog_alert": alert}, "alert_log": "/tmp/alerts.log"},
+        )
+        for key, value in rendered.items():
+            text = str(value)
             assert "None" not in text, f"{path.name} {key}: {text!r}"
             if key == "subject":
                 assert text.startswith("fb-a alert:") and alert["message"] in text
@@ -740,3 +745,172 @@ def test_sender_named_fields_are_pinned_in_the_rule(repo_root):
             if fragment not in condition
         )
     assert missing == [], "\n".join(missing)
+
+
+# An action string that opens with an event field is one Jinja expression
+# ending in pprint: the rule's render then hands the playbook the field's
+# value as it was, text as text and a number as a number. A string that
+# opens with a literal word is left as written.
+PLAYBOOK_ACTIONS = ("run_playbook", "run_job_template")
+EVENT_WORD = re.compile(r"\b(event|events|fact|facts)\b")
+EVENT_FIELD = re.compile(r"\b(event|events|fact|facts)((?:\.[A-Za-z_][A-Za-z0-9_]*)+)")
+# a literal opening: a word (letters, digits, underscores) and what follows it
+LITERAL_START = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?=[ =:(/,;-])")
+PRINTED = "| pprint }}"
+# the one-field forms: the field alone, or the field with a default
+SINGLE_FIELD = re.compile(
+    r"^{{ (?P<field>(?:event|events|fact|facts)(?:\.[A-Za-z_][A-Za-z0-9_]*)+)"
+    r"(?: \| default\((?P<default>[^|]*)\))? \| pprint }}$"
+)
+# a field deliberately handed over as a number or a boolean
+CAST = re.compile(r"\| (int|float|bool) \| pprint }}$")
+CAST_TYPES = {"int": int, "float": float, "bool": bool}
+# text an event may carry: a Python literal in several spellings, numbers,
+# the names of the constants, words, nothing
+TEXT_VALUES = [
+    "'{' '{ 7 * 7 }}'",
+    "'\\x7b\\x7b 6 * 7 }}'",
+    "['{' '{ 5 * 5 }}']",
+    "85.2",
+    "007",
+    "True",
+    "None",
+    "plain text",
+    "",
+]
+# values of another type a one-field string must hand over unchanged
+TYPED_VALUES = [5, 5.5, True, None, [1, "a"], {"b": "c"}]
+
+
+def _strings(node):
+    """Every string in a nested structure of dicts and lists."""
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for value in node.values():
+            yield from _strings(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _strings(item)
+
+
+def _playbook_action_strings(path):
+    """(rule name, string) for every string of every run_playbook and
+    run_job_template action in the file, whitespace flattened. A debug
+    action's message is the rulebook's own output and is not here."""
+    out = []
+    for ruleset in yaml.safe_load(path.read_text(encoding="utf-8")):
+        for rule in ruleset.get("rules", []):
+            for action in rule.get("actions") or [rule.get("action", {})]:
+                for kind in PLAYBOOK_ACTIONS:
+                    if kind in action:
+                        out.extend(
+                            (rule["name"], " ".join(text.split()))
+                            for text in _strings(action[kind])
+                        )
+    return out
+
+
+def _event_strings(path):
+    """The action strings that template an event field."""
+    return [
+        (rule, text)
+        for rule, text in _playbook_action_strings(path)
+        if "{{" in text and EVENT_WORD.search(text)
+    ]
+
+
+@pytest.mark.parametrize("path", RULEBOOKS + REPLAYS, ids=lambda p: p.name)
+def test_an_action_string_that_opens_with_an_event_field_is_one_expression(path):
+    """A run_playbook or run_job_template string that opens with an event
+    field is exactly one expression ending in pprint, with no second
+    expression and no statement; any other string that templates an event
+    field opens with a literal word (not True, False or None)."""
+    wrong = []
+    for rule, text in _event_strings(path):
+        where = f"{path.name}: '{rule}': {text}"
+        if text.startswith("{{"):
+            one = text.endswith(PRINTED) and text.count("{{") == 1 and "{%" not in text
+            if not one:
+                wrong.append(f"{where} is not one expression ending in pprint")
+        else:
+            word = LITERAL_START.match(text)
+            if word is None or word.group(0) in ("True", "False", "None"):
+                wrong.append(f"{where} does not open with a word")
+    assert wrong == [], "\n".join(wrong)
+
+
+def _context(text, value, base):
+    """A render context for one action string: the rulebook vars and every
+    event field the string names set to the value. The longer paths go
+    first, so a field that is also a branch of another stays a branch."""
+    context = dict(base)
+    paths = {match.group(1) + match.group(2) for match in EVENT_FIELD.finditer(text)}
+    for path in sorted(paths, key=lambda p: -p.count(".")):
+        *branch, leaf = path.split(".")
+        node = context
+        for key in branch:
+            node = node.setdefault(key, {})
+        if leaf not in node:
+            node[leaf] = value
+    return context
+
+
+def _render(substitute, text, value, base):
+    """(rendered value, None) or (None, the error) for one string."""
+    try:
+        return substitute(text, _context(text, value, base)), None
+    except Exception as error:
+        return None, f"{type(error).__name__}: {error}"
+
+
+@pytest.mark.parametrize("path", RULEBOOKS, ids=lambda p: p.name)
+def test_an_event_field_reaches_the_action_as_the_value_it_was(path, repo_root):
+    """Rendered the way ansible-rulebook renders an action's arguments, every
+    string that opens with an event field hands the playbook text as text,
+    whatever the text spells: a one-field string gives the value back equal
+    and of the same type, a field cast to a number stays that number, and a
+    composed string is text."""
+    util = pytest.importorskip("ansible_rulebook.util")
+    base = yaml.safe_load((repo_root / "vars" / "example.yml").read_text("utf-8"))
+    wrong = []
+    for rule, text in _event_strings(path):
+        if not text.startswith("{{"):
+            continue
+        single = SINGLE_FIELD.match(text)
+        cast = CAST.search(text)
+        # a boolean default swaps a falsy value for the default
+        default = single.group("default") if single else None
+        swaps_falsy = default is not None and default.rstrip().endswith("true")
+        values = TEXT_VALUES + (TYPED_VALUES if single else [])
+        for value in values:
+            if swaps_falsy and not value:
+                continue
+            rendered, error = _render(util.substitute_variables, text, value, base)
+            where = f"{path.name}: '{rule}': {text} with {value!r}"
+            if error:
+                wrong.append(f"{where} raised {error}")
+            elif single:
+                if rendered != value or type(rendered) is not type(value):
+                    wrong.append(f"{where} came back as {rendered!r}")
+            elif cast:
+                wanted = CAST_TYPES[cast.group(1)]
+                if not isinstance(rendered, wanted) or (
+                    wanted is int and isinstance(rendered, bool)
+                ):
+                    wrong.append(f"{where} came back as {rendered!r}, not {wanted}")
+            elif not isinstance(rendered, str):
+                wrong.append(f"{where} came back as {rendered!r}, not text")
+    assert wrong == [], "\n".join(wrong)
+
+
+@pytest.mark.parametrize("path", RULEBOOKS + REPLAYS, ids=lambda p: p.name)
+def test_no_two_expressions_touch_in_an_action_string(path):
+    """Two expressions side by side would hand the playbook their values
+    joined into one; a literal word or a space keeps them apart."""
+    touching = [
+        f"{path.name}: '{rule}': {text}"
+        for rule, text in _playbook_action_strings(path)
+        if "}}{{" in text
+    ]
+    assert touching == [], "\n".join(touching)

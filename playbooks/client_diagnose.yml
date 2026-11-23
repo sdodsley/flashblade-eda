@@ -29,7 +29,7 @@
         client_host: >-
           {{ ((hostvars | dict2items | selectattr('value.ansible_host', 'defined')
                | selectattr('value.ansible_host', 'equalto', client) | map(attribute='key') | list)
-              + ([client] if client in hostvars else [])) | first | default('') }}
+              + ([client] if client in hostvars else [])) | first | default('') | string }}
         client_output: {}
         client_rcs: {}
 

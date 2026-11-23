@@ -7,6 +7,9 @@ Polls one or more FlashBlades over REST (py-pure-client) and emits plain
 fact events.  Thresholds, baselines and policy live in the rulebook, not here.
 One instance can run several signals, each on its own interval.
 
+Every string in an emitted event is plain text: a template delimiter in it
+is broken by a space before the event is queued.
+
 Written against Purity//FB 4.6.4 (REST 2.21) with py-pure-client 1.98.0.
 Every call it makes exists from REST 2.16 except the per-protocol client
 performance (2.21) and the posture signal's audit policy reads (2.20), and
@@ -519,8 +522,10 @@ import inspect
 import json
 import logging
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import urllib3
 from pypureclient import flashblade
@@ -531,6 +536,43 @@ except ImportError:  # ansible-rulebook ships PyYAML; a bare interpreter may not
     yaml = None
 
 logger = logging.getLogger(__name__)
+
+# The plain-text helpers of the jinja_safe event filter, copied because
+# ansible-rulebook loads each plugin from its own file; the copy is kept
+# identical to the filter's and a unit test compares the four.
+
+# a brace that starts a delimiter: followed by another brace, % or #
+DELIMITER_BRACE = re.compile(r"\{(?=[{%#])")
+# the header that would change the delimiters
+HEADER = "#jinja2:"
+HEADER_SAFE = "#jinja2 :"
+
+
+def clean_text(value: str) -> str:
+    """The string with every template delimiter broken by a space: each
+    brace that starts one gets a space after it (so a run of braces becomes
+    "{ { {", with nothing left to open a template) and the override header
+    is split."""
+    if "{" in value:
+        value = DELIMITER_BRACE.sub("{ ", value)
+    if HEADER in value:
+        value = value.replace(HEADER, HEADER_SAFE)
+    return value
+
+
+def clean(value: Any) -> Any:
+    """`value` with every string in it, however deep, passed through
+    clean_text; other types unchanged."""
+    if isinstance(value, str):
+        return clean_text(value)
+    if isinstance(value, dict):
+        return {clean(k): clean(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [clean(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(clean(v) for v in value)
+    return value
+
 
 SIGNALS = (
     "alerts",
@@ -2402,7 +2444,7 @@ async def _signal_loop(queue, signal, arrays, state, args, executor):
 
     async def emit(events):
         for event in events:
-            await queue.put(event)
+            await queue.put(clean(event))
 
     escalate_after = int(args.get("poll_error_escalate", 10) or 10)
 

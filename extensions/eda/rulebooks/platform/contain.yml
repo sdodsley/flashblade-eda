@@ -42,9 +42,9 @@
           job_args:
             extra_vars:
               severity: critical
-              subject: '{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll has failed {{ event.purefb_poll_error.consecutive }} times in a row'
-              detail: '{{ event.purefb_poll_error.error }}'
-              target_array: '{{ event.purefb_poll_error.array }}'
+              subject: '{{ (event.purefb_poll_error.array ~ '' '' ~ event.purefb_poll_error.signal ~ '' poll has failed '' ~ event.purefb_poll_error.consecutive ~ '' times in a row'') | pprint }}'
+              detail: '{{ event.purefb_poll_error.error | pprint }}'
+              target_array: '{{ event.purefb_poll_error.array | pprint }}'
     - name: Poll failed - notify once
       condition: event.purefb_poll_error is defined and event.purefb_poll_error.consecutive == 1
       throttle:
@@ -59,9 +59,9 @@
           job_args:
             extra_vars:
               severity: info
-              subject: '{{ event.purefb_poll_error.array }} {{ event.purefb_poll_error.signal }} poll failed'
-              detail: '{{ event.purefb_poll_error.error }}'
-              target_array: '{{ event.purefb_poll_error.array }}'
+              subject: '{{ (event.purefb_poll_error.array ~ '' '' ~ event.purefb_poll_error.signal ~ '' poll failed'') | pprint }}'
+              detail: '{{ event.purefb_poll_error.error | pprint }}'
+              target_array: '{{ event.purefb_poll_error.array | pprint }}'
     - name: Report poll errors without acting
       condition: event.purefb_poll_error is defined
       action:
@@ -80,11 +80,11 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_client_performance.array }}'
-              client: '{{ event.purefb_client_performance.client }}'
+              target_array: '{{ event.purefb_client_performance.array | pprint }}'
+              client: '{{ event.purefb_client_performance.client | pprint }}'
               file_system: ''
               action: quarantine
-              reason: '{{ event.purefb_client_performance.protocol }} client held {{ event.purefb_client_performance.ops_share_pct }}% of the ops (iops={{ event.purefb_client_performance.reads_per_sec }}r/{{ event.purefb_client_performance.writes_per_sec }}w) for {{ event.purefb_client_performance.high_share_polls }} polls while the array''s write latency was {{ event.purefb_client_performance.array_write_latency_ratio }}x the same half hour last week'
+              reason: '{{ (event.purefb_client_performance.protocol ~ '' client held '' ~ event.purefb_client_performance.ops_share_pct ~ ''% of the ops (iops='' ~ event.purefb_client_performance.reads_per_sec ~ ''r/'' ~ event.purefb_client_performance.writes_per_sec ~ ''w) for '' ~ event.purefb_client_performance.high_share_polls ~ " polls while the array''s write latency was " ~ event.purefb_client_performance.array_write_latency_ratio ~ ''x the same half hour last week'') | pprint }}'
               contain_exclude_clients: '{{ contain_exclude_clients }}'
               contain_exclude_file_systems: '{{ contain_exclude_file_systems }}'
               fb_api_version: '{{ fb_api_version }}'
@@ -104,7 +104,7 @@
               severity: critical
               subject: Client {{ event.purefb_client_performance.client }} is holding {{ event.purefb_client_performance.ops_share_pct }}% of the ops on {{ event.purefb_client_performance.array }}
               detail: iops={{ event.purefb_client_performance.reads_per_sec }}r/{{ event.purefb_client_performance.writes_per_sec }}w write={{ event.purefb_client_performance.usec_per_write_op }}us for {{ event.purefb_client_performance.high_share_polls }} polls; array write={{ event.purefb_client_performance.array_usec_per_write_op }}us, {{ event.purefb_client_performance.array_write_latency_ratio }}x the same half hour last week; ir_auto_contain is off
-              target_array: '{{ event.purefb_client_performance.array }}'
+              target_array: '{{ event.purefb_client_performance.array | pprint }}'
     - name: File system hogging - tarpit
       condition: event.purefb_fs_performance.high_share_polls is defined and event.purefb_fs_performance.high_share_polls >= vars.contain_consecutive_polls and event.purefb_fs_performance.ops_share_pct >= vars.contain_min_share_pct and event.purefb_fs_performance.eda_capped == false and event.purefb_fs_performance.eda_tarpit == false and vars.ir_auto_tarpit == true
       throttle:
@@ -118,8 +118,8 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_fs_performance.array }}'
-              file_system: '{{ event.purefb_fs_performance.file_system }}'
+              target_array: '{{ event.purefb_fs_performance.array | pprint }}'
+              file_system: '{{ event.purefb_fs_performance.file_system | pprint }}'
               action: apply
               tarpit_ops_per_sec: '{{ tarpit_ops_per_sec }}'
               reason: iops={{ event.purefb_fs_performance.reads_per_sec }}r/{{ event.purefb_fs_performance.writes_per_sec }}w ({{ event.purefb_fs_performance.ops_share_pct }}% of the array) for {{ event.purefb_fs_performance.high_share_polls }} polls
@@ -137,8 +137,8 @@
           organization: '{{ aap_organization }}'
           job_args:
             extra_vars:
-              target_array: '{{ event.purefb_fs_performance.array }}'
-              file_system: '{{ event.purefb_fs_performance.file_system }}'
+              target_array: '{{ event.purefb_fs_performance.array | pprint }}'
+              file_system: '{{ event.purefb_fs_performance.file_system | pprint }}'
               action: lift
               tarpit_ops_per_sec: '{{ tarpit_ops_per_sec }}'
               reason: share normal for {{ event.purefb_fs_performance.normal_polls }} polls

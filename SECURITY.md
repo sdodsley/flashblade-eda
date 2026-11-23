@@ -131,11 +131,13 @@ matters.
   `sdodsley.flashblade_eda.jinja_safe` event filter, which keeps template
   delimiters in an event's strings inert, so a playbook renders event text
   (an alert summary, a syslog line, an object key, a webhook body, an LLDP
-  neighbour name) as text. The webhook, Alertmanager and syslog rules
-  accept only well-formed array names, addresses and ids in the fields
-  they hand to a playbook; a webhook request or an alert that does not
-  fit is logged by the ruleset's last rule, and a syslog line whose array
-  name does not fit starts nothing.
+  neighbour name) as text. The sources emit plain text themselves, the
+  rules hand it over unchanged and the playbooks keep it as text in their
+  records. The webhook, Alertmanager and syslog rules accept only
+  well-formed array names, addresses and ids in the fields they hand to a
+  playbook; a webhook request or an alert that does not fit is logged by
+  the ruleset's last rule, and a syslog line whose array name does not
+  fit starts nothing.
 - **The raw REST tasks log in with the API token.** `tasks/fb_rest.yml`
   exchanges the inventory token for a session at `POST /api/login` for the
   endpoints the collection has no module for (QoS policies, maintenance

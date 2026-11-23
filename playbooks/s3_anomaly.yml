@@ -69,11 +69,11 @@
       ansible.builtin.set_fact:
         disabled: "{{ disable_wanted | bool and (fb_rest_status | default(0) | int) == 200 }}"
         outcome: >-
-          {{ ('key ' ~ access_key_id ~ ' disabled') if disable_wanted | bool and (fb_rest_status | default(0) | int) == 200
-             else ('disable refused by the array: ' ~ (fb_rest_error | default('') | trim)) if disable_wanted | bool
-             else 'notified: anomaly_auto_disable_key is off' if not (anomaly_auto_disable_key | default(false) | bool)
-             else 'notified: the top key is one of the automation keys' if (access_key_id | string | length) > 0
-             else 'notified: no top key in the window' }}
+          {{ (('key ' ~ access_key_id ~ ' disabled') if disable_wanted | bool and (fb_rest_status | default(0) | int) == 200
+              else ('disable refused by the array: ' ~ (fb_rest_error | default('') | trim)) if disable_wanted | bool
+              else 'notified: anomaly_auto_disable_key is off' if not (anomaly_auto_disable_key | default(false) | bool)
+              else 'notified: the top key is one of the automation keys' if (access_key_id | string | length) > 0
+              else 'notified: no top key in the window') | string }}
 
     - name: Record the storm
       ansible.builtin.lineinfile:

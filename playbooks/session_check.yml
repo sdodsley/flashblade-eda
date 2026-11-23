@@ -58,8 +58,8 @@
   when: hostvars['localhost'].session_outside | default(false) | bool
   vars:
     severity: warning
-    subject: "{{ session_user }} logged in to {{ target_array }} from {{ session_location }}"
+    subject: "{{ (session_user ~ ' logged in to ' ~ target_array ~ ' from ' ~ session_location) | string }}"
     detail: >-
-      {{ hostvars['localhost'].session_reason }}; via {{ session_method | default('') }}
-      ({{ session_interface | default('') }}), session {{ session_id | default('') }}
-      started {{ session_start_time | default('') }}; admin networks {{ admin_cidrs | default([]) }}
+      {{ (hostvars['localhost'].session_reason ~ '; via ' ~ session_method | default('')
+          ~ ' (' ~ session_interface | default('') ~ '), session ' ~ session_id | default('')
+          ~ ' started ' ~ session_start_time | default('') ~ '; admin networks ' ~ admin_cidrs | default([])) | string }}

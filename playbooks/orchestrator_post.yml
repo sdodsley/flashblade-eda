@@ -82,7 +82,7 @@
 
     - name: Pin the event type and its fields
       ansible.builtin.set_fact:
-        event_type: "{{ purefb_keys | first }}"
+        event_type: "{{ purefb_keys | first | string }}"
         event_data: "{{ event[purefb_keys | first] }}"
 
     # The capacity event carries no maintenance_active (only alert, audit,
@@ -92,8 +92,8 @@
         envelope:
           event:
             schema: flashblade-eda/1
-            event_type: "{{ event_type }}"
-            array: "{{ array | default(event_data.array | default(''), true) }}"
+            event_type: "{{ event_type | string }}"
+            array: "{{ array | default(event_data.array | default(''), true) | string }}"
             maintenance_active: "{{ event_data.maintenance_active | default(false) | bool }}"
             observed_at: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
             data: "{{ event_data }}"
@@ -207,7 +207,7 @@
     - hostvars['localhost'].event_type | default('') == 'purefb_capacity'
     - (hostvars['localhost'].orchestrator_record.status | default(0)) != 202
   vars:
-    at_risk_array: "{{ hostvars['localhost'].event_data.array }}"
+    at_risk_array: "{{ hostvars['localhost'].event_data.array | string }}"
     used_pct: "{{ hostvars['localhost'].event_data.used_pct }}"
     used_bytes: "{{ hostvars['localhost'].event_data.used_bytes }}"
     capacity_bytes: "{{ hostvars['localhost'].event_data.capacity_bytes }}"
