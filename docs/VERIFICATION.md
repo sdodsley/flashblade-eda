@@ -173,6 +173,9 @@ run from a checkout.
 
 ## Not verified
 
+- The `jinja_safe` event filter and the pinned conditions of the webhook,
+  Alertmanager and syslog rules: exercised in the decision environment
+  with a synthetic source, not yet against a live listener.
 - Of the management syslog, `purity.test` lines from the array: the
   `purity.audit` and `purity.alert` layouts are confirmed from live lines;
   `purity.test` is parsed as the Admin Guide documents.

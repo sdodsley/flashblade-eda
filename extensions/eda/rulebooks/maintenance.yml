@@ -11,7 +11,12 @@
 # {"array": "<inventory name>", "action": "open" | "extend" | "close",
 # "hours": <1-48>, "requested_by": "<name>"} opens, extends (a second POST
 # replaces the timeout) or deletes the window through
-# playbooks/maintenance_window.yml; hours defaults to maintenance_default_hours.
+# playbooks/maintenance_window.yml; hours defaults to maintenance_default_hours
+# and is read as an integer. The rule accepts only a plain array name
+# ([A-Za-z0-9][A-Za-z0-9_.-]*) and a requested_by of letters, digits, spaces
+# and _ . @ - ; a body that fails those shapes runs nothing and is logged by
+# the last rule. Event text is data: the jinja_safe filter on every source
+# keeps template delimiters inert.
 # The webhook needs a bearer token: APPROVAL_TOKEN comes from the environment
 # (run.sh --env-vars), the sender adds -H "Authorization: Bearer $APPROVAL_TOKEN".
 # The second ruleset watches the audit stream for a window a human opened
@@ -25,24 +30,31 @@
         host: 0.0.0.0
         port: "{{ maintenance_port }}"
         token: "{{ APPROVAL_TOKEN }}"
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     - name: Window request - open, extend or close it
       condition: >-
         event.payload.array is defined and
         event.payload.action is defined and
-        event.payload.action in ["open", "extend", "close"]
+        event.payload.action in ["open", "extend", "close"] and
+        event.payload.array is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and
+        (event.payload.requested_by is not defined or
+         event.payload.requested_by is match("^[A-Za-z0-9][A-Za-z0-9 _.@-]*$"))
       action:
         run_playbook:
           name: playbooks/maintenance_window.yml
           extra_vars:
             target_array: "{{ event.payload.array }}"
             window_action: "{{ event.payload.action }}"
-            window_hours: "{{ event.payload.hours | default(maintenance_default_hours) }}"
+            window_hours: "{{ event.payload.hours | default(maintenance_default_hours) | int }}"
             requested_by: "{{ event.payload.requested_by | default('unknown') }}"
             fb_api_version: "{{ fb_api_version }}"
             alert_log: "{{ alert_log }}"
 
+    # Reached by a body with no known action and by one whose array or
+    # requested_by is not well-formed: nothing runs, the fields are logged.
     - name: Malformed window request - log
       condition: event.payload is defined
       action:
@@ -50,6 +62,7 @@
           msg: >-
             maintenance request ignored: array={{ event.payload.array | default('missing') }}
             action={{ event.payload.action | default('missing') }} (open, extend or close)
+            hours={{ event.payload.hours | default('missing') }} requested_by={{ event.payload.requested_by | default('missing') }}
 
 - name: FlashBlade maintenance audit
   hosts: all
@@ -61,6 +74,8 @@
         audits_interval: "{{ audits_interval }}"
         automation_users: "{{ automation_users }}"
         automation_user_agents: "{{ automation_user_agents }}"
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     # A poll that fails once is a blip; one that keeps failing is an array

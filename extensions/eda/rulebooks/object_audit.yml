@@ -18,7 +18,8 @@
 #           disables that key (playbooks/canary.yml) when
 #           canary_auto_disable_key is true, else pages.
 # Honey:    any request naming a key with a honey suffix pages.
-# Landing:  a landing marker starts the ingest (playbooks/landing.yml).
+# Landing:  a landing marker starts the ingest (playbooks/landing.yml) when
+#           landing_enabled is true, else its arrival is logged.
 # Evidence: an object under an evidence prefix gets a legal hold
 #           (playbooks/lock_on_arrival.yml) when legal_hold_on_arrival is true.
 # Approval: approvals/<request_id>.json put into the log bucket runs the
@@ -38,13 +39,15 @@
 # One health event carries every guard condition and one record may be a
 # canary and a honey hit at once, so the first ruleset matches every rule an
 # event satisfies (match_multiple_rules) instead of the first one only; the
-# switch pairs (disable or notify) are exclusive by their vars condition.
-# Every write defaults to notify: canary_auto_disable_key,
-# anomaly_auto_disable_key, audit_auto_reattach are false in vars/example.yml;
-# legal_hold_on_arrival is true because a hold is additive and the array
-# audits it back. Conditions compare what the plugin emits: rulebook
-# conditions take no filters, so every list a rule tests comes with its
-# count.
+# switch pairs (disable or notify, ingest or log) are exclusive by their vars
+# condition. Every write defaults to notify: canary_auto_disable_key,
+# anomaly_auto_disable_key, audit_auto_reattach, landing_enabled and
+# legal_hold_on_arrival are false in vars/example.yml (a hold is additive
+# and the array audits it back, so it is the safe one to turn on first).
+# Conditions compare what the plugin emits: rulebook conditions take no
+# filters, so every list a rule tests comes with its count. Event text is data: both sources run the jinja_safe
+# filter, so an object key, a user agent or a command argument keeps its
+# template delimiters inert wherever the playbooks carry it.
 
 - name: FlashBlade object audit
   hosts: all
@@ -71,6 +74,8 @@
         stale_rotations: "{{ stale_rotations }}"
         coverage_exclude: "{{ coverage_exclude }}"
         cursor_dir: "{{ object_audit_cursor_dir }}"
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     # A poll that fails once is a blip; one that keeps failing is an array
@@ -208,11 +213,13 @@
             alert_log: "{{ alert_log }}"
 
     # dataset is the path between the landing prefix and the marker; a
-    # marker rewritten within five minutes is one ingest.
+    # marker rewritten within five minutes is one ingest. With
+    # landing_enabled false the arrival is logged and nothing runs.
     - name: Landing marker arrived - start the ingest
       condition: >-
         event.purefb_s3_event.landing is defined and
-        event.purefb_s3_event.landing == true
+        event.purefb_s3_event.landing == true and
+        vars.landing_enabled == true
       throttle:
         once_within: 5 minutes
         group_by_attributes:
@@ -232,6 +239,15 @@
             event_time: "{{ event.purefb_s3_event.event_time }}"
             landing_command: "{{ landing_command }}"
             alert_log: "{{ alert_log }}"
+
+    - name: Landing marker arrived - log
+      condition: >-
+        event.purefb_s3_event.landing is defined and
+        event.purefb_s3_event.landing == true and
+        vars.landing_enabled == false
+      action:
+        debug:
+          msg: "landing marker {{ event.purefb_s3_event.bucket }}/{{ event.purefb_s3_event.key }} arrived on {{ event.purefb_s3_event.array }}; landing_enabled is false, nothing runs"
 
     - name: Evidence object arrived - legal hold
       condition: >-
@@ -490,6 +506,8 @@
         audits_interval: "{{ audits_interval }}"
         automation_users: "{{ automation_users }}"
         automation_user_agents: "{{ automation_user_agents }}"
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     - name: Poll failing for many polls - escalate

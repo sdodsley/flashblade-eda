@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Every source in every rulebook runs the
+  `sdodsley.flashblade_eda.jinja_safe` event filter, which puts a space
+  after each template delimiter in every string of an event so a playbook
+  renders event text as text.
+- The webhook, Alertmanager and syslog rules accept only well-formed array
+  names, addresses and ids in the fields they hand to a playbook, pinned in
+  the rule conditions; the webhook and Alertmanager rulesets end with a
+  rule that logs a request or alert that does not fit.
+- `legal_hold_on_arrival` defaults to false, and `landing_enabled` (default
+  false) gates the landing ingest: an arrival is logged until the site
+  turns it on.
 - `tools/activation_restart.py` makes at least two passes, ninety seconds
   apart: the first reads after the EDA API comes up can show an activation
   as running from before the reboot, which the worker marks failed seconds

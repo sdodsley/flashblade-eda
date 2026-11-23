@@ -21,6 +21,8 @@
         signals:
           - config
         config_interval: '{{ config_interval }}'
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe: null
   rules:
     - name: Poll failing for many polls - escalate
       condition: event.purefb_poll_error is defined and event.purefb_poll_error.escalate == true

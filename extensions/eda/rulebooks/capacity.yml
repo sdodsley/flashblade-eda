@@ -11,10 +11,16 @@
 # days-to-full estimate inside the warning horizon, records an approval
 # request (with a request id) listing what could be reclaimed and which
 # other arrays have headroom. The second ruleset is the approval gate: a POST
-# to its webhook with {"request_id": ..., "approve": true, "approver":
-# "<name>", "action": "eradicate_pending"} runs the reclaim playbook (only on
-# the candidates the request listed that are still pending), anything else
-# is logged.
+# to its webhook with {"request_id": "<array>-<digits>", "approve": true,
+# "approver": "<name>", "action": "eradicate_pending"} runs the reclaim
+# playbook (only on the candidates the request listed that are still
+# pending). The rule accepts only a well-formed request id
+# ([A-Za-z0-9][A-Za-z0-9._-]*, the shape capacity_request.yml writes), a
+# plain approver name ([A-Za-z0-9][A-Za-z0-9_.-]*) and the action
+# eradicate_pending. A request with a well-formed id that is not approved is
+# logged with its id; any other body runs nothing and is logged with the
+# keys it carried. Event text is data: the jinja_safe filter on every source
+# keeps template delimiters inert.
 # In Ansible Automation Platform the first ruleset calls run_workflow_template
 # against a workflow whose first node is a manual approval and the webhook
 # ruleset is not needed.
@@ -50,6 +56,8 @@
         telemetry_interval: "{{ telemetry_interval }}"
         fs_quota_warn_pct: "{{ fs_quota_warn_pct }}"
         top_growers: 5
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     # A poll that fails once is a blip; one that keeps failing is an array
@@ -225,13 +233,19 @@
         host: 0.0.0.0
         port: "{{ approval_port }}"
         token: "{{ APPROVAL_TOKEN }}"
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     - name: Approved request - reclaim
       condition: >-
         event.payload.request_id is defined and
         event.payload.approve == true and
-        event.payload.action is defined
+        event.payload.action is defined and
+        event.payload.request_id is match("^[A-Za-z0-9][A-Za-z0-9._-]*$") and
+        event.payload.action in ["eradicate_pending"] and
+        (event.payload.approver is not defined or
+         event.payload.approver is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$"))
       action:
         run_playbook:
           name: playbooks/capacity_reclaim.yml
@@ -245,6 +259,7 @@
     - name: Rejected or malformed request - log
       condition: >-
         event.payload.request_id is defined and
+        event.payload.request_id is match("^[A-Za-z0-9][A-Za-z0-9._-]*$") and
         (event.payload.approve is not defined or
          event.payload.approve != true or
          event.payload.action is not defined)
@@ -255,3 +270,17 @@
             (approve={{ event.payload.approve | default('missing') }},
             action={{ event.payload.action | default('missing') }})
             by {{ event.payload.approver | default('unknown') }}
+
+    # Reached by a body without a well-formed request id, and by an approval
+    # whose action or approver is not well-formed: nothing runs, the fields
+    # and the keys present are logged.
+    - name: Malformed approval request - log
+      condition: event.payload is defined
+      action:
+        debug:
+          msg: >-
+            capacity approval ignored: request_id={{ event.payload.request_id | default('missing') }}
+            approve={{ event.payload.approve | default('missing') }}
+            action={{ event.payload.action | default('missing') }} (eradicate_pending)
+            approver={{ event.payload.approver | default('missing') }}
+            keys={{ event.payload | list }}

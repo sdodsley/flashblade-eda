@@ -23,9 +23,11 @@
         programs: '{{ syslog_programs }}'
         hostnames: '{{ syslog_hostnames }}'
         automation_users: '{{ automation_users }}'
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe: null
   rules:
     - name: Alert via syslog - notify
-      condition: event.purefb_syslog_alert.severity in ["warning", "critical"] and event.purefb_syslog_alert.state not in ["closing", "closed", "waiting to downgrade"]
+      condition: event.purefb_syslog_alert.severity in ["warning", "critical"] and event.purefb_syslog_alert.state not in ["closing", "closed", "waiting to downgrade"] and event.purefb_syslog_alert.array is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$")
       throttle:
         once_within: 24 hours
         group_by_attributes:
@@ -45,7 +47,7 @@
               alert_code: '{{ event.purefb_syslog_alert.code | default('''', true) }}'
               target_array: '{{ event.purefb_syslog_alert.array }}'
     - name: Alert closed via syslog - notify
-      condition: event.purefb_syslog_alert.state == "closed"
+      condition: event.purefb_syslog_alert.state == "closed" and event.purefb_syslog_alert.array is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$")
       throttle:
         once_within: 10 minutes
         group_by_attributes:
@@ -69,7 +71,7 @@
         debug:
           msg: '{{ event.purefb_syslog_alert.array }} alert {{ event.purefb_syslog_alert.code }} {{ event.purefb_syslog_alert.state }}: {{ event.purefb_syslog_alert.subject }}'
     - name: Human action via syslog audit - fast notification
-      condition: event.purefb_syslog_audit.by_automation == false and event.purefb_syslog_audit.user is defined and event.purefb_syslog_audit.command is defined
+      condition: event.purefb_syslog_audit.by_automation == false and event.purefb_syslog_audit.user is defined and event.purefb_syslog_audit.command is defined and event.purefb_syslog_audit.array is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$")
       action:
         run_job_template:
           name: FlashBlade - notify
@@ -81,7 +83,7 @@
               detail: '{{ event.purefb_syslog_audit.user_interface | default('''') }} from {{ event.purefb_syslog_audit.location | default('''') }}, audit {{ event.purefb_syslog_audit.audit_id | default('''') }} at {{ event.purefb_syslog_audit.time | default('''') }}'
               target_array: '{{ event.purefb_syslog_audit.array }}'
     - name: File activity over threshold - notify
-      condition: event.purefb_file_activity.mass_delete == true or event.purefb_file_activity.rename_storm == true
+      condition: "(event.purefb_file_activity.mass_delete == true or\n event.purefb_file_activity.rename_storm == true) and\nevent.purefb_file_activity.array is match(\"^[A-Za-z0-9][A-Za-z0-9_.-]*$\")"
       throttle:
         once_within: 5 minutes
         group_by_attributes:

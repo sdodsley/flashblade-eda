@@ -22,6 +22,8 @@
         payload: "{{ fixture_events }}"
         loop_count: 1
         delay: 1
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     - name: Hardware issue outside a maintenance window - identify LED and notify

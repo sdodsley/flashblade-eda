@@ -85,7 +85,8 @@ The repository is the collection `sdodsley.flashblade_eda` (`galaxy.yml` at
 the root): the rulebooks name their event sources by FQCN,
 `sdodsley.flashblade_eda.purefb_events`,
 `sdodsley.flashblade_eda.purefb_syslog` and
-`sdodsley.flashblade_eda.purefb_object_audit`, and ansible-rulebook
+`sdodsley.flashblade_eda.purefb_object_audit`, and the event filter every
+source runs, `sdodsley.flashblade_eda.jinja_safe`, and ansible-rulebook
 resolves them from an installed collection; the eleven modules under
 `plugins/modules/` resolve the same way (`sdodsley.flashblade_eda.purefb_log_target`
 and its siblings). `make collection` (which `make deps` runs
@@ -141,7 +142,7 @@ Four things to get right on the first run:
 | `config_drift.yml` | config | NTP, DNS, directory service, eradication delay and manual eradication, admin lockout and password settings, SSO, Active Directory join, missing data-audit syslog target vs the baseline keys | NTP and DNS reapplied (`purefb_ntp`, `purefb_dns`); the rest notify |
 | `health.yml` | health | hardware component whose status is an issue; LAG degraded (status, or `lag_speed` under the sum of its ports); blade or drive issues; component recovered; remote assist, maintenance window | hardware issue outside a window: identify LED (`purefb_hardware`) with the component's LLDP neighbour (switch, port) in the record; inside a window: logged; LAG degraded: critical notify naming the switch ports; blade and drive issues, recovery: notify |
 | `capacity.yml` | telemetry, webhook | used % over `capacity_risk_pct`; days-to-full from the array's 7-day space history under `capacity_days_to_full_warning`; a file system at `fs_quota_grow_pct` of a hard quota; an approval (bearer token) | approval request listing pending-eradication file systems, buckets and snapshots and the top growers; reclaim only when approved; `grow_fs.yml` grows a hard-limited file system by `fs_grow_step_pct` up to `fs_grow_max_bytes` behind `fs_auto_grow`, and asks above the cap; with `s3_requests_enabled` both requests are also written to `<log_bucket>/requests/<id>.json` for the S3 approval inbox of `object_audit.yml` |
-| `object_audit.yml` | purefb_object_audit, audits | a canary object read by a key not in `canary_readers`; a honey-suffixed key touched; a landing marker (`_SUCCESS`, `manifest.json`) written under a landing prefix; an object written under an evidence prefix; an approval object written under `approvals/` in the log bucket; an access-denied storm, an error storm or a mass delete in one log object; the log bucket at `log_bucket_quota_warn_pct` of its quota; no log object for `stale_rotations` rotations; a bucket without an enabled audit policy, a disabled policy or a member bucket without a filter; a human `purepolicy`, `purelog` or `purebucket` change to the audit configuration (audits signal) | `canary.yml` disables the key (`PATCH /object-store-access-keys enabled false`) behind `canary_auto_disable_key`, else notify critical; honey and mass delete notify critical; `landing.yml` records the dataset and runs `landing_command` with the dataset, writer and source address in its environment; `lock_on_arrival.yml` puts a legal hold on the object behind `legal_hold_on_arrival` (default on); `s3_approval.yml` runs the proposed action of a request whose approval a key in `approval_keys` wrote and leaves a receipt; `s3_anomaly.yml` notifies critical and disables the top key behind `anomaly_auto_disable_key`; `auditor_guard.yml` raises the log bucket quota by `log_bucket_quota_step_pct` within `log_bucket_quota_max_bytes` (0 = notify only) and re-attaches the policy, log target and filters from `audit_baseline` behind `audit_auto_reattach`, else records what it would do, naming the human when there is one; a stale log pages when `audit_log_expected_continuous` |
+| `object_audit.yml` | purefb_object_audit, audits | a canary object read by a key not in `canary_readers`; a honey-suffixed key touched; a landing marker (`_SUCCESS`, `manifest.json`) written under a landing prefix; an object written under an evidence prefix; an approval object written under `approvals/` in the log bucket; an access-denied storm, an error storm or a mass delete in one log object; the log bucket at `log_bucket_quota_warn_pct` of its quota; no log object for `stale_rotations` rotations; a bucket without an enabled audit policy, a disabled policy or a member bucket without a filter; a human `purepolicy`, `purelog` or `purebucket` change to the audit configuration (audits signal) | `canary.yml` disables the key (`PATCH /object-store-access-keys enabled false`) behind `canary_auto_disable_key`, else notify critical; honey and mass delete notify critical; `landing.yml` records the dataset and, behind `landing_enabled`, runs `landing_command` with the dataset, writer and source address in its environment; `lock_on_arrival.yml` puts a legal hold on the object behind `legal_hold_on_arrival` (off by default); `s3_approval.yml` runs the proposed action of a request whose approval a key in `approval_keys` wrote and leaves a receipt; `s3_anomaly.yml` notifies critical and disables the top key behind `anomaly_auto_disable_key`; `auditor_guard.yml` raises the log bucket quota by `log_bucket_quota_step_pct` within `log_bucket_quota_max_bytes` (0 = notify only) and re-attaches the policy, log target and filters from `audit_baseline` behind `audit_auto_reattach`, else records what it would do, naming the human when there is one; a stale log pages when `audit_log_expected_continuous` |
 | `posture.yml` | posture | a public bucket; a world-open NFS export rule (client `*`, `rw`); an access key older than `key_max_age_days`; a certificate within `cert_warn_days` of expiry; a bucket without audit coverage; an SMB share policy granting Everyone full control | `posture_revert.yml` blocks public access (`purefb_bucket block_public_access`) behind `posture_auto_revert`, else notify warning; `renew_certificate.yml` renews a certificate the array issued to itself for `certs_renew_days` with `purefb_certs` behind `certs_auto_renew` (a CA-issued or external one is recorded as needing a human); the rest notify, once a day per array |
 | `quota_user.yml` | alerts (1106, 1107) | a user or group quota alert opened or updated | `user_quota.yml` reads the quota and usage for that file system and user, notifies, and behind `auto_raise_user_quota` raises it by `user_quota_step_pct` up to `user_quota_max_bytes` (`purefb_userquota`, `purefb_groupquota`) |
 | `client.yml` | telemetry | array write latency at `baseline_latency_ratio` times the same half hour last week and one NFS or SMB client holding `client_min_share_pct` of ops for `client_consecutive_polls`; a file system holding `qos_cap_min_share_pct` in the same state; a capped file system normal for `qos_lift_normal_polls` | the client's IP mapped to an inventory host and read-only diagnostics run there behind `client_actions_enabled`; a QoS policy `eda-cap-<fs>` created and assigned behind `qos_auto_cap`; the cap lifted |
@@ -170,9 +171,10 @@ switches fall back to notify: `fs_auto_grow`, `auto_raise_user_quota`,
 `client_actions_enabled`, `qos_auto_cap`, `canary_auto_disable_key`,
 `anomaly_auto_disable_key`, `audit_auto_reattach`, `posture_auto_revert`,
 `ir_auto_contain`, `ir_auto_tarpit`, `replication_auto_resume` and
-`certs_auto_renew`; `legal_hold_on_arrival` defaults to on because a
-hold only adds protection and the array audits it back; the reapply, the
-reconcile and the identify LED have none; breaking a client's locks and
+`certs_auto_renew`; `legal_hold_on_arrival` (a hold only adds protection
+and the array audits it back) and `landing_enabled` (the ingest command;
+an arrival is logged otherwise) are off until the site turns them on; the
+reapply, the reconcile and the identify LED have none; breaking a client's locks and
 sessions has no switch at all, only the approval webhook on `locks_port`;
 `orchestrator_enabled` moves the
 capacity decision into the automation orchestrator and
@@ -187,7 +189,10 @@ reaches Slack when a webhook is configured ("Notifications" below).
 galaxy.yml, meta/runtime.yml           the repository root is the collection sdodsley.flashblade_eda (docs/PACKAGING.md)
 extensions/eda/plugins/event_source/   purefb_events.py (REST pull, eight signals), purefb_syslog.py (push),
                                        purefb_object_audit.py (boto3 tail of the object-audit log bucket)
-extensions/eda/rulebooks/              one rulebook per domain (table above), sources named by FQCN
+extensions/eda/plugins/event_filter/   jinja_safe.py (on every source: keeps template delimiters in event strings inert,
+                                       so a playbook renders event text as text)
+extensions/eda/rulebooks/              one rulebook per domain (table above), sources named by FQCN, every source
+                                       filtered by jinja_safe
 extensions/eda/rulebooks/platform/     the platform variants (run_job_template, no webhook or tick rulesets), generated by
                                        tools/platform_rulebooks.py and run as activations on the platform
 plugins/modules/                       purefb_log_target, purefb_audit_policy, purefb_bucket_audit_filter (the object-audit
@@ -328,6 +333,17 @@ any) and `hostnames` maps an array's own name or its syslog hostname to
 the inventory name. On the array, `everpure.flashblade.purefb_syslog` creates the server
 with `tcp://<eda host>:5140` and the services it should carry.
 
+Every source entry in every rulebook, the stock `ansible.eda` sources
+included, runs the `jinja_safe` event filter
+(`extensions/eda/plugins/event_filter/jinja_safe.py`). It puts a space
+after each template delimiter (`{{`, `{%`, `{#`, and inside `#jinja2:`) in
+every string of the event, keys and nested values included, so event text
+is data when a playbook renders it: an alert summary, a syslog line, an
+object key, a webhook body or an LLDP neighbour name is reported as text
+and never evaluated. Numbers, booleans and null are unchanged, the names
+FlashBlade allows carry no brace, and applying the filter twice changes
+nothing.
+
 The push path needs no plugin of this repository. `purefb_telemetry_target`
 points the array's OTLP push at a Prometheus 3.x OTLP receiver (the
 endpoint is `<host>:9090/api/v1/otlp/v1/metrics` without a scheme, the transport
@@ -418,11 +434,15 @@ differently (see also [SECURITY.md](SECURITY.md)):
   `release_locks` (`release_locks.yml`: the client's sessions and locks,
   `file_system` optional) or `tarpit` or `lift` (`tarpit.yml`,
   `file_system` required). Lock breaking has no automatic path; this
-  webhook is its only entry.
+  webhook is its only entry. A body is accepted only when its fields are
+  well-formed: `array` and `approver` as plain names (letters, digits,
+  `_`, `.`, `-`), `file_system` as a file system name, `client` as an IPv4
+  or IPv6 address and `request_id` as an id; a request that does not fit
+  is logged by the ruleset's last rule and starts nothing.
 
       curl -s -X POST http://<eda host>:5001/endpoint \
         -H "Authorization: Bearer $APPROVAL_TOKEN" -H 'Content-Type: application/json' \
-        -d '{"request_id": "<id>", "approve": true, "approver": "jane", "action": "eradicate_pending"}'
+        -d '{"request_id": "<array>-<digits>", "approve": true, "approver": "jane", "action": "eradicate_pending"}'
       curl -s -X POST http://<eda host>:5003/endpoint \
         -H "Authorization: Bearer $APPROVAL_TOKEN" -H 'Content-Type: application/json' \
         -d '{"array": "fb-a", "action": "open", "hours": 2}'
@@ -482,8 +502,8 @@ ansible-builder definitions of both images on the supported bases.
 EDA Controller activations pass no `--source-dir` and resolve custom event
 sources only from the collections installed in the decision environment;
 the rulebooks name theirs by FQCN, so an activation on this image resolves
-`purefb_events`, `purefb_syslog` and `purefb_object_audit` from the
-collection it carries. On the platform the rulebooks run as the generated
+`purefb_events`, `purefb_syslog`, `purefb_object_audit` and the
+`jinja_safe` filter from the collection it carries. On the platform the rulebooks run as the generated
 variants under `extensions/eda/rulebooks/platform/`
 (`tools/platform_rulebooks.py`, checked by a unit test): the same rules,
 with `run_playbook` replaced by `run_job_template` against the seeded job

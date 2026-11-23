@@ -540,7 +540,7 @@ def test_syslog_alerts_are_graded_by_state():
         assert 'severity in ["warning", "critical"]' in notify
         assert 'state not in ["closing", "closed", "waiting to downgrade"]' in notify
         closed = rules["Alert closed via syslog - notify"]
-        assert closed["condition"] == 'event.purefb_syslog_alert.state == "closed"'
+        assert 'event.purefb_syslog_alert.state == "closed"' in closed["condition"]
         action = closed["action"]
         extra = (
             action["run_playbook"]["extra_vars"]
@@ -573,3 +573,170 @@ def test_syslog_open_alerts_are_notified_once_a_day():
             "event.purefb_syslog_alert.subject",
             "event.purefb_syslog_alert.first_seen",
         ]
+
+
+# Event text is data: every source runs this filter, which keeps the template
+# delimiters in every string of an event inert before a rule reads it.
+JINJA_SAFE_FILTER = "sdodsley.flashblade_eda.jinja_safe"
+JINJA_SAFE_FILE = pathlib.Path("extensions/eda/plugins/event_filter/jinja_safe.py")
+
+# The shape a sender-chosen value must have before a rule passes it to a
+# playbook's hosts line or as an object name. The condition compares the
+# attribute and never renders it, so a value of another shape starts nothing.
+NAME_RE = "^[A-Za-z0-9][A-Za-z0-9_.-]*$"  # array and host names, label values
+FS_RE = "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"  # file system and bucket names
+ID_RE = "^[A-Za-z0-9][A-Za-z0-9._-]*$"  # request ids
+IP_RE = "^[0-9A-Fa-f.:]+$"  # client addresses, IPv4 or IPv6
+REF_RE = "^refs/[A-Za-z0-9/_.-]+$"  # a git ref
+SHA_RE = "^[0-9a-f]{40,64}$"  # a git commit id
+
+
+def _pin(attribute, regex):
+    """The condition fragment that accepts only a well-formed value."""
+    return f'{attribute} is match("{regex}")'
+
+
+# (rulebook, rule name, fragments its condition must contain). alertmanager's
+# "Telemetry silent without an array label - notify" is not here: it fires
+# when the label is absent and passes an empty target.
+PINNED_CONDITIONS = [
+    (
+        "contain.yml",
+        "Approved quarantine or release - apply it",
+        [_pin("event.payload.array", NAME_RE), _pin("event.payload.client", IP_RE)],
+    ),
+    (
+        "contain.yml",
+        "Approved lock and session release - run it",
+        [_pin("event.payload.array", NAME_RE), _pin("event.payload.client", IP_RE)],
+    ),
+    (
+        "contain.yml",
+        "Approved tarpit - apply it",
+        [
+            _pin("event.payload.array", NAME_RE),
+            _pin("event.payload.file_system", FS_RE),
+        ],
+    ),
+    (
+        "contain.yml",
+        "Approved lift - apply it",
+        [
+            _pin("event.payload.array", NAME_RE),
+            _pin("event.payload.file_system", FS_RE),
+        ],
+    ),
+    (
+        "capacity.yml",
+        "Approved request - reclaim",
+        [_pin("event.payload.request_id", ID_RE)],
+    ),
+    (
+        "maintenance.yml",
+        "Window request - open, extend or close it",
+        [_pin("event.payload.array", NAME_RE)],
+    ),
+    (
+        "change_control.yml",
+        "Push to the baseline repository - apply the baseline to every array",
+        [_pin("event.payload.ref", REF_RE), _pin("event.payload.after", SHA_RE)],
+    ),
+    # every alertmanager rule whose action names the array from the alert's label
+    (
+        "alertmanager.yml",
+        "Telemetry silent - check the pipeline",
+        [_pin("event.alert.labels.array_name", NAME_RE)],
+    ),
+    (
+        "alertmanager.yml",
+        "Health not ok - notify",
+        [_pin("event.alert.labels.array_name", NAME_RE)],
+    ),
+    (
+        "alertmanager.yml",
+        "Capacity threshold - approval request",
+        [_pin("event.alert.labels.array_name", NAME_RE)],
+    ),
+    (
+        "alertmanager.yml",
+        "Latency, connector errors or stalled replication - notify",
+        [_pin("event.alert.labels.array_name", NAME_RE)],
+    ),
+    (
+        "alertmanager.yml",
+        "Any other firing FlashBlade alert - notify",
+        [_pin("event.alert.labels.array_name", NAME_RE)],
+    ),
+    (
+        "alertmanager.yml",
+        "Resolved - log",
+        [_pin("event.alert.labels.array_name", NAME_RE)],
+    ),
+    # the syslog rules that run notify.yml: the array attribute of their event
+    (
+        "syslog.yml",
+        "Alert via syslog - notify",
+        [_pin("event.purefb_syslog_alert.array", NAME_RE)],
+    ),
+    (
+        "syslog.yml",
+        "Alert closed via syslog - notify",
+        [_pin("event.purefb_syslog_alert.array", NAME_RE)],
+    ),
+    (
+        "syslog.yml",
+        "Human action via syslog audit - fast notification",
+        [_pin("event.purefb_syslog_audit.array", NAME_RE)],
+    ),
+    (
+        "syslog.yml",
+        "File activity over threshold - notify",
+        [_pin("event.purefb_file_activity.array", NAME_RE)],
+    ),
+    # the landing ingest runs only where the deployment turns it on
+    (
+        "object_audit.yml",
+        "Landing marker arrived - start the ingest",
+        ["vars.landing_enabled == true"],
+    ),
+]
+
+
+@pytest.mark.parametrize("path", RULEBOOKS + REPLAYS, ids=lambda p: p.name)
+def test_every_source_runs_the_jinja_safe_filter(path, repo_root):
+    """Every source of every ruleset runs the jinja_safe filter, so a template
+    delimiter in any string of an event is inert by the time a rule reads it
+    or hands it to a playbook. The replays' generic sources run it too, since
+    their fixtures stand in for the real sources."""
+    assert (repo_root / JINJA_SAFE_FILE).exists(), f"{JINJA_SAFE_FILE} is missing"
+    doc = yaml.safe_load(path.read_text())
+    for ruleset in doc:
+        for source in ruleset.get("sources") or []:
+            kind = [k for k in source if k not in ("name", "filters")][0]
+            where = f"{path.name}: {ruleset['name']} source {kind}"
+            filters = source.get("filters")
+            assert isinstance(filters, list), f"{where} has no filters"
+            assert any(
+                list(f) == [JINJA_SAFE_FILTER] for f in filters
+            ), f"{where} does not run {JINJA_SAFE_FILTER}"
+
+
+def test_sender_named_fields_are_pinned_in_the_rule(repo_root):
+    """A value the sender of an event chooses (a webhook body's array, client,
+    file system, request id, ref or commit; an alert's array_name label; the
+    array a syslog line names) reaches a playbook's hosts line or an object
+    name only after the rule's condition has matched it against the shape
+    such a name has, and the landing ingest only behind its switch."""
+    rulebooks = repo_root / "extensions" / "eda" / "rulebooks"
+    missing = []
+    for file, rule_name, fragments in PINNED_CONDITIONS:
+        rules = _rules_by_name(rulebooks / file)
+        assert rule_name in rules, f"{file}: no rule named '{rule_name}'"
+        condition = rules[rule_name]["condition"]
+        assert isinstance(condition, str), f"{file}: '{rule_name}' condition"
+        missing.extend(
+            f"{file}: '{rule_name}' lacks {fragment}"
+            for fragment in fragments
+            if fragment not in condition
+        )
+    assert missing == [], "\n".join(missing)

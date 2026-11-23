@@ -26,6 +26,8 @@
         cert_warn_days: '{{ cert_warn_days }}'
         coverage_exclude: '{{ coverage_exclude }}'
         posture_exclude_file_systems: '{{ posture_exclude_file_systems }}'
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe: null
   rules:
     - name: Poll failing for many polls - escalate
       condition: event.purefb_poll_error is defined and event.purefb_poll_error.escalate == true

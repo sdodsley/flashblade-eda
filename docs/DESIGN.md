@@ -94,6 +94,16 @@ endpoints and events of the three plugins.
 | `purefb_syslog` | the FlashBlade layouts `purity.alert: <SEVERITY> <State> - <array>: (Alert ID: <uuid>) <subject> [<code>]` and `purity.audit: ... User=, Location=, UI=, Command=, Subcommand=, Arguments=`; a JSON branch for data-audit records keyed on `pf` `fb` or `fa` (one parser for both platforms); sliding windows per (fs, user, client_ip) emitting `purefb_file_activity` on a mass delete or a rename storm (SMB audit now, NFS audit from 4.8.0) | transport, header regexes, allow-list and emitter; the parsers rewritten; the TCP line limit raised from 16 KB to 128 KB |
 | `purefb_object_audit` | boto3 against the data VIP, `list_objects_v2` with `Prefix` and `StartAfter` on the log keys, whose lexical order is time order (`<array id>/<prefix>/<yyyy>/<mm>/<dd>/<HHMMSS>.A<authority>.<sequence>.log`), re-listing the last `late_windows` windows for late authorities; one `purefb_s3_event` per NDJSON record with the derived booleans (canary, landing, evidence, honey, approval, request, denied, delete, `by_automation`), one `purefb_s3_rollup` per log object (counts by event name, access key, source address and error code; the storm and mass-delete flags), one `purefb_audit_health` per poll (log age, quota, policy coverage); suffix, canary and honey matching in the plugin because bucket audit filters only take actions and prefixes; the cursor in a file and, optionally, in the state bucket | new; shares one event filter with `ansible.eda.kafka` so the rulebooks do not change at 4.10 |
 
+Every source entry runs the `jinja_safe` event filter
+(`extensions/eda/plugins/event_filter/`), which puts a space after each
+template delimiter in every string of the event, so event text is data
+when a playbook renders it. A rule whose action hands a sender-chosen
+field (an array name, a client address, a request id, an approver) to a
+playbook's `hosts:` line or to an object name pins that field in its
+condition with an anchored `is match`: the condition compares the value
+and never renders it, and a value that does not fit starts nothing (the
+webhook and Alertmanager rulesets log it in their last rule).
+
 ## 4. Ideas by domain
 
 Each bullet names the rulebook or playbook that implements it, or marks it
@@ -314,11 +324,11 @@ the booleans and the rulebook decides.
   top key (`s3_anomaly.yml`); `mass_delete_count` deletes notify.
 - Landing manifest starts the job: a PutObject of `_SUCCESS` or
   `manifest.json` under a dataset prefix runs `landing_command` with the
-  dataset, writer and source address in its environment (`landing.yml`;
-  empty = record only); a PutObject under `evidence/` gets a legal hold
-  the array audits back (`lock_on_arrival.yml`, `put_object_legal_hold`
-  with the state key, behind `legal_hold_on_arrival`, on by default
-  because a hold only adds protection).
+  dataset, writer and source address in its environment (`landing.yml`,
+  behind `landing_enabled`; switch off or empty command = record only); a
+  PutObject under `evidence/` gets a legal hold the array audits back
+  (`lock_on_arrival.yml`, `put_object_legal_hold` with the state key,
+  behind `legal_hold_on_arrival`, off until the site turns it on).
 - Honeyfiles, an inbox folder and access storms over NFS file audit wait
   for 4.8.0.
 
@@ -403,9 +413,10 @@ the booleans and the rulebook decides.
 - Every data-path write defaults to notify: `fs_auto_grow`,
   `auto_raise_user_quota`, `client_actions_enabled`, `qos_auto_cap`,
   `canary_auto_disable_key`, `anomaly_auto_disable_key`,
-  `audit_auto_reattach`, `posture_auto_revert` (`legal_hold_on_arrival`
-  defaults to on: a hold only adds protection and the array audits it),
-  `ir_auto_contain`, `ir_auto_tarpit`, `replication_auto_resume` and
+  `audit_auto_reattach`, `posture_auto_revert`, `legal_hold_on_arrival`
+  (a hold only adds protection and the array audits it, and it still
+  waits for the site to turn it on), `landing_enabled` (the ingest
+  command), `ir_auto_contain`, `ir_auto_tarpit`, `replication_auto_resume` and
   `certs_auto_renew`; `replication_auto_create` and `telemetry_adaptive`
   are roadmap. Lock breaking
   has no switch, only approval (the webhook on `locks_port`); the

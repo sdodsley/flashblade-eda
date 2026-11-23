@@ -35,6 +35,8 @@
   sources:
     - ansible.eda.tick:
         delay: "{{ housekeeping_interval }}"
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     - name: Hourly selftest

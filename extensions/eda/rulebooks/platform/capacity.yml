@@ -23,6 +23,8 @@
         telemetry_interval: '{{ telemetry_interval }}'
         fs_quota_warn_pct: '{{ fs_quota_warn_pct }}'
         top_growers: 5
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe: null
   rules:
     - name: Poll failing for many polls - escalate
       condition: event.purefb_poll_error is defined and event.purefb_poll_error.escalate == true

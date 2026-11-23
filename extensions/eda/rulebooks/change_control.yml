@@ -18,7 +18,11 @@
 # The push is verified with GitHub's signature header: GIT_WEBHOOK_SECRET
 # comes from the environment (run.sh --env-vars), the sender signs the exact
 # body as X-Hub-Signature-256: sha256=<hex hmac>, and unsigned or wrongly
-# signed posts are rejected by the source.
+# signed posts are rejected by the source. The rule accepts only a
+# well-formed ref (refs/[A-Za-z0-9/_.-]+) and a commit id of 40 to 64 hex
+# digits; a signed body that fails those shapes runs nothing and is logged
+# by the last rule. Event text is data: the jinja_safe filter on every
+# source keeps template delimiters inert.
 
 - name: FlashBlade change control
   hosts: all
@@ -31,6 +35,8 @@
         automation_users: "{{ automation_users }}"
         automation_user_agents: "{{ automation_user_agents }}"
         destructive_subcommands: "{{ destructive_subcommands }}"
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     # A poll that fails once is a blip; one that keeps failing is an array
@@ -165,10 +171,16 @@
         hmac_algo: sha256
         hmac_header: x-hub-signature-256
         hmac_format: hex
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     - name: Push to the baseline repository - apply the baseline to every array
-      condition: event.payload.ref is defined and event.payload.after is defined
+      condition: >-
+        event.payload.ref is defined and
+        event.payload.after is defined and
+        event.payload.ref is match("^refs/[A-Za-z0-9/_.-]+$") and
+        event.payload.after is match("^[0-9a-f]{40,64}$")
       throttle:
         once_within: 1 minute
         group_by_attributes:
@@ -181,3 +193,15 @@
             git_ref: "{{ event.payload.ref }}"
             git_after: "{{ event.payload.after | default('') }}"
             alert_log: "{{ alert_log }}"
+
+    # Reached by a signed body without a well-formed ref and commit id (a
+    # ping, an event that is not a push): nothing runs, the fields and the
+    # keys present are logged.
+    - name: Malformed push event - log
+      condition: event.payload is defined
+      action:
+        debug:
+          msg: >-
+            push event ignored: ref={{ event.payload.ref | default('missing') }}
+            after={{ event.payload.after | default('missing') }}
+            keys={{ event.payload | list }}

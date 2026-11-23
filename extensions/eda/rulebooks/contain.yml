@@ -35,7 +35,15 @@
 #                "client": "<ip>", "file_system": "<optional>", "approver": "jane"}
 #               {"array": "fb-a", "action": "release_locks", "client": "<ip>",
 #                "file_system": "<optional>", "kind": "sessions" | "locks" | "both"}
-#               {"array": "fb-a", "action": "tarpit" | "lift", "file_system": "<fs>"}
+#               {"array": "fb-a", "action": "tarpit" | "lift", "file_system": "<fs>",
+#                "ops_per_sec": <tarpit only; default tarpit_ops_per_sec>}
+#             Each rule accepts only well-formed values: array and approver
+#             are plain names ([A-Za-z0-9][A-Za-z0-9_.-]*), client an IPv4 or
+#             IPv6 address, file_system a plain name ([A-Za-z0-9][A-Za-z0-9_.:-]*),
+#             kind one of sessions, locks or both, and ops_per_sec is read as
+#             an integer. A body that fails those shapes runs nothing and is
+#             logged by the last rule. Event text is data: the jinja_safe
+#             filter on every source keeps template delimiters inert.
 #             release_locks runs sdodsley.flashblade_eda.purefb_fs_session
 #             (a dead client's NFS and SMB sessions and locks); it is only
 #             ever approved, never automatic. Keep locks_port reachable only
@@ -54,6 +62,8 @@
         top_clients: 10
         top_file_systems: 10
         top_buckets: 10
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     # A poll that fails once is a blip; one that keeps failing is an array
@@ -230,6 +240,8 @@
         host: 0.0.0.0
         port: "{{ locks_port }}"
         token: "{{ APPROVAL_TOKEN }}"
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     - name: Approved quarantine or release - apply it
@@ -237,7 +249,13 @@
         event.payload.array is defined and
         event.payload.client is defined and
         event.payload.action is defined and
-        event.payload.action in ["quarantine", "release"]
+        event.payload.action in ["quarantine", "release"] and
+        event.payload.array is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and
+        event.payload.client is match("^[0-9A-Fa-f.:]+$") and
+        (event.payload.file_system is not defined or
+         event.payload.file_system is match("^[A-Za-z0-9][A-Za-z0-9_.:-]*$")) and
+        (event.payload.approver is not defined or
+         event.payload.approver is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$"))
       action:
         run_playbook:
           name: playbooks/quarantine_client.yml
@@ -257,7 +275,15 @@
         event.payload.array is defined and
         event.payload.client is defined and
         event.payload.action is defined and
-        event.payload.action == "release_locks"
+        event.payload.action == "release_locks" and
+        event.payload.array is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and
+        event.payload.client is match("^[0-9A-Fa-f.:]+$") and
+        (event.payload.file_system is not defined or
+         event.payload.file_system is match("^[A-Za-z0-9][A-Za-z0-9_.:-]*$")) and
+        (event.payload.kind is not defined or
+         event.payload.kind in ["sessions", "locks", "both"]) and
+        (event.payload.approver is not defined or
+         event.payload.approver is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$"))
       action:
         run_playbook:
           name: playbooks/release_locks.yml
@@ -274,7 +300,11 @@
         event.payload.array is defined and
         event.payload.file_system is defined and
         event.payload.action is defined and
-        event.payload.action == "tarpit"
+        event.payload.action == "tarpit" and
+        event.payload.array is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and
+        event.payload.file_system is match("^[A-Za-z0-9][A-Za-z0-9_.:-]*$") and
+        (event.payload.approver is not defined or
+         event.payload.approver is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$"))
       action:
         run_playbook:
           name: playbooks/tarpit.yml
@@ -282,7 +312,7 @@
             target_array: "{{ event.payload.array }}"
             file_system: "{{ event.payload.file_system }}"
             action: apply
-            tarpit_ops_per_sec: "{{ event.payload.ops_per_sec | default(tarpit_ops_per_sec) }}"
+            tarpit_ops_per_sec: "{{ event.payload.ops_per_sec | default(tarpit_ops_per_sec) | int }}"
             reason: "tarpit approved by {{ event.payload.approver | default('unknown') }}"
             fb_api_version: "{{ fb_api_version }}"
             alert_log: "{{ alert_log }}"
@@ -292,7 +322,11 @@
         event.payload.array is defined and
         event.payload.file_system is defined and
         event.payload.action is defined and
-        event.payload.action == "lift"
+        event.payload.action == "lift" and
+        event.payload.array is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and
+        event.payload.file_system is match("^[A-Za-z0-9][A-Za-z0-9_.:-]*$") and
+        (event.payload.approver is not defined or
+         event.payload.approver is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$"))
       action:
         run_playbook:
           name: playbooks/tarpit.yml
@@ -305,6 +339,9 @@
             fb_api_version: "{{ fb_api_version }}"
             alert_log: "{{ alert_log }}"
 
+    # Reached by a body with no known action and by one whose action is
+    # known but whose array, client, file_system, kind or approver is not
+    # well-formed: nothing runs, the fields are logged.
     - name: Malformed containment request - log
       condition: event.payload is defined
       action:
@@ -313,3 +350,4 @@
             containment request ignored: array={{ event.payload.array | default('missing') }}
             action={{ event.payload.action | default('missing') }} (quarantine, release, release_locks, tarpit or lift)
             client={{ event.payload.client | default('missing') }} file_system={{ event.payload.file_system | default('missing') }}
+            kind={{ event.payload.kind | default('missing') }} approver={{ event.payload.approver | default('missing') }}

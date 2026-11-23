@@ -4,6 +4,7 @@
 #
 # The repository root is the Ansible collection sdodsley.flashblade_eda: the
 # three event source plugins (extensions/eda/plugins/event_source), the
+# jinja_safe event filter (extensions/eda/plugins/event_filter), the
 # eleven modules (plugins/modules: the object-audit trio and the
 # telemetry, maintenance, QoS, session, legal hold, alert flag and
 # eradication modules), the rulebooks (extensions/eda/rulebooks)

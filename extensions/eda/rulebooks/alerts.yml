@@ -26,6 +26,8 @@
         arrays: "{{ purefb_arrays }}"
         signals: [alerts]
         alerts_interval: "{{ alerts_interval }}"
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     # A poll that fails once is a blip; one that keeps failing is an array

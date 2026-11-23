@@ -24,6 +24,11 @@
 # the rest, so the last rule only sees events when a site widens that list.
 # Data-audit records have no program and always pass. The window length
 # and thresholds are the plugin defaults (60 s, 100 deletes, 50 renames).
+#
+# Event text is data: the jinja_safe filter on the source keeps template
+# delimiters in a line inert wherever the playbooks carry its fields, and
+# every rule that starts a playbook accepts only a well-formed array name;
+# a line whose array name does not match is not acted on.
 
 - name: FlashBlade syslog
   hosts: all
@@ -36,6 +41,8 @@
         programs: "{{ syslog_programs }}"
         hostnames: "{{ syslog_hostnames }}"
         automation_users: "{{ automation_users }}"
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     # The array repeats the alert's severity word on every state change, so a
@@ -50,7 +57,8 @@
     - name: Alert via syslog - notify
       condition: >-
         event.purefb_syslog_alert.severity in ["warning", "critical"] and
-        event.purefb_syslog_alert.state not in ["closing", "closed", "waiting to downgrade"]
+        event.purefb_syslog_alert.state not in ["closing", "closed", "waiting to downgrade"] and
+        event.purefb_syslog_alert.array is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$")
       throttle:
         once_within: 24 hours
         group_by_attributes:
@@ -77,7 +85,9 @@
             alert_log: "{{ alert_log }}"
 
     - name: Alert closed via syslog - notify
-      condition: event.purefb_syslog_alert.state == "closed"
+      condition: >-
+        event.purefb_syslog_alert.state == "closed" and
+        event.purefb_syslog_alert.array is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$")
       throttle:
         once_within: 10 minutes
         group_by_attributes:
@@ -111,7 +121,8 @@
       condition: >-
         event.purefb_syslog_audit.by_automation == false and
         event.purefb_syslog_audit.user is defined and
-        event.purefb_syslog_audit.command is defined
+        event.purefb_syslog_audit.command is defined and
+        event.purefb_syslog_audit.array is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$")
       action:
         run_playbook:
           name: playbooks/notify.yml
@@ -133,8 +144,9 @@
     # is only a guard against a storm that spans several windows.
     - name: File activity over threshold - notify
       condition: >-
-        event.purefb_file_activity.mass_delete == true or
-        event.purefb_file_activity.rename_storm == true
+        (event.purefb_file_activity.mass_delete == true or
+         event.purefb_file_activity.rename_storm == true) and
+        event.purefb_file_activity.array is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$")
       throttle:
         once_within: 5 minutes
         group_by_attributes:

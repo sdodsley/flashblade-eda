@@ -39,6 +39,8 @@
         replication_lag_warn_s: "{{ replication_lag_warn_s }}"
         replication_ok_statuses: "{{ replication_ok_statuses }}"
         replication_escalate_polls: "{{ replication_escalate_polls }}"
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     # A poll that fails once is a blip; one that keeps failing is an array

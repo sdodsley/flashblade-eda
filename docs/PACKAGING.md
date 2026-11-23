@@ -13,6 +13,7 @@ EDA controller need to resolve the event sources and run the playbooks:
 | Path | Content |
 | --- | --- |
 | `extensions/eda/plugins/event_source/` | `purefb_events.py`, `purefb_object_audit.py` and `purefb_syslog.py` |
+| `extensions/eda/plugins/event_filter/` | `jinja_safe.py`, the event filter every source runs |
 | `extensions/eda/rulebooks/` | the rulebooks, which name their sources by FQCN |
 | `plugins/modules/` | `purefb_log_target.py`, `purefb_audit_policy.py`, `purefb_bucket_audit_filter.py`, `purefb_telemetry_target.py`, `purefb_telemetry_policy.py`, `purefb_maintenance.py`, `purefb_qos.py`, `purefb_fs_session.py`, `purefb_legal_hold.py`, `purefb_alert_flag.py` and `purefb_eradication.py` |
 | `playbooks/` | the playbooks, `runbooks/` and `tasks/` |

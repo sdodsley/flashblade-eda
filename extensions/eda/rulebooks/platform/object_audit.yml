@@ -37,6 +37,8 @@
         stale_rotations: '{{ stale_rotations }}'
         coverage_exclude: '{{ coverage_exclude }}'
         cursor_dir: '{{ object_audit_cursor_dir }}'
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe: null
   rules:
     - name: Poll failing for many polls - escalate
       condition: event.purefb_poll_error is defined and event.purefb_poll_error.escalate == true
@@ -136,7 +138,7 @@
               detail: from {{ event.purefb_s3_event.source_ip }} at {{ event.purefb_s3_event.event_time }}, error={{ event.purefb_s3_event.error_code }}; log object {{ event.purefb_s3_event.log_object }}
               target_array: '{{ event.purefb_s3_event.array }}'
     - name: Landing marker arrived - start the ingest
-      condition: event.purefb_s3_event.landing is defined and event.purefb_s3_event.landing == true
+      condition: event.purefb_s3_event.landing is defined and event.purefb_s3_event.landing == true and vars.landing_enabled == true
       throttle:
         once_within: 5 minutes
         group_by_attributes:
@@ -157,6 +159,11 @@
               source_ip: '{{ event.purefb_s3_event.source_ip }}'
               event_time: '{{ event.purefb_s3_event.event_time }}'
               landing_command: '{{ landing_command }}'
+    - name: Landing marker arrived - log
+      condition: event.purefb_s3_event.landing is defined and event.purefb_s3_event.landing == true and vars.landing_enabled == false
+      action:
+        debug:
+          msg: landing marker {{ event.purefb_s3_event.bucket }}/{{ event.purefb_s3_event.key }} arrived on {{ event.purefb_s3_event.array }}; landing_enabled is false, nothing runs
     - name: Evidence object arrived - legal hold
       condition: event.purefb_s3_event.evidence is defined and event.purefb_s3_event.evidence == true and event.purefb_s3_event.by_automation == false and vars.legal_hold_on_arrival == true
       action:
@@ -352,6 +359,8 @@
         audits_interval: '{{ audits_interval }}'
         automation_users: '{{ automation_users }}'
         automation_user_agents: '{{ automation_user_agents }}'
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe: null
   rules:
     - name: Poll failing for many polls - escalate
       condition: event.purefb_poll_error is defined and event.purefb_poll_error.escalate == true

@@ -34,9 +34,11 @@ matters.
   `client_actions_enabled`, `qos_auto_cap`, `canary_auto_disable_key`,
   `anomaly_auto_disable_key`, `audit_auto_reattach`, `posture_auto_revert`,
   `ir_auto_contain`, `ir_auto_tarpit`, `replication_auto_resume`,
-  `certs_auto_renew`); the NTP and DNS reapply, the reconcile and the
-  identify LED have none, and lock breaking has only the approval webhook
-  on `locks_port`. The reclaim of pending-eradication objects sits behind
+  `certs_auto_renew`); `landing_enabled` and `legal_hold_on_arrival` gate
+  the landing ingest and the legal hold the same way and are off in the
+  example file; the NTP and DNS reapply, the reconcile and the identify
+  LED have none, and lock breaking has only the approval webhook on
+  `locks_port`. The reclaim of pending-eradication objects sits behind
   an approval on every path. Start with the switches off and
   `orchestrator_enabled` off, and read the rules you enable.
 - **The approvals, maintenance and containment webhooks (`approval_port`,
@@ -48,6 +50,10 @@ matters.
   `{{ APPROVAL_TOKEN }}` from the environment, never from a vars file. A
   maintenance window silences every alert the array does not exempt, so
   the token that opens one is a token that silences the array.
+  `ansible.eda.webhook` serves TLS when its `certfile` and `keyfile`
+  options name a certificate and key, and each webhook should carry its
+  own token, one secret per port, so that a token which approves a reclaim
+  cannot open a window or break a lock.
 - **The git-push webhook needs an HMAC signature.** The change control
   ruleset verifies GitHub's `X-Hub-Signature-256: sha256=<hex>` over the
   exact request body with `GIT_WEBHOOK_SECRET` (same env file, same
@@ -121,6 +127,15 @@ matters.
   Data-audit records arrive from every blade over the management VIP; a
   syslog server with the `data-audit` service is the audit pipeline, and
   alert 1139 is the array saying it dropped some of it.
+- **Event text is data.** Every source in every rulebook runs the
+  `sdodsley.flashblade_eda.jinja_safe` event filter, which keeps template
+  delimiters in an event's strings inert, so a playbook renders event text
+  (an alert summary, a syslog line, an object key, a webhook body, an LLDP
+  neighbour name) as text. The webhook, Alertmanager and syslog rules
+  accept only well-formed array names, addresses and ids in the fields
+  they hand to a playbook; a webhook request or an alert that does not
+  fit is logged by the ruleset's last rule, and a syslog line whose array
+  name does not fit starts nothing.
 - **The raw REST tasks log in with the API token.** `tasks/fb_rest.yml`
   exchanges the inventory token for a session at `POST /api/login` for the
   endpoints the collection has no module for (QoS policies, maintenance

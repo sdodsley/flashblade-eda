@@ -23,13 +23,18 @@
         payload: "{{ fixture_events }}"
         loop_count: 1
         delay: 1
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe:
 
   rules:
     - name: Telemetry silent - check the pipeline
       condition: >-
         event.alert.status == "firing" and
         event.alert.labels.alertname == "FlashBladeTelemetrySilent" and
-        event.alert.labels.array_name is defined
+        event.alert.labels.array_name is defined and
+        event.alert.labels.array_name is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and
+        (event.alert.labels.policy is not defined or event.alert.labels.policy is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$")) and
+        (event.alert.startsAt is not defined or event.alert.startsAt is match("^[0-9TZ:.+-]+$"))
       throttle:
         once_within: 30 minutes
         group_by_attributes:
@@ -48,10 +53,16 @@
             fb_api_version: "{{ fb_api_version }}"
             alert_log: "{{ alert_log }}"
 
+    # absent_over_time() carries no labels from the series that is missing,
+    # so a silence rule without an explicit array_name cannot name a host
+    # for the check; it is paged with the labels it has
+
     - name: Capacity threshold - approval request
       condition: >-
         event.alert.status == "firing" and
-        event.alert.labels.alertname == "FlashBladeCapacityHigh"
+        event.alert.labels.alertname == "FlashBladeCapacityHigh" and
+        event.alert.labels.array_name is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and
+        (event.alert.annotations.value is not defined or event.alert.annotations.value is match("^[0-9.]+$"))
       throttle:
         once_within: 24 hours
         group_by_attributes:
@@ -72,7 +83,9 @@
             alert_log: "{{ alert_log }}"
 
     - name: Resolved - log
-      condition: event.alert.status == "resolved"
+      condition: >-
+        event.alert.status == "resolved" and
+        (event.alert.labels.array_name is not defined or event.alert.labels.array_name is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$"))
       action:
         run_playbook:
           name: playbooks/notify.yml

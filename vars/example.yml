@@ -193,7 +193,7 @@ alert_flag_handled: true
 # token:
 #   curl -X POST http://<eda host>:<approval_port>/endpoint \
 #        -H "Authorization: Bearer $APPROVAL_TOKEN" -H 'Content-Type: application/json' \
-#        -d '{"request_id": "<id>", "approve": true, "approver": "jane", "action": "eradicate_pending"}'
+#        -d '{"request_id": "<array>-<digits>", "approve": true, "approver": "jane", "action": "eradicate_pending"}'
 request_dir: /var/lib/flashblade-eda/requests
 approval_port: 5001
 # Orchestrator handoff. When true, the capacity-at-risk rule posts the event
@@ -235,12 +235,14 @@ failed_login_count: 3             # repeated non-login session events (failed at
 # purefb_syslog listener (point the arrays' syslog target here, for example
 # tcp://<this host>:5140; 514 needs root). The listener has no
 # authentication: bind it to an interface the arrays reach and list the
-# arrays' addresses in syslog_allowed_sources. An array forwards its whole
+# arrays' addresses in syslog_allowed_sources; the empty list is for a test
+# run. The rules accept only well-formed array names from the lines they
+# read and log a line that names anything else. An array forwards its whole
 # management log and, with the data-audit service, every file-access audit
 # record, so the listener keeps the Purity programs and drops the rest.
 syslog_host: 0.0.0.0
 syslog_port: 5140
-syslog_allowed_sources: []       # [] = accept any sender; otherwise IPv4/IPv6 addresses or CIDR prefixes, e.g. ["192.0.2.0/24", "2001:db8::10"]
+syslog_allowed_sources: []       # [] = accept any sender (test runs); list the arrays' IPv4/IPv6 addresses or CIDR prefixes, e.g. ["192.0.2.0/24", "2001:db8::10"]
 syslog_programs: [purity.alert, purity.audit, purity.test]   # programs emitted as events; [] or "all" passes every program through as kind other
 syslog_hostnames: {}             # array name or syslog hostname -> inventory array name, when they differ
 # ansible.eda.alertmanager listener for Prometheus rules fed by the array's
@@ -338,11 +340,13 @@ canary_prefixes:
 canary_readers: []                # access key ids allowed to read canaries (a backup or indexer identity)
 canary_auto_disable_key: false
 # Landing markers: a PutObject of one of landing_markers under a landing
-# prefix means the dataset is complete. landing_command is a local command
-# run with LANDING_ARRAY, LANDING_BUCKET, LANDING_KEY, LANDING_DATASET,
-# LANDING_USER, LANDING_ACCESS_KEY_ID and LANDING_SOURCE_IP in its
-# environment (no shell: write "sh -c '...'" for a pipeline); "" records
-# the arrival and runs nothing.
+# prefix means the dataset is complete. The ingest starts only when
+# landing_enabled is true; otherwise the arrival is logged. landing_command
+# is a local command run with LANDING_ARRAY, LANDING_BUCKET, LANDING_KEY,
+# LANDING_DATASET, LANDING_USER, LANDING_ACCESS_KEY_ID and LANDING_SOURCE_IP
+# in its environment (no shell: write "sh -c '...'" for a pipeline); ""
+# records the arrival and runs nothing.
+landing_enabled: false
 landing_prefixes:
   - landing/
 landing_markers:
@@ -350,11 +354,11 @@ landing_markers:
   - manifest.json
 landing_command: ""
 # Evidence: a PutObject under these prefixes gets a legal hold with the
-# state key when legal_hold_on_arrival is true (the bucket needs Object Lock
-# enabled).
+# state key only when the site turns legal_hold_on_arrival on (the bucket
+# needs Object Lock enabled).
 evidence_prefixes:
   - evidence/
-legal_hold_on_arrival: true
+legal_hold_on_arrival: false
 # Approvals as objects: a PutObject of approvals/<request_id>.json into the
 # log bucket ({"request_id": "<id>", "approve": true, "approver": "jane",
 # "action": "grow_fs"}) runs the action the request proposed

@@ -22,9 +22,11 @@
         data_alerts_path: alerts
         data_host_path: ''
         data_path_separator: .
+      filters:
+        - sdodsley.flashblade_eda.jinja_safe: null
   rules:
     - name: Telemetry silent - check the pipeline
-      condition: event.alert.status == "firing" and event.alert.labels.alertname == "FlashBladeTelemetrySilent" and event.alert.labels.array_name is defined
+      condition: event.alert.status == "firing" and event.alert.labels.alertname == "FlashBladeTelemetrySilent" and event.alert.labels.array_name is defined and event.alert.labels.array_name is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and (event.alert.labels.policy is not defined or event.alert.labels.policy is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$")) and (event.alert.startsAt is not defined or event.alert.startsAt is match("^[0-9TZ:.+-]+$"))
       throttle:
         once_within: 30 minutes
         group_by_attributes:
@@ -60,7 +62,7 @@
               detail: policy={{ event.alert.labels.policy | default('') }} labels={{ event.alert.labels }}
               target_array: ''
     - name: Health not ok - notify
-      condition: event.alert.status == "firing" and event.alert.labels.alertname == "FlashBladeHealthNotOk"
+      condition: event.alert.status == "firing" and event.alert.labels.alertname == "FlashBladeHealthNotOk" and event.alert.labels.array_name is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and (event.alert.labels.severity is not defined or event.alert.labels.severity in ["info", "warning", "critical"])
       throttle:
         once_within: 1 hour
         group_by_attributes:
@@ -76,7 +78,7 @@
               detail: labels={{ event.alert.labels }} since {{ event.alert.startsAt | default('') }}
               target_array: '{{ telemetry_array_names[event.alert.labels.array_name | default('''')] | default(event.alert.labels.array_name | default('''')) }}'
     - name: Capacity threshold - approval request
-      condition: event.alert.status == "firing" and event.alert.labels.alertname == "FlashBladeCapacityHigh"
+      condition: event.alert.status == "firing" and event.alert.labels.alertname == "FlashBladeCapacityHigh" and event.alert.labels.array_name is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and (event.alert.annotations.value is not defined or event.alert.annotations.value is match("^[0-9.]+$"))
       throttle:
         once_within: 24 hours
         group_by_attributes:
@@ -94,7 +96,7 @@
               s3_requests_enabled: '{{ s3_requests_enabled }}'
               object_store: '{{ object_store }}'
     - name: Latency, connector errors or stalled replication - notify
-      condition: event.alert.status == "firing" and event.alert.labels.alertname in ["FlashBladeLatencyHigh", "FlashBladeConnectorErrors", "FlashBladeReplicationStalled"]
+      condition: event.alert.status == "firing" and event.alert.labels.alertname in ["FlashBladeLatencyHigh", "FlashBladeConnectorErrors", "FlashBladeReplicationStalled"] and event.alert.labels.array_name is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and (event.alert.labels.severity is not defined or event.alert.labels.severity in ["info", "warning", "critical"])
       throttle:
         once_within: 30 minutes
         group_by_attributes:
@@ -111,7 +113,7 @@
               detail: value={{ event.alert.annotations.value | default('') }} labels={{ event.alert.labels }}
               target_array: '{{ telemetry_array_names[event.alert.labels.array_name | default('''')] | default(event.alert.labels.array_name | default('''')) }}'
     - name: Any other firing FlashBlade alert - notify
-      condition: event.alert.status == "firing" and event.alert.labels.alertname is defined and event.alert.labels.alertname not in ["FlashBladeTelemetrySilent", "FlashBladeHealthNotOk", "FlashBladeCapacityHigh", "FlashBladeLatencyHigh", "FlashBladeConnectorErrors", "FlashBladeReplicationStalled"]
+      condition: event.alert.status == "firing" and event.alert.labels.alertname is defined and event.alert.labels.alertname not in ["FlashBladeTelemetrySilent", "FlashBladeHealthNotOk", "FlashBladeCapacityHigh", "FlashBladeLatencyHigh", "FlashBladeConnectorErrors", "FlashBladeReplicationStalled"] and event.alert.labels.array_name is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and (event.alert.labels.severity is not defined or event.alert.labels.severity in ["info", "warning", "critical"])
       throttle:
         once_within: 30 minutes
         group_by_attributes:
@@ -128,7 +130,7 @@
               detail: domain={{ event.alert.labels.domain | default('') }} labels={{ event.alert.labels }}
               target_array: '{{ telemetry_array_names[event.alert.labels.array_name | default('''')] | default(event.alert.labels.array_name | default('''')) }}'
     - name: Resolved - log
-      condition: event.alert.status == "resolved"
+      condition: event.alert.status == "resolved" and (event.alert.labels.array_name is not defined or event.alert.labels.array_name is match("^[A-Za-z0-9][A-Za-z0-9_.-]*$"))
       action:
         run_job_template:
           name: FlashBlade - notify
@@ -139,3 +141,8 @@
               subject: 'resolved: {{ event.alert.labels.alertname | default('''') }} on {{ event.alert.labels.array_name | default('''') }}'
               detail: '{{ event.alert.annotations.summary | default('''') }}'
               target_array: '{{ telemetry_array_names[event.alert.labels.array_name | default('''')] | default(event.alert.labels.array_name | default('''')) }}'
+    - name: Alert that fits no rule - log
+      condition: event.alert is defined
+      action:
+        debug:
+          msg: alert {{ event.alert.labels.alertname | default('') }} status {{ event.alert.status | default('') }} on {{ event.alert.labels.array_name | default('') }} fits no rule; labels={{ event.alert.labels | default({}) }}
