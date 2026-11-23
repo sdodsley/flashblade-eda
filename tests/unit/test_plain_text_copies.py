@@ -1,6 +1,6 @@
 # Copyright 2026 Everpure, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The plain-text helpers (DELIMITER_BRACE, HEADER, HEADER_SAFE, clean_text
+"""The plain-text helpers (DELIMITER_BRACE, HEADER_HASH, TRAILING, clean_text
 and clean) are defined in the jinja_safe event filter and copied into each
 of the three event sources, which ansible-rulebook loads from their own
 files; the four copies are one text, and every event a source queues goes
@@ -30,7 +30,7 @@ def _helpers(path):
 
 def test_the_four_copies_of_the_plain_text_helpers_are_identical():
     reference = _helpers(FILTER)
-    for name in ("HEADER = ", "HEADER_SAFE = ", "def clean_text(", "def clean("):
+    for name in ("HEADER_HASH = ", "TRAILING = ", "def clean_text(", "def clean("):
         assert name in reference, name
     for path in SOURCES:
         assert _helpers(path) == reference, path.name

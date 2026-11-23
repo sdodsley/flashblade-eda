@@ -1897,12 +1897,12 @@ def test_clean_breaks_every_delimiter_and_keeps_other_types(object_audit):
         "nested": {"deep": ["{{ e", True, None]},
     }
     assert object_audit.clean(event) == {
-        "{ { key": ["{ % a", "{ # b", 7, {"#jinja2 : c": "{ { { d"}],
+        "{ { key": ["{ % a", "{ # b", 7, {"# jinja2: c": "{ { { d"}],
         "count": 3,
         "nested": {"deep": ["{ { e", True, None]},
     }
     text = "a {{ b {% c {# d #jinja2: e"
-    assert object_audit.clean_text(text) == "a { { b { % c { # d #jinja2 : e"
+    assert object_audit.clean_text(text) == "a { { b { % c { # d # jinja2: e"
     assert object_audit.clean_text(PREFIX) == PREFIX
 
 
@@ -1937,7 +1937,7 @@ def test_poll_loop_queues_every_event_as_plain_text(
     assert kinds(got) == ["purefb_s3_event", "purefb_s3_rollup", "purefb_audit_health"]
     ev = got[0]["purefb_s3_event"]
     assert ev["bucket"] == "{ { bucket" and ev["key"] == "{ % dir %}/{ # file #}.txt"
-    assert ev["user"] == "#jinja2 : user" and ev["access_key_id"] == "{ { { key"
+    assert ev["user"] == "# jinja2: user" and ev["access_key_id"] == "{ { { key"
     assert ev["event_id"] == 11 and ev["ok"] is True and ev["read_only"] is True
     rollup = got[1]["purefb_s3_rollup"]
     assert rollup["buckets"] == ["{ { bucket"]

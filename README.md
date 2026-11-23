@@ -336,7 +336,7 @@ with `tcp://<eda host>:5140` and the services it should carry.
 Every source entry in every rulebook, the stock `ansible.eda` sources
 included, runs the `jinja_safe` event filter
 (`extensions/eda/plugins/event_filter/jinja_safe.py`). It puts a space
-after each template delimiter (`{{`, `{%`, `{#`, and inside `#jinja2:`) in
+after each template delimiter (`{{`, `{%`, `{#`, and after the `#` of `#jinja2`) in
 every string of the event, keys and nested values included, so event text
 is data when a playbook renders it: an alert summary, a syslog line, an
 object key, a webhook body or an LLDP neighbour name is reported as text

@@ -914,3 +914,31 @@ def test_no_two_expressions_touch_in_an_action_string(path):
         if "}}{{" in text
     ]
     assert touching == [], "\n".join(touching)
+
+
+@pytest.mark.parametrize("path", RULEBOOKS + REPLAYS, ids=lambda p: p.name)
+def test_pprint_wraps_the_whole_expression(path):
+    """An action string that opens with an event field parses to one
+    output node whose only child is the pprint filter: the whole expression
+    is handed over, not its last operand."""
+    jinja2 = pytest.importorskip("jinja2")
+    from jinja2 import nodes
+
+    env = jinja2.Environment()
+    for rule, flat in _playbook_action_strings(path):
+        if not flat.startswith("{{") or not EVENT_WORD.search(flat):
+            continue
+        tree = env.parse(flat)
+        assert len(tree.body) == 1 and isinstance(tree.body[0], nodes.Output), (
+            path.name,
+            rule,
+            flat[:80],
+        )
+        children = tree.body[0].nodes
+        assert len(children) == 1, (path.name, rule, flat[:80])
+        node = children[0]
+        assert isinstance(node, nodes.Filter) and node.name == "pprint", (
+            path.name,
+            rule,
+            flat[:80],
+        )

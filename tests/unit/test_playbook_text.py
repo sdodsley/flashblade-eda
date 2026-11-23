@@ -193,7 +193,7 @@ def _flat(value):
 def _is_one_string_expression(text):
     return (
         text.startswith("{{")
-        and text.endswith("| string }}")
+        and (text.endswith("| string }}") or text.endswith("| string) }}"))
         and text.count("{{") == 1
         and "{%" not in text
     )

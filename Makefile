@@ -1,6 +1,6 @@
 # Developer entry points. `make check` is what CI runs.
 PY ?= python3
-PLUGINS = extensions/eda/plugins/event_source plugins/modules
+PLUGINS = extensions/eda/plugins/event_source plugins/modules extensions/eda/plugins/event_filter
 # the developer tools under tools/ (the Prometheus rule generator, the
 # platform rulebook generator, the activation audit, the orchestrator
 # linter and sync) are linted, not shipped

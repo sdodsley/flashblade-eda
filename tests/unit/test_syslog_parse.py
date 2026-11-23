@@ -803,12 +803,12 @@ def test_clean_breaks_every_delimiter_and_keeps_other_types(syslog):
         "nested": {"deep": ["{{ e", True, None]},
     }
     assert syslog.clean(event) == {
-        "{ { key": ["{ % a", "{ # b", 7, {"#jinja2 : c": "{ { { d"}],
+        "{ { key": ["{ % a", "{ # b", 7, {"# jinja2: c": "{ { { d"}],
         "count": 3,
         "nested": {"deep": ["{ { e", True, None]},
     }
     text = "a {{ b {% c {# d #jinja2: e"
-    assert syslog.clean_text(text) == "a { { b { % c { # d #jinja2 : e"
+    assert syslog.clean_text(text) == "a { { b { % c { # d # jinja2: e"
     assert syslog.clean_text(AUDIT) == AUDIT
 
 
@@ -834,8 +834,8 @@ def test_forwarder_queues_every_event_as_plain_text(syslog):
         return first["purefb_syslog_audit"], second["purefb_file_activity"]
 
     audit, act = asyncio.run(go())
-    assert audit["arguments"] == "{ { x }} { % y %} { # z #} #jinja2 : w"
-    assert audit["raw"].endswith("Arguments={ { x }} { % y %} { # z #} #jinja2 : w")
+    assert audit["arguments"] == "{ { x }} { % y %} { # z #} # jinja2: w"
+    assert audit["raw"].endswith("Arguments={ { x }} { % y %} { # z #} # jinja2: w")
     assert audit["user"] == "pureuser" and audit["audit_id"] == "6683"
     assert audit["facility"] is None and audit["by_automation"] is False
     for mark in ("{{", "{%", "{#", "#jinja2:"):

@@ -18,7 +18,7 @@ MARKS = [
     ("{{", "{ {"),
     ("{%", "{ %"),
     ("{#", "{ #"),
-    ("#jinja2:", "#jinja2 :"),
+    ("#jinja2:", "# jinja2:"),
 ]
 
 # strings with no delimiter: FlashBlade names, addresses, prose and the
@@ -52,7 +52,9 @@ def jinja_safe():
 @pytest.mark.parametrize("mark, safe", MARKS, ids=[m for m, _ in MARKS])
 def test_each_delimiter_is_broken_in_a_plain_string(jinja_safe, mark, safe):
     assert jinja_safe.main({"text": f"{mark} x"}) == {"text": f"{safe} x"}
-    assert jinja_safe.main({"text": mark}) == {"text": safe}
+    # a brace or hash that ends the string gets a space of its own as well
+    bare = safe + (" " if safe[-1] in "{#" else "")
+    assert jinja_safe.main({"text": mark}) == {"text": bare}
 
 
 def test_a_delimiter_inside_longer_text_changes_only_the_delimiter(jinja_safe):
@@ -66,7 +68,7 @@ def test_a_delimiter_inside_longer_text_changes_only_the_delimiter(jinja_safe):
 def test_the_jinja2_header_at_the_start_of_a_string_is_broken(jinja_safe):
     header = "#jinja2: variable_start_string='[[', variable_end_string=']]'"
     out = jinja_safe.main({"text": header + "\n[[ x ]]"})["text"]
-    assert out.startswith("#jinja2 : variable_start_string")
+    assert out.startswith("# jinja2: variable_start_string")
     assert "#jinja2:" not in out
     assert out.endswith("\n[[ x ]]")
 
@@ -79,7 +81,7 @@ def test_nested_dicts_lists_and_tuples_are_walked_keys_included(jinja_safe):
     out = jinja_safe.main(event)
     assert out == {
         "{ { key": [{"inner": ("{ % a", "{ # b", 3)}, "{ { c"],
-        "plain": {"deep": {"{ # k": ["#jinja2 : d", None]}},
+        "plain": {"deep": {"{ # k": ["# jinja2: d", None]}},
     }
     assert isinstance(out["{ { key"], list)
     assert isinstance(out["{ { key"][0]["inner"], tuple)
@@ -137,3 +139,42 @@ def test_main_accepts_and_ignores_extra_keyword_arguments(jinja_safe):
 
 def test_main_returns_a_dict_for_an_empty_event(jinja_safe):
     assert jinja_safe.main({}) == {}
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("#jinja2", "# jinja2"),
+        ("x #jinja2", "x # jinja2"),
+        ("ends with {", "ends with { "),
+        ("ends with #", "ends with # "),
+        ("{", "{ "),
+        ("#", "# "),
+        ("ends with %", "ends with %"),
+    ],
+)
+def test_the_header_without_its_colon_and_a_trailing_brace_or_hash_are_broken(
+    jinja_safe, text, expected
+):
+    assert jinja_safe.clean_text(text) == expected
+    assert jinja_safe.clean_text(expected) == expected
+
+
+@pytest.mark.parametrize(
+    "left, right",
+    [
+        ("{", "{ 7 * 7 }}"),
+        ("{", "% x %}"),
+        ("{", "# x #}"),
+        ("#jinja2", ":variable_start_string:'[%'"),
+        ("#", "jinja2:x"),
+        ("a {", "{ b"),
+    ],
+)
+def test_a_join_of_two_cleaned_strings_forms_no_delimiter(jinja_safe, left, right):
+    """Two cleaned strings put together, with nothing or a colon between
+    them, never form a template delimiter or the override header."""
+    for glue in ("", ":", ": "):
+        joined = jinja_safe.clean_text(left) + glue + jinja_safe.clean_text(right)
+        for mark in ("{{", "{%", "{#", "#jinja2"):
+            assert mark not in joined, (left, glue, right, joined)

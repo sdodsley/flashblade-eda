@@ -2895,13 +2895,13 @@ def test_clean_breaks_every_delimiter_and_keeps_other_types(events):
         "nested": {"deep": ("{{ e", True, None)},
     }
     assert events.clean(event) == {
-        "{ { key": ["{ % a", "{ # b", 7, {"#jinja2 : c": "{ { { d"}],
+        "{ { key": ["{ % a", "{ # b", 7, {"# jinja2: c": "{ { { d"}],
         "count": 3,
         "nested": {"deep": ("{ { e", True, None)},
     }
     assert events.clean(events.clean(event)) == events.clean(event)
     text = "a {{ b {% c {# d #jinja2: e"
-    assert events.clean_text(text) == "a { { b { % c { # d #jinja2 : e"
+    assert events.clean_text(text) == "a { { b { % c { # d # jinja2: e"
     assert events.clean_text("fb-a: fs-01 is 91% full") == "fb-a: fs-01 is 91% full"
 
 
@@ -2918,7 +2918,7 @@ def test_signal_loop_queues_every_event_as_plain_text(events):
     arr = LockedArray(FakeClient(alerts=[marked]), "fb-a")
     got = _run_loop(events, "alerts", [arr], {}, lambda got: len(got) >= 1)
     row = got[0]["purefb_alert"]
-    assert row["summary"] == "{ { summary }} on { % raw %} #jinja2 : x"
+    assert row["summary"] == "{ { summary }} on { % raw %} # jinja2: x"
     assert row["component_name"] == "{ # CH1.FB1 #}"
     assert row["variables"] == {"{ { blade": "{ { { CH1.FB1", "count": 2}
     assert row["code"] == 1000 and row["flagged"] is False

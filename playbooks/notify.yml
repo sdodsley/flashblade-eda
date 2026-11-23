@@ -33,13 +33,14 @@
         alert_record:
           time: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
           kind: notify
-          severity: "{{ severity | default('warning') | string }}"
-          array: "{{ target_array | default('') | string }}"
-          subject: "{{ subject | string }}"
+          severity: "{{ ('warning' if (severity | default(none)) is none else severity) | string }}"
+          array: "{{ ('' if (target_array | default(none)) is none else target_array) | string }}"
+          subject: "{{ ('' if (subject | default(none)) is none else subject) | string }}"
           detail: >-
-            {{ (detail | default('')) if (detail | default('')) is not string
-            else detail | default('') | trim | string }}
-          alert_id: "{{ ((alert_id | default('')) or omit) | string }}"
+            {{ ('' if (detail | default(none)) is none else detail) if (detail | default('')) is not string
+            else detail | trim | string }}
+          alert_id: >-
+            {{ omit if ((alert_id | default('', true)) | string | length == 0) else (alert_id | string) }}
           alert_code: "{{ (alert_code | default('')) or omit }}"
 
     - name: Append to the alert log

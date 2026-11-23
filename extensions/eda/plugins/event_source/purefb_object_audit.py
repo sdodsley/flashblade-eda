@@ -352,22 +352,27 @@ logger = logging.getLogger(__name__)
 # ansible-rulebook loads each plugin from its own file; the copy is kept
 # identical to the filter's and a unit test compares the four.
 
-# a brace that starts a delimiter: followed by another brace, % or #
 DELIMITER_BRACE = re.compile(r"\{(?=[{%#])")
-# the header that would change the delimiters
-HEADER = "#jinja2:"
-HEADER_SAFE = "#jinja2 :"
+# the override header, with or without its colon ("#jinja2" + ":" joined
+# later would rebuild it)
+HEADER_HASH = re.compile(r"#(?=jinja2)")
+# a brace or hash left at the very end could complete a delimiter or the
+# header when two strings are joined
+TRAILING = re.compile(r"[{#]$")
 
 
 def clean_text(value: str) -> str:
     """The string with every template delimiter broken by a space: each
     brace that starts one gets a space after it (so a run of braces becomes
-    "{ { {", with nothing left to open a template) and the override header
-    is split."""
+    "{ { {", with nothing left to open a template), the "#" of the override
+    header is split from "jinja2", and a brace or hash at the very end gets
+    a space too."""
     if "{" in value:
         value = DELIMITER_BRACE.sub("{ ", value)
-    if HEADER in value:
-        value = value.replace(HEADER, HEADER_SAFE)
+    if "#" in value:
+        value = HEADER_HASH.sub("# ", value)
+    if value and value[-1] in "{#":
+        value = TRAILING.sub(lambda m: m.group(0) + " ", value)
     return value
 
 
