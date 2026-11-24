@@ -169,6 +169,8 @@ def test_the_header_without_its_colon_and_a_trailing_brace_or_hash_are_broken(
         ("#jinja2", ":variable_start_string:'[%'"),
         ("#", "jinja2:x"),
         ("a {", "{ b"),
+        ("$", "ANSIBLE_VAULT;1.1;AES256"),
+        ("x$ANSIBLE", "_VAULT;1.1;AES256"),
     ],
 )
 def test_a_join_of_two_cleaned_strings_forms_no_delimiter(jinja_safe, left, right):
@@ -176,5 +178,22 @@ def test_a_join_of_two_cleaned_strings_forms_no_delimiter(jinja_safe, left, righ
     them, never form a template delimiter or the override header."""
     for glue in ("", ":", ": "):
         joined = jinja_safe.clean_text(left) + glue + jinja_safe.clean_text(right)
-        for mark in ("{{", "{%", "{#", "#jinja2"):
+        for mark in ("{{", "{%", "{#", "#jinja2", "$ANSIBLE_VAULT"):
             assert mark not in joined, (left, glue, right, joined)
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("$ANSIBLE_VAULT;1.1;AES256", "$ ANSIBLE_VAULT;1.1;AES256"),
+        ("x $ANSIBLE_VAULT", "x $ ANSIBLE_VAULT"),
+        ("ends with $", "ends with $ "),
+        ("ends with $ANSIBLE_V", "ends with $ ANSIBLE_V"),
+        ("price $5", "price $5"),
+        ("$HOME", "$HOME"),
+        ("ends with $X", "ends with $X"),
+    ],
+)
+def test_the_vault_header_is_broken(jinja_safe, text, expected):
+    assert jinja_safe.clean_text(text) == expected
+    assert jinja_safe.clean_text(expected) == expected

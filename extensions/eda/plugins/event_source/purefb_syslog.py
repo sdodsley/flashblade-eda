@@ -278,6 +278,11 @@ DELIMITER_BRACE = re.compile(r"\{(?=[{%#])")
 # the override header, with or without its colon ("#jinja2" + ":" joined
 # later would rebuild it)
 HEADER_HASH = re.compile(r"#(?=jinja2)")
+# the vault header: text that opens with it is handed to a vault decrypt
+VAULT = re.compile(r"\$(?=ANSIBLE_VAULT)")
+VAULT_WORD = "ANSIBLE_VAULT"
+# a "$" that ends a string, alone or with the start of the vault word
+VAULT_TAIL = re.compile(r"\$([A-Z_]{0,12})$")
 # a brace or hash left at the very end could complete a delimiter or the
 # header when two strings are joined
 TRAILING = re.compile(r"[{#]$")
@@ -287,12 +292,18 @@ def clean_text(value: str) -> str:
     """The string with every template delimiter broken by a space: each
     brace that starts one gets a space after it (so a run of braces becomes
     "{ { {", with nothing left to open a template), the "#" of the override
-    header is split from "jinja2", and a brace or hash at the very end gets
-    a space too."""
+    header is split from "jinja2", the "$" of the vault header from
+    "ANSIBLE_VAULT", and a brace, hash or dollar at the very end gets a
+    space too."""
     if "{" in value:
         value = DELIMITER_BRACE.sub("{ ", value)
     if "#" in value:
         value = HEADER_HASH.sub("# ", value)
+    if "$" in value:
+        value = VAULT.sub("$ ", value)
+        tail = VAULT_TAIL.search(value)
+        if tail and VAULT_WORD.startswith(tail.group(1)):
+            value = value[: tail.start() + 1] + " " + value[tail.start() + 1 :]
     if value and value[-1] in "{#":
         value = TRAILING.sub(lambda m: m.group(0) + " ", value)
     return value

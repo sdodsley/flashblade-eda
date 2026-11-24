@@ -4,9 +4,10 @@
 
 - Every stock `ansible.eda` source entry (webhook, Alertmanager, tick)
   runs the `sdodsley.flashblade_eda.jinja_safe` event filter, which puts
-  a space after each template delimiter in every string of an event so a
-  playbook renders event text as text; the project's own sources emit
-  plain text themselves.
+  a space after each template delimiter and after the opening of the
+  `#jinja2` and `$ANSIBLE_VAULT` headers in every string of an event, so
+  a playbook renders event text as text and an action never meets an
+  encrypted value; the project's own sources emit plain text themselves.
 - Every action template that opens with an event field is one expression
   ending in `| pprint`, so the playbook receives the value as it was.
 - The playbooks' records keep event text as text: every text fact built

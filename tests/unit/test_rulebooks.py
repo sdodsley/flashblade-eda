@@ -949,3 +949,65 @@ def test_pprint_wraps_the_whole_expression(path):
             rule,
             flat[:80],
         )
+
+
+HOSTILE_TEXT = (
+    "{{ 7 * 7 }}",
+    "'{' '{ 7 * 7 }}'",
+    "#jinja2:variable_start_string:'[%'",
+    "$ANSIBLE_VAULT;1.1;AES256\n3030",
+    "{",
+    "#",
+    "$",
+    "{% if 1 %}x{% endif %}",
+)
+
+
+def _load_filter(repo_root):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "jinja_safe", repo_root / JINJA_SAFE_FILE
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("path", RULEBOOKS, ids=lambda p: p.name)
+def test_cleaned_hostile_text_renders_in_every_action_string(path, repo_root):
+    """Rendered the way ansible-rulebook renders an action, every string that
+    opens with an event field accepts text the sources have cleaned (markers,
+    both headers, a lone brace, hash or dollar) without raising, and the
+    result carries no delimiter and neither header."""
+    util = pytest.importorskip("ansible_rulebook.util")
+    jinja_safe = _load_filter(repo_root)
+    known = yaml.safe_load((repo_root / "vars" / "example.yml").read_text())
+    field = re.compile(r"\b(event|events|fact|facts)((?:\.[A-Za-z_][A-Za-z0-9_]*)+)")
+    for rule, flat in _playbook_action_strings(path):
+        if not flat.startswith("{{") or not EVENT_WORD.search(flat):
+            continue
+        for hostile in HOSTILE_TEXT:
+            value = jinja_safe.clean_text(hostile)
+            context = dict(known)
+            for root_name, dotted in set(field.findall(flat)):
+                node = context.setdefault(root_name, {})
+                *parents, leaf = dotted[1:].split(".")
+                for part in parents:
+                    node = node.setdefault(part, {})
+                node.setdefault(leaf, value)
+            try:
+                got = util.substitute_variables(flat, context)
+            except Exception as exc:  # noqa: BLE001
+                pytest.fail(
+                    f"{path.name}: {rule}: {flat[:70]} raised {exc!r} for {hostile!r}"
+                )
+            text = str(got)
+            for mark in ("{{", "{%", "{#", "#jinja2", "$ANSIBLE_VAULT"):
+                assert mark not in text, (
+                    path.name,
+                    rule,
+                    flat[:70],
+                    hostile,
+                    text[:80],
+                )

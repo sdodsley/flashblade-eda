@@ -30,7 +30,14 @@ def _helpers(path):
 
 def test_the_four_copies_of_the_plain_text_helpers_are_identical():
     reference = _helpers(FILTER)
-    for name in ("HEADER_HASH = ", "TRAILING = ", "def clean_text(", "def clean("):
+    for name in (
+        "HEADER_HASH = ",
+        "VAULT = ",
+        "VAULT_TAIL = ",
+        "TRAILING = ",
+        "def clean_text(",
+        "def clean(",
+    ):
         assert name in reference, name
     for path in SOURCES:
         assert _helpers(path) == reference, path.name
